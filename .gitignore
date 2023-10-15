@@ -12,6 +12,7 @@ Cargo.lock
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+<<<<<<< HEAD
 
 # ignore CMake and cargo build dirs, as well as IDE dirs such as .vs and .vscode
 build/
