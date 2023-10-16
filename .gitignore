@@ -19,3 +19,5 @@ build/
 .vs/
 .vscode/
 
+obj/
+*.v*proj.user
