@@ -1,4 +1,4 @@
-{
+﻿{
     "version": 3,
     "configurePresets": [
         {
@@ -96,14 +96,6 @@
                     "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
                 }
             }
-        }
-    ],
-    "buildPresets": [
-        {
-            "name": "Lenzu Debug x64",
-            "description": "",
-            "displayName": "",
-            "configurePreset": "x64-debug"
         }
     ]
 }
