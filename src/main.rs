@@ -15,24 +15,25 @@ use winapi::{
             DeleteDC, DeleteObject, SelectObject as SelectObjectConst, StretchBlt, SRCCOPY,
         },
         winuser::{
-            BeginPaint as BeginPaintConst, CreateWindowExW, DefWindowProcW,
-            DispatchMessageW as DispatchMessageWConst, EndPaint as EndPaintConst, GetCursorPos,
-            GetDC as GetDCConst, GetMessageW as GetMessageConst, GetMonitorInfoW,
-            InvalidateRect as InvalidateRectConst, MonitorFromPoint, PostQuitMessage,
-            RegisterClassW, ReleaseDC, ShowWindow, TranslateMessage as TranslateMessageConst,
+            BeginPaint as BeginPaintConst, CreateWindowExW, DefWindowProcW, EndPaint as EndPaintConst, GetCursorPos,
+            GetDC as GetDCConst, GetMonitorInfoW,
+            InvalidateRect as InvalidateRectConst,
+            RegisterClassW, ReleaseDC, ShowWindow,
             CW_USEDEFAULT, MONITORINFO, MONITOR_DEFAULTTONEAREST, MSG,
-            PAINTSTRUCT as PAINTSTRUCTConst, VK_ESCAPE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
+            PAINTSTRUCT as PAINTSTRUCTConst, WS_OVERLAPPEDWINDOW,
         },
     },
 };
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    monitor::MonitorHandle,
-    window::{Window, WindowBuilder},
+    window::{WindowBuilder},
 };
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    let mut hwnd: winapi::shared::windef::HWND = ptr::null_mut();
+
     #[cfg(target_os = "windows")]
     {
         let class_name = "Sample Window Class";
@@ -59,7 +60,7 @@ fn main() {
             return;
         }
 
-        let hwnd = unsafe {
+        hwnd = unsafe {
             CreateWindowExW(
                 0,
                 class_name_cstr.as_ptr() as *const u16,
@@ -84,7 +85,7 @@ fn main() {
             ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
         }
 
-        let mut msg = MSG {
+        let _msg = MSG {
             hwnd: ptr::null_mut(),
             message: 0,
             wParam: 0,
@@ -99,7 +100,7 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut cursor_pos = winit::dpi::PhysicalPosition::new(0.0, 0.0);
-    let window_id = window.id(); // Declare the window_id variable
+    let _window_id = window.id(); // Declare the window_id variable
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -143,24 +144,26 @@ fn main() {
 
                 // Update the cursor position
                 cursor_pos = position;
-
-                // Get the monitor that the window is on
-                let window_result = event_loop
-                    .create_proxy()
-                    .window_by_id(window_id)
-                    .map_err(|_| ());
-                let monitor = window_result
-                    .as_ref()
-                    .ok()
-                    .and_then(|window| window.current_monitor());
+                //let available_monitors = event_loop.available_monitors();
+                let monitor = window.current_monitor().unwrap();
 
                 // Get the position and size of the monitor
                 let monitor_pos = monitor.position();
                 let monitor_size = monitor.size();
                 #[cfg(target_os = "windows")]
                 {
-                    let h_monitor =
-                        unsafe { MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST) };
+                    let win_cursor_pos: winapi::shared::windef::POINT = {
+                        winapi::shared::windef::POINT {
+                            x: cursor_pos.x as i32,
+                            y: cursor_pos.y as i32,
+                        }
+                    };
+                    let h_monitor = unsafe {
+                        winapi::um::winuser::MonitorFromPoint(
+                            win_cursor_pos,
+                            MONITOR_DEFAULTTONEAREST,
+                        )
+                    };
                     let mut monitor_info = MONITORINFO {
                         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                         rcMonitor: RECT {
@@ -182,10 +185,19 @@ fn main() {
                     }
 
                     let capture_rect = RECT {
-                        left: std::cmp::max(monitor_info.rcMonitor.left, cursor_pos.x - 256),
-                        top: std::cmp::max(monitor_info.rcMonitor.top, cursor_pos.y - 256),
-                        right: std::cmp::min(monitor_info.rcMonitor.right, cursor_pos.x + 256),
-                        bottom: std::cmp::min(monitor_info.rcMonitor.bottom, cursor_pos.y + 256),
+                        left: std::cmp::max(
+                            monitor_info.rcMonitor.left as i32,
+                            cursor_pos.x as i32 - 256,
+                        ),
+                        top: std::cmp::max(monitor_info.rcMonitor.top, cursor_pos.y as i32 - 256),
+                        right: std::cmp::min(
+                            monitor_info.rcMonitor.right,
+                            cursor_pos.x as i32 + 256,
+                        ),
+                        bottom: std::cmp::min(
+                            monitor_info.rcMonitor.bottom,
+                            cursor_pos.y as i32 + 256,
+                        ),
                     };
 
                     let h_screen = unsafe { GetDCConst(ptr::null_mut()) };
@@ -198,28 +210,6 @@ fn main() {
                             capture_rect.bottom - capture_rect.top,
                         )
                     };
-                }
-                #[cfg(target_os = "linux")]
-                {}
-
-                // Determine if the cursor is on the monitor
-                let cursor_x = cursor_pos.x as i32;
-                let cursor_y = cursor_pos.y as i32;
-                let monitor_left = monitor_pos.x as i32;
-                let monitor_top = monitor_pos.y as i32;
-                let monitor_right = monitor_left + monitor_size.width as i32;
-                let monitor_bottom = monitor_top + monitor_size.height as i32;
-                let cursor_on_monitor = cursor_x >= monitor_left
-                    && cursor_x < monitor_right
-                    && cursor_y >= monitor_top
-                    && cursor_y < monitor_bottom;
-
-                if cursor_on_monitor {
-                    println!("Cursor is on monitor {:?}", monitor.name());
-                }
-
-                #[cfg(target_os = "windows")]
-                {
                     // This code will only be compiled when targeting Windows
                     let old_obj =
                         unsafe { SelectObjectConst(h_dc, h_bitmap as *mut winapi::ctypes::c_void) };
@@ -276,6 +266,27 @@ fn main() {
                         DeleteObject(h_bitmap as *mut winapi::ctypes::c_void);
                     }
                 }
+                #[cfg(target_os = "linux")]
+                {}
+
+                // Determine if the cursor is on the monitor
+                let cursor_x = cursor_pos.x as i32;
+                let cursor_y = cursor_pos.y as i32;
+                let monitor_left = monitor_pos.x as i32;
+                let monitor_top = monitor_pos.y as i32;
+                let monitor_right = monitor_left + monitor_size.width as i32;
+                let monitor_bottom = monitor_top + monitor_size.height as i32;
+                let cursor_on_monitor = cursor_x >= monitor_left
+                    && cursor_x < monitor_right
+                    && cursor_y >= monitor_top
+                    && cursor_y < monitor_bottom;
+
+                if cursor_on_monitor {
+                    println!("Cursor is on monitor {:?}", monitor.name());
+                }
+
+                #[cfg(target_os = "windows")]
+                {}
                 #[cfg(target_os = "linux")]
                 {
                     // This code will only be compiled when targeting Linux
