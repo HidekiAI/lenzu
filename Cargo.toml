@@ -11,6 +11,6 @@ winit = { version = "^0.28.7", features = ["mint", "serde"] }
 winapi = { version = "^0.3.9", features = ["winuser", "winbase"] }
 
 # Until prototype is done, we'll allow Linux specific code
+# For now, we'll just comment X11 out while dev'ing on Windows because this does not work on Windows
 #cfg(target_os = "linux")]
-x11 = { version = "^2.21.0", features = ["xlib"] }
-
+#x11 = { version = "^2.21.0", features = ["xlib"] }
