@@ -150,6 +150,23 @@ fn main() {
                 // Get the position and size of the monitor
                 let monitor_pos = monitor.position();
                 let monitor_size = monitor.size();
+
+                // Determine if the cursor is on the monitor
+                let cursor_x = cursor_pos.x as i32;
+                let cursor_y = cursor_pos.y as i32;
+                let monitor_left = monitor_pos.x as i32;
+                let monitor_top = monitor_pos.y as i32;
+                let monitor_right = monitor_left + monitor_size.width as i32;
+                let monitor_bottom = monitor_top + monitor_size.height as i32;
+                let cursor_on_monitor = cursor_x >= monitor_left
+                    && cursor_x < monitor_right
+                    && cursor_y >= monitor_top
+                    && cursor_y < monitor_bottom;
+
+                if cursor_on_monitor {
+                    println!("Cursor is on monitor {:?}", monitor.name());
+                }
+
                 #[cfg(target_os = "windows")]
                 {
                     let win_cursor_pos: winapi::shared::windef::POINT = {
@@ -268,22 +285,6 @@ fn main() {
                 }
                 #[cfg(target_os = "linux")]
                 {}
-
-                // Determine if the cursor is on the monitor
-                let cursor_x = cursor_pos.x as i32;
-                let cursor_y = cursor_pos.y as i32;
-                let monitor_left = monitor_pos.x as i32;
-                let monitor_top = monitor_pos.y as i32;
-                let monitor_right = monitor_left + monitor_size.width as i32;
-                let monitor_bottom = monitor_top + monitor_size.height as i32;
-                let cursor_on_monitor = cursor_x >= monitor_left
-                    && cursor_x < monitor_right
-                    && cursor_y >= monitor_top
-                    && cursor_y < monitor_bottom;
-
-                if cursor_on_monitor {
-                    println!("Cursor is on monitor {:?}", monitor.name());
-                }
 
                 #[cfg(target_os = "windows")]
                 {}
