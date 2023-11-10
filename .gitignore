@@ -20,4 +20,6 @@ build/
 .vscode/
 
 obj/
+.fake/
+
 *.v*proj.user
