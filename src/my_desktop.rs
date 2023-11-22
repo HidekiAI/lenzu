@@ -1,15 +1,19 @@
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone )]
 pub struct Screen {
     pub index: u8,
+    pub id: u32,
+    pub name: String,
     pub width: u32,
     pub height: u32,
     pub top_x: i32, // i.e.primary monitor will be (0, 0)
     pub top_y: i32, // note that you cannot assume that all monitors are aligned at top (it could be aligned at bottom) and dimensions may not be the same
 }
 impl Screen {
-    pub fn new(index: u8, width: u32, height: u32, top_x: i32, top_y: i32) -> Screen {
+    pub fn new(index: u8, id: u32, name: &str, width: u32, height: u32, top_x: i32, top_y: i32) -> Screen {
         Screen {
             index: index,
+            id: id,
+            name: name.to_string(),
             width: width,
             height: height,
             top_x: top_x,
@@ -18,7 +22,7 @@ impl Screen {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Desktop {
     // for mouse location related (with respect to the (possible) multiple screen)
     cursor_position: (i32, i32),
@@ -30,19 +34,25 @@ impl Desktop {
     pub fn new(screens: &[Screen]) -> Desktop {
         // first, initialize 9 screens with default values
         let mut screens_mut = [
-            Screen::new(0, 0, 0, 0, 0),
-            Screen::new(1, 0, 0, 0, 0),
-            Screen::new(2, 0, 0, 0, 0),
-            Screen::new(3, 0, 0, 0, 0),
-            Screen::new(4, 0, 0, 0, 0),
-            Screen::new(5, 0, 0, 0, 0),
-            Screen::new(6, 0, 0, 0, 0),
-            Screen::new(7, 0, 0, 0, 0),
-            Screen::new(8, 0, 0, 0, 0),
+            Screen::new(0, 0, "0", 0, 0, 0, 0),
+            Screen::new(1, 1, "1", 0, 0, 0, 0),
+            Screen::new(2, 2, "2", 0, 0, 0, 0),
+            Screen::new(3, 3, "3", 0, 0, 0, 0),
+            Screen::new(4, 4, "4", 0, 0, 0, 0),
+            Screen::new(5, 5, "5", 0, 0, 0, 0),
+            Screen::new(6, 6, "6", 0, 0, 0, 0),
+            Screen::new(7, 7, "7", 0, 0, 0, 0),
+            Screen::new(8, 8, "8", 0, 0, 0, 0),
         ];
         // replace the default values with the actual values from the screens (up to 9 screens)
         for (i, screen) in screens.iter().enumerate() {
-            screens_mut[i] = *screen;
+            screens_mut[i].index = i as u8;
+            screens_mut[i].id = screen.id;
+            screens_mut[i].name = screen.name.clone();
+            screens_mut[i].width = screen.width;
+            screens_mut[i].height = screen.height;
+            screens_mut[i].top_x = screen.top_x;
+            screens_mut[i].top_y = screen.top_y;
         }
         Desktop {
             cursor_position: (0, 0),
@@ -138,6 +148,6 @@ impl Desktop {
     }
 
     pub fn current_screen(&self) -> Screen {
-        self.screens[self.current_screen]
-    }
+        self.screens[self.current_screen].clone()
+    }   
 }

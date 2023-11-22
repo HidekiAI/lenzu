@@ -274,8 +274,23 @@ impl State {
         let monitors: Vec<winit::monitor::MonitorHandle> = window1.available_monitors().collect();
         let mut screens = Vec::new();
         for (index, monitor) in monitors.iter().enumerate() {
+            let display = DisplayInfo::all()
+                .unwrap()
+                .iter()
+                .find(|display| {
+                    display.x == monitor.position().x && display.y == monitor.position().y
+                })
+                .expect("Either the monitor is not found or the display is not found")
+                .clone();
+
             let screen = my_desktop::Screen::new(
                 index as u8,
+                display.id,
+                match monitor.name() {
+                    Some(name) => name.clone(),
+                    None => index.to_string(),
+                }
+                .as_str(),
                 monitor.size().width,
                 monitor.size().height,
                 monitor.position().x,
@@ -336,6 +351,8 @@ impl State {
 
     // Function to update the wgpu texture with the new frame data
     fn update(&mut self) {
+        self.mouse_data.update();
+
         if self.needs_update {
             let image_bytes1: &[u8] = Self::get_image();
 
@@ -484,7 +501,10 @@ impl State {
         Ok(())
     }
 
-    fn update_screen_info(&mut self, cursor_position_in_window: winit::dpi::PhysicalPosition<f64>) -> my_desktop::Screen {
+    fn update_screen_info(
+        &mut self,
+        cursor_position_in_window: winit::dpi::PhysicalPosition<f64>,
+    ) -> my_desktop::Screen {
         // Cursor is within this monitor
         let screen_where_mouse_resides = self.mouse_data.update();
 
@@ -497,10 +517,20 @@ impl State {
     fn take_screenshot_of_monitor(&self) -> Option<Vec<u8>> {
         // locate the correct DisplayInfo
         for display in DisplayInfo::all().unwrap() {
-            if display.id == self.mouse_data.current_screen().index as u32 {
+            if display.id == self.mouse_data.current_screen().id as u32 {
                 let screen = Screen::new(&display);
 
                 let (x, y, width, height) = self.get_capture_rect();
+
+                println!(
+                    "Taking screenshot of screen {} ({}) at ({}, {}), width={}, height={}",
+                    self.mouse_data.current_screen().name,
+                    display.id,
+                    x,
+                    y,
+                    width,
+                    height
+                );
 
                 // Take a screenshot of the monitor
                 // image::ImageBuffer<image::Rgba<u8>, Vec<u8>>
@@ -598,6 +628,7 @@ pub async fn run() {
             } if window_id == state.window().id() => {
                 if !state.input(event) {
                     match event {
+                        // either closing window manually or Esc key
                         WindowEvent::CloseRequested
                         | WindowEvent::KeyboardInput {
                             input:
@@ -608,6 +639,57 @@ pub async fn run() {
                                 },
                             ..
                         } => *control_flow = ControlFlow::Exit,
+                        // ctrl key (either left or right) pressed
+                        WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    state: ElementState::Pressed,
+                                    virtual_keycode: Some(VirtualKeyCode::LControl),
+                                    ..
+                                },
+                            ..
+                        } => {
+                            state.update();
+                            println!("Ctrl key pressed");
+                            // take screenshot
+                            let screenshot = state.take_screenshot_of_monitor();
+                            match screenshot {
+                                Some(image) => {
+                                    println!("Screenshot taken");
+                                    // update the texture
+                                    state.needs_update = true;
+                                    match my_texture::Texture::from_bytes(
+                                        &state.device,
+                                        &state.queue,
+                                        image.as_slice(),
+                                        "diffuse_bytes",
+                                    ) {
+                                        Ok(updated_texture) => {
+                                            println!("Texture updated");
+                                            state.texture = updated_texture;
+                                        }
+                                        Err(e) => {
+                                            println!("Error: {}", e);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    println!("Screenshot failed");
+                                }
+                            }
+                        }
+                        // ctrl key (either left or right) released
+                        WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    state: ElementState::Released,
+                                    virtual_keycode: Some(VirtualKeyCode::LControl),
+                                    ..
+                                },
+                            ..
+                        } => {
+                            println!("Ctrl key released");
+                        }
                         WindowEvent::CursorMoved {
                             device_id,
                             position,
@@ -675,7 +757,7 @@ mod tests {
         let screen_info = state.update_screen_info(cursor_position);
         println!(
             "Screen {}: {}x{}, Cursor Position: ({}, {})",
-            screen_info.index,  
+            screen_info.index,
             screen_info.width,
             screen_info.height,
             screen_info.top_x,
