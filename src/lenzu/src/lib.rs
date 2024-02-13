@@ -4,6 +4,7 @@ mod my_texture;
 
 use std::iter;
 
+use image::ImageBuffer;
 use my_desktop::Desktop;
 use screenshots::{self, display_info::DisplayInfo, Screen};
 use wgpu::util::DeviceExt;
@@ -95,9 +96,6 @@ struct State {
 }
 
 impl State {
-    fn get_image() -> &'static [u8] {
-        include_bytes!("sample.png")
-    }
     async fn new(window1: Window) -> Self {
         let window_size = window1.inner_size();
 
@@ -160,9 +158,10 @@ impl State {
         };
         surface1.configure(&device1, &config1);
 
-        let image_bytes1: &[u8] = Self::get_image();
+        // default image is all black
+        let image_bytes1 = ImageBuffer::new(512, 512);
         let texture1: my_texture::Texture =
-            my_texture::Texture::from_bytes(&device1, &queue1, image_bytes1, "diffuse_bytes")
+            my_texture::Texture::from_rgba_image(&device1, &queue1, &image_bytes1, "diffuse_bytes")
                 .unwrap();
 
         let texture_bind_group_layout =
@@ -354,8 +353,6 @@ impl State {
         self.mouse_data.update();
 
         if self.needs_update {
-            let image_bytes1: &[u8] = Self::get_image();
-
             // Map the texture for writing
             let mut encoder = self
                 .device
@@ -514,7 +511,7 @@ impl State {
     // Assume that you have a wgpu device, queue, swap_chain, and shader modules already set up.
     // Function to create a wgpu texture for video frames
     // use screenshots to capture screen where - assume this gets called AFTER get_screen_info is called
-    fn take_screenshot_of_monitor(&self) -> Option<Vec<u8>> {
+    fn take_screenshot_of_monitor(&self) -> Option<image::RgbaImage> {
         // locate the correct DisplayInfo
         for display in DisplayInfo::all().unwrap() {
             if display.id == self.mouse_data.current_screen().id as u32 {
@@ -534,12 +531,12 @@ impl State {
 
                 // Take a screenshot of the monitor
                 // image::ImageBuffer<image::Rgba<u8>, Vec<u8>>
-                let possible_screenshot = screen.capture_area(x, y, width, height);
+                let possible_screenshot: Result<image::RgbaImage, anyhow::Error> =
+                    screen.capture_area(x, y, width, height);
                 match possible_screenshot {
                     Ok(screenshot) => {
-                        let rgba_image: image::RgbaImage = screenshot;
-                        let rgba32 = rgba_image.into_raw();
-                        return Some(rgba32);
+                        //let rgba_image: image::RgbaImage = screenshot;
+                        return Some(screenshot);
                     }
                     Err(e) => {
                         println!("Error: {}", e);
@@ -658,10 +655,10 @@ pub async fn run() {
                                     println!("Screenshot taken");
                                     // update the texture
                                     state.needs_update = true;
-                                    match my_texture::Texture::from_bytes(
+                                    match my_texture::Texture::from_rgba_image(
                                         &state.device,
                                         &state.queue,
-                                        image.as_slice(),
+                                        &image,
                                         "diffuse_bytes",
                                     ) {
                                         Ok(updated_texture) => {
