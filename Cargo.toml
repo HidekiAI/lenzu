@@ -1,16 +1,3 @@
-[package]
-name = "lenzu"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-#winit = { version = "0.29.2", features = ["mint", "serde"] }
-winit = { version = "^0.28.7", features = ["mint", "serde"] }
-
-# Until prototype is done, we'll allow Windows specific code
-[target.'cfg(windows)'.dependencies]
-winapi = { version = "^0.3.9", features = ["winuser", "winbase"] }
-
-# Until prototype is done, we'll allow Linux specific code
-[target.'cfg(linux)'.dependencies]
-x11 = { version = "^2.21.0", features = ["xlib"] }
+[workspace]
+resolver = "2"
+members = ["lenzu", "prototype/windows/dc_demo_win_rust"]
