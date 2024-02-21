@@ -1,3 +1,6 @@
 [workspace]
-resolver = "2"
-members = ["lenzu", "prototype/windows/dc_demo_win_rust"]
+    resolver = "2"
+    members = [
+        "lenzu", 
+        "prototype/windows/dc_demo_win_rust",
+    ]
