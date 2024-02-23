@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-#winit = { version = "0.29.2", features = ["mint", "serde"] }
-winit = { version = "^0.28.7", features = ["mint", "serde"] }
+winit = { version = "^0.29", features = ["mint", "wayland", "x11"] }
+image = "0.24.8"
+
+#rusty-tesseract = "1.1.9"
 
 # Until prototype is done, we'll allow Windows specific code
 [target.'cfg(windows)'.dependencies]
