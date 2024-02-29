@@ -1,27 +1,33 @@
 extern crate winapi;
 
 use image::DynamicImage;
-use rusty_tesseract::{tesseract, Args};
+use rusty_tesseract::Args;
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::Arc;
 use winapi::{
     shared::windef::RECT,
     um::{
         wingdi::{
-            AlphaBlend, BitBlt, CreateCompatibleBitmap,
-            CreateCompatibleDC as CreateCompatibleDCConst, DeleteDC, DeleteObject,
-            SelectObject as SelectObjectConst, StretchBlt, TextOutW, SRCCOPY,
+            AlphaBlend, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            SelectObject, StretchBlt, TextOutW, SRCCOPY,
         },
         winnt::{LPSTR, LPWSTR},
         winuser::{
-            BeginPaint as BeginPaintConst, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-            EndPaint, GetCursorPos, GetDC, GetMessageW, GetMonitorInfoW, GetWindowInfo,
-            InvalidateRect, MonitorFromPoint, PostQuitMessage, RegisterClassW, ReleaseDC,
-            ShowWindow, TranslateMessage, CW_USEDEFAULT, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-            MSG, PAINTSTRUCT as PAINTSTRUCTConst, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
-            WS_OVERLAPPEDWINDOW,
+            BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetCursorPos,
+            GetDC, GetMessageW, GetMonitorInfoW, GetWindowRect, InvalidateRect, MonitorFromPoint,
+            PostQuitMessage, RegisterClassW, ReleaseDC, ShowWindow, TranslateMessage,
+            CW_USEDEFAULT, MONITORINFO, MONITOR_DEFAULTTONEAREST, MSG, PAINTSTRUCT, VK_ESCAPE,
+            VK_SPACE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
         },
     },
+};
+use winit::{
+    dpi::LogicalSize,
+    event_loop::EventLoop,
+    platform::windows::HWND,
+    raw_window_handle::{HasWindowHandle, WindowHandle},
+    window::WindowBuilder,
 };
 
 const MAGNIFY_SCALE_FACTOR: u32 = 2;
@@ -35,9 +41,131 @@ enum ToggleState {
 
 static mut TOGGLE_STATE: ToggleState = ToggleState::Free;
 
+#[derive(Debug, Clone, Copy)]
+struct CursorData {
+    x: i32, // cursor positions may be negative based on monitor positon relative to primary monitor (i.e. monitors left of primary monitor have negative X coordinates)
+    y: i32,
+    // info about current monitor the curso at (x,y) is located
+    monitor_width: u32, // dimensions of the current monitor
+    monitor_height: u32,
+    // current window
+    window_x: i32, // position of the window on the monitor that is recalculated based off of cursor (x,y) and upper-left is offset by center of window to be where the mouse cursor will be
+    window_y: i32,
+    window_width: u32,
+    window_height: u32,
+}
+
+impl CursorData {
+    fn new() -> Self {
+        CursorData {
+            x: 0,
+            y: 0,
+            monitor_width: 1024,
+            monitor_height: 768,
+            window_x: 0,
+            window_y: 0,
+            window_width: 1,
+            window_height: 1,
+        }
+    }
+
+    fn update(&mut self, hwnd: winapi::shared::windef::HWND) {
+        // first, get cursor position so that we can dtermine which monitor we are on
+        let mut cursor_pos = winapi::shared::windef::POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut cursor_pos) } == 0 {
+            // Handle the error appropriately if necessary.
+            println!("Could not get cursor position");
+            // post quit
+            unsafe { PostQuitMessage(-1) };
+        }
+        self.x = cursor_pos.x;
+        self.y = cursor_pos.y;
+
+        // Get dimension of the monitor the cursor is currently on via GetMonitorInfoW()
+        let h_monitor = unsafe { MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST) };
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: RECT {
+                // display area rectangle
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                // work area rectangle (rectangle not obscured by taskbar and toolbar)
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            dwFlags: 0,
+        };
+
+        unsafe {
+            GetMonitorInfoW(h_monitor, &mut monitor_info);
+        }
+        // note that we use rcWork rectangle, so that we can ignore the taskbar and toolbar
+        // work area, unlike monitor area, is usually/should-be positive because it's the area that's not obscured by the taskbar and toolbar
+        self.monitor_width = std::cmp::max(monitor_info.rcWork.right, 1024) as u32;
+        self.monitor_height = std::cmp::max(monitor_info.rcWork.bottom, 768) as u32;
+
+        // get current dimension of the windown on the monitor via via GetWindowRect() (GetWindowInfo() can do the same, but it provides more info that we care...)
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe {
+            GetWindowRect(hwnd, &mut window_rect);
+        }
+        self.window_width = (window_rect.right - window_rect.left) as u32;
+        self.window_height = (window_rect.bottom - window_rect.top) as u32;
+        // window position (upper left corner) is recalculated based off of cursor (x,y) and upper-left is offset by center of window to be where the mouse cursor will be
+        // the tricky part of this is that the windows position coordinate can be negative (same as cursor position) so it's not possible to test for min()/max() for
+        // edge of the monitor, and so we'll not do snap to monitor and allow windows to get beyond the edges of the monitors
+        self.window_x = self.x - (self.window_width as i32 / 2) as i32;
+        self.window_y = self.y - (self.window_height as i32 / 2) as i32;
+    }
+}
+
 fn main() {
     let class_name = "Lenzu";
     let window_name = "Tesseract";
+
+    //tesseract version
+    let tesseract_version = rusty_tesseract::get_tesseract_version().unwrap();
+    println!("Tesseract - Version is: {:?}", tesseract_version);
+
+    //available languages
+    let tesseract_langs = rusty_tesseract::get_tesseract_langs().unwrap();
+    println!(
+        "Tesseract - The available languages are: {:?}",
+        tesseract_langs
+    );
+
+    //available config parameters
+    let parameters = rusty_tesseract::get_tesseract_config_parameters().unwrap();
+    println!(
+        "Tesseract - Config parameter: {}",
+        parameters.config_parameters.first().unwrap()
+    );
+
+    // initialize a view-window via winit so that it is universal to both Linux and Windows
+    //let event_loop = EventLoop::new();
+    //let window = WindowBuilder::new()
+    //    .with_title(window_name)
+    //    .with_inner_size(LogicalSize::new(1024, 768)) // initial size of the window
+    //    .with_min_inner_size(LogicalSize::new(1024, 768)) // minimum size of the window
+    //    .build(&event_loop.unwrap())
+    //    .unwrap();
+    //let hw = match window.window_handle().unwrap() {
+    //    WindowHandle::Wayland(handle) => handle.wayland_display().unwrap(),
+    //    WindowHandle::X(handle) => handle.xlib_display().unwrap(),
+    //    WindowHandle::win32(handle) => handle.hwnd().unwrap(),
+    //    _ => panic!("Unsupported platform"),
+    //};
 
     let h_instance = ptr::null_mut();
     let class_name_cstr = CString::new(class_name).expect("CString creation failed");
@@ -60,7 +188,7 @@ fn main() {
         return;
     }
 
-    let hwnd = unsafe {
+    let hwnd: *mut winapi::shared::windef::HWND__ = unsafe {
         CreateWindowExW(
             0,
             class_name_cstr.as_ptr() as *const u16,
@@ -78,6 +206,9 @@ fn main() {
     };
 
     if hwnd.is_null() {
+        // Instead of panic!(), we'll just close it cleanly with PostQuitMessage() and log to explain the cause/reasons
+        println!("Failed to create window.");
+        unsafe { PostQuitMessage(0) }; // Even if HWND was not created, can we post a quit message?
         return;
     }
 
@@ -85,6 +216,7 @@ fn main() {
         ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
     }
 
+    let mut cursor = CursorData::new();
     let mut msg = MSG {
         hwnd: ptr::null_mut(),
         message: 0,
@@ -98,11 +230,11 @@ fn main() {
         if unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) } == 0 {
             break;
         }
-
         unsafe {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        cursor.update(hwnd);
 
         if msg.message == WM_KEYDOWN {
             match msg.wParam as std::ffi::c_int {
@@ -129,32 +261,28 @@ fn main() {
             }
         }
 
-        let mut cursor_pos = winapi::shared::windef::POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut cursor_pos) } == 0 {
-            // Handle the error appropriately if necessary.
-        }
         unsafe {
             match TOGGLE_STATE {
-                ToggleState::Free => capture_and_magnify(hwnd, cursor_pos),
+                ToggleState::Free => capture_and_magnify(hwnd, cursor),
                 ToggleState::MoveWindow => {
                     // move the window to the cursor position (a sticky window)
                     winapi::um::winuser::SetWindowPos(
                         hwnd,
                         ptr::null_mut(),
-                        cursor_pos.x,
-                        cursor_pos.y,
-                        0,
-                        0,
+                        cursor.window_x.clone(),
+                        cursor.window_y.clone(),
+                        0, // width will be ignored because will use SWP_NOSIZE to retain current size
+                        0, // height ignored
                         winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
                     );
                     //// invalidate the window so it can redraw the window onto the Desktop/monitor
                     //InvalidateRect(hwnd, ptr::null_mut(), 0);
-                    capture_and_magnify(hwnd, cursor_pos); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
+                    capture_and_magnify(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
                 }
                 ToggleState::Capture => {
                     // capture the screen and magnify it
-                    //capture_and_ocr(hwnd, cursor_pos);
-                    capture_and_ocr(hwnd, cursor_pos);
+                    let supported_languages = tesseract_langs.join("+");
+                    capture_and_ocr(hwnd, cursor, supported_languages.clone().as_str());
                     // once it's blitted to that window, stay still..
                     TOGGLE_STATE = ToggleState::Captured;
                 }
@@ -169,88 +297,24 @@ fn main() {
 
 fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
-    cursor_pos: winapi::shared::windef::POINT,
+    cursor_pos: CursorData,
+    supporte_lang: &str,
 ) {
-    let h_monitor = unsafe { MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        rcWork: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        dwFlags: 0,
-    };
-
-    unsafe {
-        GetMonitorInfoW(h_monitor, &mut monitor_info);
-    }
-
-    // get current dimension of the windown on the monitor via GetWindowInfo
-    let mut _window_rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    let mut window_info = winapi::um::winuser::WINDOWINFO {
-        cbSize: std::mem::size_of::<winapi::um::winuser::WINDOWINFO>() as u32,
-        rcWindow: RECT {
-            // note: we'll  copy this to window_rect after the call to GetWindoInfo() below
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        rcClient: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        dwStyle: 0,
-        dwExStyle: 0,
-        dwWindowStatus: 0,
-        cxWindowBorders: 0,
-        cyWindowBorders: 0,
-        atomWindowType: 0,
-        wCreatorVersion: 0,
-    };
-    unsafe {
-        GetWindowInfo(hwnd, &mut window_info);
-        _window_rect = window_info.rcWindow;
-    }
-    let win_width = std::cmp::max(2, _window_rect.right - _window_rect.left);
-    let win_height = std::cmp::max(2, _window_rect.bottom - _window_rect.top);
-    // capture rectangle is based off of consierating to edge of the monitor relative to the cursor position
-    let capture_rect = RECT {
-        left: std::cmp::max(monitor_info.rcMonitor.left, cursor_pos.x - (win_width / 2)), // make sure left is not less than monitor left
-        top: std::cmp::max(monitor_info.rcMonitor.top, cursor_pos.y - (win_height / 2)), // make sure top is not less than monitor top
-        right: std::cmp::min(monitor_info.rcMonitor.right, cursor_pos.x + (win_width / 2)), // make sure right is not greater than monitor right
-        bottom: std::cmp::min(
-            monitor_info.rcMonitor.bottom,
-            cursor_pos.y + (win_height / 2),
-        ), // make sure bottom is not greater than monitor bottom
-    };
-    let width = ((capture_rect.right - capture_rect.left) + 1) as u32;
-    let height = ((capture_rect.bottom - capture_rect.top) + 1) as u32;
-
+    //let (monitor_left, monitor_top, monitor_right, monitor_bottom) = get_current_monitor_rect(cursor_pos);
     let source_dc = unsafe { GetDC(ptr::null_mut()) };
-    let destination_dc = unsafe { CreateCompatibleDCConst(source_dc) };
+    let destination_dc = unsafe { CreateCompatibleDC(source_dc) };
 
     // Create a compatible bitmap for the primary image
-    let destination_bitmap =
-        unsafe { CreateCompatibleBitmap(destination_dc, width as i32, height as i32) };
+    let destination_bitmap = unsafe {
+        CreateCompatibleBitmap(
+            destination_dc,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
+        )
+    };
 
-    let old_obj = unsafe {
-        SelectObjectConst(
+    let destination_buffer = unsafe {
+        SelectObject(
             destination_dc,
             destination_bitmap as *mut winapi::ctypes::c_void,
         )
@@ -260,16 +324,16 @@ fn capture_and_ocr(
             destination_dc,
             0, // destination x
             0, // destination y
-            width as i32,
-            height as i32,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
             source_dc,
-            capture_rect.left, // source x
-            capture_rect.top,  // source y
+            cursor_pos.window_x as i32, // source x
+            cursor_pos.window_y as i32, // source y
             SRCCOPY,
         )
     };
 
-    let mut ps = PAINTSTRUCTConst {
+    let mut paint_struct = PAINTSTRUCT {
         hdc: ptr::null_mut(),
         fErase: 0,
         rcPaint: RECT {
@@ -284,11 +348,16 @@ fn capture_and_ocr(
     };
 
     // Create a compatible bitmap for the topmost layer (text overlay)
-    let bmp_topmost =
-        unsafe { CreateCompatibleBitmap(destination_dc, width as i32, height as i32) };
-    let mem_dc_topmost = unsafe { CreateCompatibleDCConst(destination_dc) };
-    let _old_obj2 =
-        unsafe { SelectObjectConst(mem_dc_topmost, bmp_topmost as *mut winapi::ctypes::c_void) };
+    let bmp_topmost = unsafe {
+        CreateCompatibleBitmap(
+            destination_dc,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
+        )
+    };
+    let mem_dc_topmost = unsafe { CreateCompatibleDC(destination_dc) };
+    let top_layer_bitmap =
+        unsafe { SelectObject(mem_dc_topmost, bmp_topmost as *mut winapi::ctypes::c_void) };
 
     // the image we just captured, we'll need to now pass it down to OCR and get the text back
     // We will (for now) assume it is either "jpn" or "jpn_vert" and we'll just pass it down
@@ -300,17 +369,14 @@ fn capture_and_ocr(
     // 5. blend the topmost layer onto the primary image
     // 6. scale/magnify
     // 7. draw the magnified image onto the window
-    // 8. repeat
-    // 9. profit
     // convert DC to RGBA - probably can get away with 24-bit but for better byte alignment, will stay at 32-bit
-    let rgba_image = DynamicImage::new_rgba8(width, height); // pre-allocate buffer
-                                                             // Convert the image to grayscale
-    let gray_scale_image = rgba_image.grayscale();
+    let rgba_image = DynamicImage::new_rgba8(cursor_pos.window_width, cursor_pos.window_height); // pre-allocate buffer
+    let _gray_scale_image = rgba_image.grayscale(); // Convert the image to grayscale
     let ocr_args: rusty_tesseract::Args = Args {
-        lang: "jpn_vert+jpn+eng".into(),
+        lang: supporte_lang.into(),
         ..Default::default()
     };
-    let ocr_image = rusty_tesseract::Image::from_dynamic_image(&gray_scale_image);
+    let ocr_image = rusty_tesseract::Image::from_dynamic_image(&rgba_image); // from_dynamic_image(&gray_scale_image);
     let ocr_result = match ocr_image {
         Ok(img) => rusty_tesseract::image_to_string(&img, &ocr_args),
         Err(e) => {
@@ -325,6 +391,7 @@ fn capture_and_ocr(
         Ok(s) => CString::new(s).expect("CString creation failed"),
         Err(e) => CString::new(format!("Error: {:?}", e)).expect("CString creation failed"),
     };
+    println!("'{}'", text.to_string_lossy());
 
     // Convert CString to LPCTSTR (raw pointer to a null-terminated wide string)
     let lpstr: LPSTR = text.as_ptr() as LPSTR;
@@ -359,18 +426,18 @@ fn capture_and_ocr(
             destination_dc,
             0,
             0,
-            width as i32,
-            height as i32,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
             mem_dc_topmost,
             0,
             0,
-            width as i32,
-            height as i32,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
             blend_func,
         );
     }
 
-    let final_destination_dc = unsafe { BeginPaintConst(hwnd, &mut ps) };
+    let final_destination_dc = unsafe { BeginPaint(hwnd, &mut paint_struct) };
 
     // scale/mangify
     unsafe {
@@ -378,108 +445,43 @@ fn capture_and_ocr(
             final_destination_dc,
             0,
             0,
-            (width * MAGNIFY_SCALE_FACTOR) as i32,
-            (height * MAGNIFY_SCALE_FACTOR) as i32,
+            (cursor_pos.window_width * MAGNIFY_SCALE_FACTOR) as i32,
+            (cursor_pos.window_height * MAGNIFY_SCALE_FACTOR) as i32,
             destination_dc,
             0,
             0,
-            width as i32,
-            height as i32,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
             SRCCOPY,
         );
 
-        EndPaint(hwnd, &ps);
-        InvalidateRect(hwnd, ptr::null_mut(), 0);
-        SelectObjectConst(destination_dc, old_obj);
+        EndPaint(hwnd, &paint_struct);
+        InvalidateRect(hwnd, ptr::null_mut(), 0); // mark for refresh/update
+        SelectObject(destination_dc, destination_buffer);
+
         DeleteDC(destination_dc);
+        DeleteDC(mem_dc_topmost);
         ReleaseDC(ptr::null_mut(), source_dc);
         DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
+        DeleteObject(top_layer_bitmap as *mut winapi::ctypes::c_void);
     }
 }
 
-fn capture_and_magnify(
-    hwnd: *mut winapi::shared::windef::HWND__,
-    cursor_pos: winapi::shared::windef::POINT,
-) {
-    let h_monitor = unsafe { MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST) };
-    let mut monitor_info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        rcWork: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        dwFlags: 0,
-    };
-
-    unsafe {
-        GetMonitorInfoW(h_monitor, &mut monitor_info);
-    }
-
-    // get current dimension of the windown on the monitor via GetWindowInfo
-    let mut _window_rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    let mut window_info = winapi::um::winuser::WINDOWINFO {
-        cbSize: std::mem::size_of::<winapi::um::winuser::WINDOWINFO>() as u32,
-        rcWindow: RECT {
-            // note: we'll  copy this to window_rect after the call to GetWindoInfo() below
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        rcClient: RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        },
-        dwStyle: 0,
-        dwExStyle: 0,
-        dwWindowStatus: 0,
-        cxWindowBorders: 0,
-        cyWindowBorders: 0,
-        atomWindowType: 0,
-        wCreatorVersion: 0,
-    };
-    unsafe {
-        GetWindowInfo(hwnd, &mut window_info);
-        _window_rect = window_info.rcWindow;
-    }
-    let win_width = std::cmp::max(2, _window_rect.right - _window_rect.left);
-    let win_height = std::cmp::max(2, _window_rect.bottom - _window_rect.top);
-    // capture rectangle is based off of consierating to edge of the monitor relative to the cursor position
-    let capture_rect = RECT {
-        left: std::cmp::max(monitor_info.rcMonitor.left, cursor_pos.x - (win_width / 2)), // make sure left is not less than monitor left
-        top: std::cmp::max(monitor_info.rcMonitor.top, cursor_pos.y - (win_height / 2)), // make sure top is not less than monitor top
-        right: std::cmp::min(monitor_info.rcMonitor.right, cursor_pos.x + (win_width / 2)), // make sure right is not greater than monitor right
-        bottom: std::cmp::min(
-            monitor_info.rcMonitor.bottom,
-            cursor_pos.y + (win_height / 2),
-        ), // make sure bottom is not greater than monitor bottom
-    };
-    let width = ((capture_rect.right - capture_rect.left) + 1) as u32;
-    let height = ((capture_rect.bottom - capture_rect.top) + 1) as u32;
-
+fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: CursorData) {
+    //let (monitor_left, monitor_top, monitor_right, monitor_bottom) = get_current_monitor_rect(cursor_pos);
     let source_dc = unsafe { GetDC(ptr::null_mut()) };
-    let destination_dc = unsafe { CreateCompatibleDCConst(source_dc) };
+    let destination_dc = unsafe { CreateCompatibleDC(source_dc) };
 
-    let destination_bitmap =
-        unsafe { CreateCompatibleBitmap(source_dc, width as i32, height as i32) };
+    let destination_bitmap = unsafe {
+        CreateCompatibleBitmap(
+            source_dc,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
+        )
+    };
 
-    let old_obj = unsafe {
-        SelectObjectConst(
+    let destination_buffer = unsafe {
+        SelectObject(
             destination_dc,
             destination_bitmap as *mut winapi::ctypes::c_void,
         )
@@ -489,16 +491,16 @@ fn capture_and_magnify(
             destination_dc, // destination device context
             0,              // destination x
             0,              // destination y
-            width as i32,
-            height as i32,
-            source_dc,         // source device context
-            capture_rect.left, // source x
-            capture_rect.top,  // source y
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
+            source_dc,                  // source device context
+            cursor_pos.window_x as i32, // source x
+            cursor_pos.window_y as i32, // source y
             SRCCOPY,
         )
     };
 
-    let mut ps = PAINTSTRUCTConst {
+    let mut paint_struct = PAINTSTRUCT {
         hdc: ptr::null_mut(),
         fErase: 0,
         rcPaint: RECT {
@@ -512,7 +514,7 @@ fn capture_and_magnify(
         rgbReserved: [0; 32],
     };
 
-    let final_destination_dc = unsafe { BeginPaintConst(hwnd, &mut ps) };
+    let final_destination_dc = unsafe { BeginPaint(hwnd, &mut paint_struct) };
 
     // scale/mangify
     unsafe {
@@ -520,19 +522,20 @@ fn capture_and_magnify(
             final_destination_dc,
             0,
             0,
-            (width * MAGNIFY_SCALE_FACTOR) as i32,
-            (height * MAGNIFY_SCALE_FACTOR) as i32,
+            (cursor_pos.window_width * MAGNIFY_SCALE_FACTOR) as i32,
+            (cursor_pos.window_height * MAGNIFY_SCALE_FACTOR) as i32,
             destination_dc,
             0,
             0,
-            width as i32,
-            height as i32,
+            cursor_pos.window_width as i32,
+            cursor_pos.window_height as i32,
             SRCCOPY,
         );
 
-        EndPaint(hwnd, &ps);
-        InvalidateRect(hwnd, ptr::null_mut(), 0);
-        SelectObjectConst(destination_dc, old_obj);
+        EndPaint(hwnd, &paint_struct);
+        InvalidateRect(hwnd, ptr::null_mut(), 0); // mark for refresh/update
+        SelectObject(destination_dc, destination_buffer);
+
         DeleteDC(destination_dc);
         ReleaseDC(ptr::null_mut(), source_dc);
         DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
