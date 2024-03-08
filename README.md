@@ -18,7 +18,7 @@ With that said, I've found that Manga-OCR is the most accurate, but the problem 
 
 So I'm now left with tesseract and Windows Media.Ocr...  First, the test I've used is the CC licensed manga [Ubunchu!](http://www.aerialline.com/comics/ubunchu/):
 
-![Ubunchu Manga](media/ubunchu01_02.png)
+![Ubunchu Manga](assets/ubunchu01_02.png)
 
 Here's the text converted result for Microsoft.Media.Ocr:
 
