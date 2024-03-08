@@ -14,6 +14,8 @@ kakasi = "0.1.0"
 
 # NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
 rusty-tesseract = "1.1.9"
+futures = "0.3.30"
+anyhow = "1.0.80"
 
 # Until prototype is done, we'll allow Windows specific code
 [target.'cfg(windows)'.dependencies]

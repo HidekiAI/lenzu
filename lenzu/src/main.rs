@@ -1,9 +1,14 @@
 extern crate winapi;
+mod ocr_tesseract;
+mod ocr_traits;
+mod ocr_winmedia;
 
 use kakasi::convert;
 use kakasi::IsJapanese;
 
 use image::{DynamicImage, GenericImageView, ImageBuffer};
+use ocr_tesseract::OcrTesseract;
+use ocr_traits::OcrTrait;
 use std::collections::HashMap;
 use std::{
     ffi::{CStr, CString},
@@ -142,6 +147,7 @@ fn main() {
     let window_name = "Lenzu-OCR";
 
     let mut ocr = OcrTesseract::new();
+    let ocr_langugages = ocr.init();
 
     // initialize a view-window via winit so that it is universal to both Linux and Windows
     //let event_loop = EventLoop::new();
@@ -272,8 +278,8 @@ fn main() {
                 }
                 ToggleState::Capture => {
                     // capture the screen and magnify it
-                    let supported_languages = tesseract_langs.join("+");
-                    capture_and_ocr(hwnd, cursor, supported_languages.clone().as_str());
+                    let supported_languages = ocr_langugages.join("+");
+                    capture_and_ocr(hwnd, &mut ocr, cursor, supported_languages.clone().as_str());
                     // once it's blitted to that window, stay still..
                     TOGGLE_STATE = ToggleState::Captured;
                 }
@@ -428,6 +434,7 @@ fn from_image_to_window(
 
 fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
+    ocr: &mut OcrTesseract,
     cursor_pos: CursorData,
     supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
 ) {
@@ -452,30 +459,7 @@ fn capture_and_ocr(
     // 7. draw the magnified image onto the window
     // convert DC to RGBA - probably can get away with 24-bit but for better byte alignment, will stay at 32-bit
     let gray_scale_image = screenshot.grayscale(); // Convert the image to grayscale
-
-    // Default OEM=3 (based on what is available)
-    // For Manga, PSM should be 6 in gener
-    let ocr_args: rusty_tesseract::Args = Args {
-        lang: supported_lang.into(),
-        //..Default::default()
-        config_variables: HashMap::new(),
-        dpi: Some(150),
-        psm: Some(11), // 11: Sparse text with OSD
-        oem: Some(3),  // 3: whatever is available
-    };
-
-    let start_ocr = std::time::Instant::now();
-    let ocr_image: Result<rusty_tesseract::Image, rusty_tesseract::TessError> =
-        rusty_tesseract::Image::from_dynamic_image(&gray_scale_image); // from_dynamic_image(&gray_scale_image);
-    let ocr_result: Result<String, rusty_tesseract::TessError> = match ocr_image {
-        Ok(img) => rusty_tesseract::image_to_string(&img, &ocr_args),
-        Err(e) => {
-            println!("Error: {:?}", e);
-            return;
-        }
-    };
-    let total_time = start_ocr.elapsed().as_millis();
-    println!("OCR Result ({} mSec): '{:?}'", total_time, ocr_result);
+    let ocr_result = ocr.evaluate(&gray_scale_image);
 
     // now run kakasi to convert the kanji to hiragana
     // Translate Japanese text to hiragana
