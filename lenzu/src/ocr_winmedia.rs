@@ -1,4 +1,5 @@
 // Based off of windows.Media.Ocr crates
+use anyhow::Error;
 
 use windows::{
     core::*,
@@ -18,15 +19,21 @@ impl OcrTrait for OcrWinMedia {
     fn new() -> Self {
         OcrWinMedia {}
     }
-    fn init(&self) {
+
+    fn init(&self) -> Vec<String> {
+        let mut langs = Vec::new();
+        langs.push(JAPANESE_LANGUAGE.to_string());
+        langs
     }
-    fn evaluate_by_paths(&self, image_path: &str) -> String {
+
+    fn evaluate_by_paths(&self, image_path: &str) -> core::result::Result<String, Error> {
         let img = image::open(image_path).unwrap();
         self.evaluate(&img)
     }
 
-    fn evaluate(&self, image: &image::DynamicImage) -> String {
-        todo!("CODE ME!")
+    fn evaluate(&self, image: &image::DynamicImage) -> core::result::Result<String, Error> {
+        todo!("CODE ME!");
+        Ok("CODE ME!".to_string())
     }
 }
 
