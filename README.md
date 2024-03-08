@@ -1,16 +1,26 @@
 # lenzu
 
-desktop lens (almost like desktop magnifier commonly found in accessibility application for the visually impaired users) which detects images (initially started as OCR) to real-time analyze (via OpenCV) the small window where the mouse cursor hovers (for example, for OCR, it can then add furigana to all the kanji)
+Desktop lens (almost like desktop magnifier commonly found in accessibility application for the visually impaired users) which detects images (initially started as OCR) to real-time analyze (possibly via OpenCV) the small window where the mouse cursor hovers (for example, for OCR, it can then add furigana to all the kanji via kakasi or mecab).
+
+## Libraries
+
+Target platforms are Linux (Debian) and Windows (MinGW64).  Not really relevant to list it here since all you need to do is look at my Cargo.toml but just in case:
+
+- kakasi (I believe rust version is self-contained, so no need to install executable version)
+- tesseract (rusty-tesseract expects tesseract-ocr executable and it's trained-data pre-installed)
+- leptonica (the MinGW pacman version statically links leptonica it seems, so you won't find MinGW libs for this one, you'll have to hand-compile using MinGW gcc)
+- windows-rs (features: Media_Ocr, Globalization) - also want to make sure to install (in Windows Settings) for Japanese language
+- winit
 
 ## Tesseract versus Windows OCR
 
 Firstly, I want to emphasize that performance means nothing, if accuracies is just crap...  With that said, currently for offline OCR, I've tried
 
-* Tesseract
-* [Windows Media.OCR](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr)
-* [Manga-OCR](https://github.com/kha-white/manga-ocr) (Note that his work `mokuro` which integrates manga-ocr is just superior!)
+- [Tesseract](https://github.com/tesseract-ocr/tesseract)
+- [Windows Media.OCR](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr)
+- [Manga-OCR](https://github.com/kha-white/manga-ocr) (Note that his work `mokuro` which integrates manga-ocr is just superior!)
 
-Note that though I've installed EasyOCR, but it turns out it does NOT handle vertical Japanese, hence it's not even part of the considerations.
+Note that though I've installed EasyOCR, but it turns out it does NOT handle vertical Japanese, hence it's not even part of the considerations.  I've also tried to run [gazou](https://github.com/kamui-fin/gazou) but if you look in the "Dependencies" section, it clearly states it requires tesseract (and leptonica), so I've skipped on that.  Incidentally, installing leptonica (even via MinGW) is just painfully time-consuming on Windows (it's really a breeze on Linux).
 
 With that said, I've found that Manga-OCR is the most accurate, but the problem it turns out, is that the folks who publishes the [Manga109s dataset](http://www.manga109.org/ja/index.html) are not too responsive and never got back to me, so I have to toss this out of my toolbox as well.
 
@@ -86,7 +96,11 @@ As for tesseract, I've tried ALL PSM settings, and PSM==5 was the closest it go 
 
 Lastly, the most attractive (ease of library usage, documentations, free/access, accuracies, performance, dependabilities, linking against libs, etc) Microsoft.Media.Ocr is just the most ideal choice!  I cannot stop praising  Microsoft!  But unfortunately, this library restricts to just Windows.
 
-In the end, for now, I've given up on other platforms and concentrating strictly on Windos using Microsoft's Windows.Microsft.Media.Ocr library.
+Somebody on reddit mentioned that Apple also has descent accuracies but you'd have to download the language seprately and it is proprietary;  These are commonly due to the commercial operating system companies wanting to make sure the target country has language support.  For Windows for example, if you want Japanese support in which your installation was from non-Japanese installer version, you will have to have the desktop settings system download the Japanese language supprts from Microsoft (see for example [TryCreateFromUserProfileLanguages()](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr.ocrengine.trycreatefromuserprofilelanguages) method) in which if the target [Language](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.language) is not installed, it will not be able to OCR successfully.  And as mentioned, unfortunately, it is propritary to the operating systems.  And in general, these are somewhat tied mainly IMHO (this is just an opinion) because it needs to support accessibilities for screen-readers (TTS) for vision-impared.
+
+I'm sure Linux Desktop has TTS accessibilities which does screen-reader, but I've never been able to successfully get [mecab](https://taku910.github.io/mecab/) or Orca (yes, I like Gnome) to work successfully.  There are some excellent web-based TTS which even will flavor the voice according to your choices, but that's actually non-OCR topic, mainly because these applications do not OCR (they expect actual TEXT).  And lastly (on this topic) most screen-reader for vision-impared does NOT do OCR, they usally only read texts (UTF-8, JIS, etc), which is a different topic (see mecab, and other libraries which will analyze neighboring texts and determine how to pronounce it - for my purpose, I use [kakasi](http://kakasi.namazu.org/index.html.ja) which does neighbor analysis based on dictionary lookup, and it's my goto-tool that I've relied on for many (20+?) years).
+
+In the end, for now, I've given up on other platforms and concentrating strictly on Windos using Microsoft's Windows.Microsft.Media.Ocr library since I just want offline OCR.
 
 Side note: I don't know how they do it, but the new "Snipping Tool" available on Windows 10/11 has this feature called "Text Action" in which I presume is using the same library, but for some reason, it takes longer time (I think it took like 7 seconds) and here's the result:
 
