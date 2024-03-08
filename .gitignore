@@ -22,3 +22,6 @@ obj/
 .fake/
 # i.e. foobar.vcproj.user and foobar.vcxproj.user
 *.v*proj.user
+*.zip
+*.bak
+

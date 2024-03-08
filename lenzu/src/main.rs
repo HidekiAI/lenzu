@@ -4,7 +4,6 @@ use kakasi::convert;
 use kakasi::IsJapanese;
 
 use image::{DynamicImage, GenericImageView, ImageBuffer};
-use rusty_tesseract::Args;
 use std::collections::HashMap;
 use std::{
     ffi::{CStr, CString},
@@ -140,25 +139,9 @@ impl CursorData {
 
 fn main() {
     let class_name = "Lenzu";
-    let window_name = "Tesseract";
+    let window_name = "Lenzu-OCR";
 
-    //tesseract version
-    let tesseract_version = rusty_tesseract::get_tesseract_version().unwrap();
-    println!("Tesseract - Version is: {:?}", tesseract_version);
-
-    //available languages
-    let tesseract_langs = rusty_tesseract::get_tesseract_langs().unwrap();
-    println!(
-        "Tesseract - The available languages are: {:?}",
-        tesseract_langs
-    );
-
-    //available config parameters
-    let parameters = rusty_tesseract::get_tesseract_config_parameters().unwrap();
-    println!(
-        "Tesseract - Config parameter: {}",
-        parameters.config_parameters.first().unwrap()
-    );
+    let mut ocr = OcrTesseract::new();
 
     // initialize a view-window via winit so that it is universal to both Linux and Windows
     //let event_loop = EventLoop::new();
@@ -475,15 +458,16 @@ fn capture_and_ocr(
     let ocr_args: rusty_tesseract::Args = Args {
         lang: supported_lang.into(),
         //..Default::default()
-            config_variables: HashMap::new(),
-            dpi: Some(150),
-            psm: Some(11),   // 11: Sparse text with OSD
-            oem: Some(3),   // 3: whatever is available
+        config_variables: HashMap::new(),
+        dpi: Some(150),
+        psm: Some(11), // 11: Sparse text with OSD
+        oem: Some(3),  // 3: whatever is available
     };
 
     let start_ocr = std::time::Instant::now();
-    let ocr_image = rusty_tesseract::Image::from_dynamic_image(&gray_scale_image); // from_dynamic_image(&gray_scale_image);
-    let ocr_result = match ocr_image {
+    let ocr_image: Result<rusty_tesseract::Image, rusty_tesseract::TessError> =
+        rusty_tesseract::Image::from_dynamic_image(&gray_scale_image); // from_dynamic_image(&gray_scale_image);
+    let ocr_result: Result<String, rusty_tesseract::TessError> = match ocr_image {
         Ok(img) => rusty_tesseract::image_to_string(&img, &ocr_args),
         Err(e) => {
             println!("Error: {:?}", e);
