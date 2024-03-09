@@ -161,19 +161,7 @@ In the future, I may give it an option (via command line arg) to choose between 
 
 Just a quick comparison compilation:
 
-|Actual                   |Microsoft: Windows.Media.Ocr                      |Windows Snipping Tool (Text Actions)|manga-ocr                    |tesseract                                                     |Google Lens (online)   |
-|-------------------------|--------------------------------------------------|------------------------------------|-----------------------------|--------------------------------------------------------------|-----------------------|
-|t u! U b n u (background)|驫 朝 轗   / 衫 ク                                     |BU!                                 |(I cannot get the darn thing |(I honestly cannot make heads                                 |-                      |
-|あ あたしの オススメは うぶんちゅ       |驫 朝 轗 あ た し の オ ス ス メ は う ぶ ん ち ゅ                 |オススメは あ うぶんちゆ あたしの                  |to install anymore)          |or tails on the  tesseract attempts so I won't even bother...)|あ あたしの オススメは うぶんちゅ     |
-|ubuntu                   |ubuntu                                            |ubuntu                              |-                            |-                                                             |ubuntu                 |
-|最近人気の デスクトップな リナックスです!   |最 近 人 気 の デ ス ク ト ッ プ な リ ナ ッ ク ス で す , 、         |リナックスです! /1モリなか”ら デスクトップな 最近人気の     |-                            |-                                                             |最近人気の デスクトップな リナックスです! |
-|※うぶんちゅではなくウブントゥです        |※ う ぶ ん ゅ く っ 0 ン 物 ィ 夘 し な い マ 夛 い て ん ー ん 化 秘 ー |※うぶんちゅではなくウイントカです                   |-                            |※ うぶんあみゅではなくりプッヒゥで3          &#124;                                |※うぶんちゅではなくウブントゥです      |
-|却下!                      |-                                                 |却下!                                 |-                            |-                                                             |却下!                    |
-|よけんな  このっ！               |-                                                 |よけんなー このっl                          |-                            |-                                                             |よけんな このっ               |
-|マジいてえ んだぞ！               |-                                                 |マミ112元 んだぞ!(                        |-                            |-                                                             |アジいてむ んだぞ!             |
-|ハモりながら  ケンカしない でー っ      |-                                                 |Tっわしない                              |-                            |-                                                             |ハモりながら ケンカしない          |
-|シュン シュン シュン              |-                                                 |-                                   |-                            |-                                                             |6                      |
-|一瞬くらい  検討して  くださいよー!     |一 瞬 く ら い 検 討 し て ′ 、 だ さ い よ ー                   |くださいよー! 検討して 一瞬くらい                  |-                            |-                                                             |一瞬くらい 検討して くださいよー!     |
+![compare-table](assets/ocr-comparison-table.png)
 
 ### windows-rs
 
