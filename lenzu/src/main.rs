@@ -2,13 +2,12 @@ extern crate winapi;
 mod ocr_tesseract;
 mod ocr_traits;
 mod ocr_winmedia;
+use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 
 use kakasi::convert;
 use kakasi::IsJapanese;
 
 use image::{DynamicImage, GenericImageView, ImageBuffer};
-use ocr_tesseract::OcrTesseract;
-use ocr_traits::OcrTrait;
 use std::collections::HashMap;
 use std::{
     ffi::{CStr, CString},
@@ -142,11 +141,23 @@ impl CursorData {
     }
 }
 
+fn create_ocr(_args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
+    let force_windows_ocr = cfg!(target_os = "windows");
+    if force_windows_ocr {
+        // even if tesseract is installed, if on Windows, use the most reliable OCR available instead
+        return Box::new(ocr_winmedia::OcrWinMedia::new());
+    }
+    Box::new(ocr_tesseract::OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
+}
+
 fn main() {
+    let args = std::env::args().collect::<Vec<String>>();
+
     let class_name = "Lenzu";
     let window_name = "Lenzu-OCR";
 
-    let mut ocr = OcrTesseract::new();
+    // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
+    let mut ocr = create_ocr(&args);
     let ocr_langugages = ocr.init();
 
     // initialize a view-window via winit so that it is universal to both Linux and Windows
@@ -434,7 +445,7 @@ fn from_image_to_window(
 
 fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
-    ocr: &mut OcrTesseract,
+    ocr: &mut Box<dyn crate::ocr_traits::OcrTrait>,
     cursor_pos: CursorData,
     supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
 ) {

@@ -9,7 +9,10 @@ pub struct OcrTesseract {
 }
 
 impl OcrTrait for OcrTesseract {
-    fn new() -> Self {
+    fn new() -> Self
+    where
+        Self: Sized,
+    {
         OcrTesseract {
             ocr_args: Args {
                 lang: "jpn+jp_vert+osd".into(),
