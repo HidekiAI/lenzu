@@ -8,7 +8,9 @@ use kakasi::convert;
 use kakasi::IsJapanese;
 
 use image::{DynamicImage, GenericImageView, ImageBuffer};
+use ocr_winmedia::OcrWinMedia;
 use std::collections::HashMap;
+use std::env::args;
 use std::{
     ffi::{CStr, CString},
     ptr,
@@ -141,166 +143,18 @@ impl CursorData {
     }
 }
 
-fn create_ocr(_args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
+fn create_ocr(args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
     let force_windows_ocr = cfg!(target_os = "windows");
     if force_windows_ocr {
-        // even if tesseract is installed, if on Windows, use the most reliable OCR available instead
+        // even if tesseract is installed, if on Windows, use the most reliable OCR available instead if no arguments are passed
+        if args.len() > 1 && args[1] != "--use-winmedia-ocr" {
+            return Box::new(ocr_tesseract::OcrTesseract::new()); //  if the first arg is not --use-winmedia-ocr, then use Tesseract
+        }
+        // just use default windows OCR
         return Box::new(ocr_winmedia::OcrWinMedia::new());
     }
+    // Not on Windows, so use Tesseract OCR
     Box::new(ocr_tesseract::OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
-}
-
-fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
-
-    let class_name = "Lenzu";
-    let window_name = "Lenzu-OCR";
-
-    // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
-    let mut ocr = create_ocr(&args);
-    let ocr_langugages = ocr.init();
-
-    // initialize a view-window via winit so that it is universal to both Linux and Windows
-    //let event_loop = EventLoop::new();
-    //let window = WindowBuilder::new()
-    //    .with_title(window_name)
-    //    .with_inner_size(LogicalSize::new(1024, 768)) // initial size of the window
-    //    .with_min_inner_size(LogicalSize::new(1024, 768)) // minimum size of the window
-    //    .build(&event_loop.unwrap())
-    //    .unwrap();
-    //let hw = match window.window_handle().unwrap() {
-    //    WindowHandle::Wayland(handle) => handle.wayland_display().unwrap(),
-    //    WindowHandle::X(handle) => handle.xlib_display().unwrap(),
-    //    WindowHandle::win32(handle) => handle.hwnd().unwrap(),
-    //    _ => panic!("Unsupported platform"),
-    //};
-
-    let h_instance = ptr::null_mut();
-    let class_name_cstr = CString::new(class_name).expect("CString creation failed");
-    let window_name_cstr = CString::new(window_name).expect("CString creation failed");
-
-    let wc = winapi::um::winuser::WNDCLASSW {
-        style: 0,
-        lpfnWndProc: Some(DefWindowProcW),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: h_instance,
-        hIcon: ptr::null_mut(),
-        hCursor: ptr::null_mut(),
-        hbrBackground: ptr::null_mut(),
-        lpszMenuName: ptr::null_mut(),
-        lpszClassName: class_name_cstr.as_ptr() as *const u16,
-    };
-
-    if unsafe { RegisterClassW(&wc) } == 0 {
-        return;
-    }
-
-    let hwnd: *mut winapi::shared::windef::HWND__ = unsafe {
-        CreateWindowExW(
-            0,
-            class_name_cstr.as_ptr() as *const u16,
-            window_name_cstr.as_ptr() as *const u16,
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            h_instance,
-            ptr::null_mut(),
-        )
-    };
-
-    if hwnd.is_null() {
-        // Instead of panic!(), we'll just close it cleanly with PostQuitMessage() and log to explain the cause/reasons
-        println!("Failed to create window.");
-        unsafe { PostQuitMessage(0) }; // Even if HWND was not created, can we post a quit message?
-        return;
-    }
-
-    unsafe {
-        ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
-    }
-
-    let mut cursor = CursorData::new();
-    let mut msg = MSG {
-        hwnd: ptr::null_mut(),
-        message: 0,
-        wParam: 0,
-        lParam: 0,
-        time: 0,
-        pt: winapi::shared::windef::POINT { x: 0, y: 0 },
-    };
-
-    loop {
-        if unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) } == 0 {
-            break;
-        }
-        unsafe {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-        cursor.update(hwnd);
-
-        if msg.message == WM_KEYDOWN {
-            match msg.wParam as std::ffi::c_int {
-                VK_ESCAPE => {
-                    // Check for the ESCAPE key press and exit the application
-                    unsafe { PostQuitMessage(0) };
-                }
-                TOGGLE_WINDOW_MOVE_KEY => {
-                    // unsure why I need to use unsafe here, but compiler complains if I don't
-                    unsafe {
-                        TOGGLE_STATE = match TOGGLE_STATE {
-                            ToggleState::Free => ToggleState::MoveWindow,
-                            ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
-                            ToggleState::Captured => ToggleState::Free,
-                            ToggleState::Capture => {
-                                // should never be in this state
-                                assert!(false, "unexpected toggle_state");
-                                ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
-                            }
-                        }
-                    }
-                }
-                _ => (),
-            }
-        }
-
-        unsafe {
-            match TOGGLE_STATE {
-                ToggleState::Free => capture_and_magnify(hwnd, cursor),
-                ToggleState::MoveWindow => {
-                    // move the window to the cursor position (a sticky window)
-                    winapi::um::winuser::SetWindowPos(
-                        hwnd,
-                        ptr::null_mut(),
-                        cursor.window_x.clone(),
-                        cursor.window_y.clone(),
-                        0, // width will be ignored because will use SWP_NOSIZE to retain current size
-                        0, // height ignored
-                        winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
-                    );
-                    //// invalidate the window so it can redraw the window onto the Desktop/monitor
-                    //InvalidateRect(hwnd, ptr::null_mut(), 0);
-                    capture_and_magnify(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
-                }
-                ToggleState::Capture => {
-                    // capture the screen and magnify it
-                    let supported_languages = ocr_langugages.join("+");
-                    capture_and_ocr(hwnd, &mut ocr, cursor, supported_languages.clone().as_str());
-                    // once it's blitted to that window, stay still..
-                    TOGGLE_STATE = ToggleState::Captured;
-                }
-                ToggleState::Captured => {
-                    // don't render/update/Invalidate the window, just stay still/frozen until the user toggles the window again
-                    ()
-                }
-            }
-        }
-    } // loop
 }
 
 // NOTE: Make sure to call ShowWindow(hwnd, SW_IDE) prior to calling this method and ShowWindow(hwnd, SW_SHOW) after image is captured
@@ -476,8 +330,9 @@ fn capture_and_ocr(
     // Translate Japanese text to hiragana
     let start_kakasi = std::time::Instant::now();
     let translate = match ocr_result {
-        Ok(text) => {
-            let res = kakasi::convert(text);
+        Ok(result) => {
+            println!("OCR Result: '{:?}'", result.text);
+            let res = kakasi::convert(result.text);
             res.hiragana
         }
         Err(e) => format!("Error: {:?}", e).into(),
@@ -598,4 +453,169 @@ fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Cu
     //    ReleaseDC(ptr::null_mut(), source_dc);
     //    DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
     //}
+}
+
+#[derive(Debug)]
+struct Foo {
+    a: i32,
+    b: i32,
+}
+
+fn do_something(foo: &str) -> Result<Foo, anyhow::Error> {
+    let f = Foo { a: 1, b: 2 };
+    Ok(f)
+}
+
+#[tokio::main]
+async fn main() {
+    let args = std::env::args().collect::<Vec<String>>();
+
+    let class_name = "Lenzu";
+    let window_name = "Lenzu-OCR";
+
+    // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
+    let mut ocr = create_ocr(&args);
+    let ocr_langugages = ocr.init();
+
+    // initialize a view-window via winit so that it is universal to both Linux and Windows
+    //let event_loop = EventLoop::new();
+    //let window = WindowBuilder::new()
+    //    .with_title(window_name)
+    //    .with_inner_size(LogicalSize::new(1024, 768)) // initial size of the window
+    //    .with_min_inner_size(LogicalSize::new(1024, 768)) // minimum size of the window
+    //    .build(&event_loop.unwrap())
+    //    .unwrap();
+    //let hw = match window.window_handle().unwrap() {
+    //    WindowHandle::Wayland(handle) => handle.wayland_display().unwrap(),
+    //    WindowHandle::X(handle) => handle.xlib_display().unwrap(),
+    //    WindowHandle::win32(handle) => handle.hwnd().unwrap(),
+    //    _ => panic!("Unsupported platform"),
+    //};
+
+    let h_instance = ptr::null_mut();
+    let class_name_cstr = CString::new(class_name).expect("CString creation failed");
+    let window_name_cstr = CString::new(window_name).expect("CString creation failed");
+
+    let wc = winapi::um::winuser::WNDCLASSW {
+        style: 0,
+        lpfnWndProc: Some(DefWindowProcW),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: h_instance,
+        hIcon: ptr::null_mut(),
+        hCursor: ptr::null_mut(),
+        hbrBackground: ptr::null_mut(),
+        lpszMenuName: ptr::null_mut(),
+        lpszClassName: class_name_cstr.as_ptr() as *const u16,
+    };
+
+    if unsafe { RegisterClassW(&wc) } == 0 {
+        return;
+    }
+
+    let hwnd: *mut winapi::shared::windef::HWND__ = unsafe {
+        CreateWindowExW(
+            0,
+            class_name_cstr.as_ptr() as *const u16,
+            window_name_cstr.as_ptr() as *const u16,
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            h_instance,
+            ptr::null_mut(),
+        )
+    };
+
+    if hwnd.is_null() {
+        // Instead of panic!(), we'll just close it cleanly with PostQuitMessage() and log to explain the cause/reasons
+        println!("Failed to create window.");
+        unsafe { PostQuitMessage(0) }; // Even if HWND was not created, can we post a quit message?
+        return;
+    }
+
+    unsafe {
+        ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
+    }
+
+    let mut cursor = CursorData::new();
+    let mut msg = MSG {
+        hwnd: ptr::null_mut(),
+        message: 0,
+        wParam: 0,
+        lParam: 0,
+        time: 0,
+        pt: winapi::shared::windef::POINT { x: 0, y: 0 },
+    };
+
+    loop {
+        if unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) } == 0 {
+            break;
+        }
+        unsafe {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        cursor.update(hwnd);
+
+        if msg.message == WM_KEYDOWN {
+            match msg.wParam as std::ffi::c_int {
+                VK_ESCAPE => {
+                    // Check for the ESCAPE key press and exit the application
+                    unsafe { PostQuitMessage(0) };
+                }
+                TOGGLE_WINDOW_MOVE_KEY => {
+                    // unsure why I need to use unsafe here, but compiler complains if I don't
+                    unsafe {
+                        TOGGLE_STATE = match TOGGLE_STATE {
+                            ToggleState::Free => ToggleState::MoveWindow,
+                            ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
+                            ToggleState::Captured => ToggleState::Free,
+                            ToggleState::Capture => {
+                                // should never be in this state
+                                assert!(false, "unexpected toggle_state");
+                                ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        unsafe {
+            match TOGGLE_STATE {
+                ToggleState::Free => capture_and_magnify(hwnd, cursor),
+                ToggleState::MoveWindow => {
+                    // move the window to the cursor position (a sticky window)
+                    winapi::um::winuser::SetWindowPos(
+                        hwnd,
+                        ptr::null_mut(),
+                        cursor.window_x.clone(),
+                        cursor.window_y.clone(),
+                        0, // width will be ignored because will use SWP_NOSIZE to retain current size
+                        0, // height ignored
+                        winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
+                    );
+                    //// invalidate the window so it can redraw the window onto the Desktop/monitor
+                    //InvalidateRect(hwnd, ptr::null_mut(), 0);
+                    capture_and_magnify(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
+                }
+                ToggleState::Capture => {
+                    // capture the screen and magnify it
+                    let supported_languages = ocr_langugages.join("+");
+                    capture_and_ocr(hwnd, &mut ocr, cursor, supported_languages.clone().as_str());
+                    // once it's blitted to that window, stay still..
+                    TOGGLE_STATE = ToggleState::Captured;
+                }
+                ToggleState::Captured => {
+                    // don't render/update/Invalidate the window, just stay still/frozen until the user toggles the window again
+                    ()
+                }
+            }
+        }
+    } // loop
 }

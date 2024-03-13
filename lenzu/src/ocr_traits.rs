@@ -10,7 +10,12 @@ pub trait OcrTrait {
     // returns array of Strings of supported languages
     fn init(&self) -> Vec<String>;
 
-    fn evaluate_by_paths(&self, image_path: &str) -> Result<String, Error>;
+    fn evaluate_by_paths(&self, image_path: &str) -> Result<OcrTraitResult, Error>;
 
-    fn evaluate(&self, image: &DynamicImage) -> Result<String, Error>;
+    fn evaluate(&self, image: &DynamicImage) -> Result<OcrTraitResult, Error>;
+}
+
+pub(crate) struct OcrTraitResult {
+    pub text: String,
+    pub lines: Vec<String>,
 }
