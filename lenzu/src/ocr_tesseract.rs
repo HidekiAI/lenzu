@@ -1,7 +1,6 @@
-use crate::ocr_traits::OcrTrait;
+use crate::ocr_traits::{self, OcrTrait};
 use anyhow::Error;
 use rusty_tesseract::Args;
-use windows::Media::Ocr;
 
 // derive from OcrTrait
 pub struct OcrTesseract {
@@ -44,12 +43,18 @@ impl OcrTrait for OcrTesseract {
         tesseract_langs
     }
 
-    fn evaluate_by_paths(&self, image_path: &str) -> core::result::Result<String, Error> {
+    fn evaluate_by_paths(
+        &self,
+        image_path: &str,
+    ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let img = image::open(image_path).unwrap();
         self.evaluate(&img)
     }
 
-    fn evaluate(&self, image: &image::DynamicImage) -> core::result::Result<String, Error> {
+    fn evaluate(
+        &self,
+        image: &image::DynamicImage,
+    ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let supported_lang = rusty_tesseract::get_tesseract_langs().unwrap().join("+");
         // Default OEM=3 (based on what is available)
         // For Manga, PSM should be 6 in gener
@@ -61,7 +66,7 @@ impl OcrTrait for OcrTesseract {
 
         let start_ocr = std::time::Instant::now();
         let ocr_image: Result<rusty_tesseract::Image, rusty_tesseract::TessError> =
-            rusty_tesseract::Image::from_dynamic_image(&image); // from_dynamic_image(&gray_scale_image);
+            rusty_tesseract::Image::from_dynamic_image(image); // from_dynamic_image(&gray_scale_image);
         let ocr_result: Result<String, rusty_tesseract::TessError> = match ocr_image {
             Ok(img) => rusty_tesseract::image_to_string(&img, &ocr_args),
             Err(e) => {
@@ -71,6 +76,11 @@ impl OcrTrait for OcrTesseract {
         };
         let total_time = start_ocr.elapsed().as_millis();
         println!("OCR Result ({} mSec): '{:?}'", total_time, ocr_result);
-        Ok(ocr_result.unwrap())
+        let ocr_str = ocr_result.unwrap();
+        let result = ocr_traits::OcrTraitResult {
+            text: ocr_str.clone(),
+            lines: vec![ocr_str.split("\n").collect()],
+        };
+        Ok(result)
     }
 }
