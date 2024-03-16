@@ -80,9 +80,10 @@ impl OcrTrait for OcrWinMedia {
                     futures::executor::block_on(self.slice_to_memstream(&raw_buffer_u8));
                 match in_memory_stream_transform_result {
                     Ok(in_memory_stream) => {
-                        match futures::executor::block_on(
+                        let eval_result = futures::executor::block_on(
                             self.evaluate_async(&self.language, &in_memory_stream),
-                        ) {
+                        );
+                        match eval_result {
                             Ok(s) => Ok(s),
                             Err(e) => {
                                 println!("#================= Error: {:?}\n\n", e.to_string());
@@ -608,35 +609,35 @@ impl OcrWinMedia {
             .expect(format!("Failed to detach stream from writer").as_str());
 
         // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
-        if cfg!(debug_assertions) {
-            if in_memory_stream.CanRead().unwrap() == false {
-                panic!("Error: stream is closed");
-            }
-            println!(
-                "DEBUG: slice_to_memstream() - Stream size: {:?} bytes, position: {:?}",
-                in_memory_stream.Size(),
-                in_memory_stream.Position()
-            );
-            if in_memory_stream.CanRead().unwrap() == false {
-                panic!("Error: stream is closed");
-            }
-            // for debug, dump this as a PNG file
-            in_memory_stream.Seek(0).unwrap();
-            Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_001.png").await;
-            if in_memory_stream.CanRead().unwrap() == false {
-                panic!("Error: stream is closed");
-            }
-            in_memory_stream.Seek(0).unwrap(); // why does it panic here?
-            if in_memory_stream.CanRead().unwrap() == false {
-                panic!("Error: stream is closed");
-            }
-            // we dump twice to verify that no matter how many times we dump, the READ stream is still valid
-            Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_002.png").await;
-            if in_memory_stream.CanRead().unwrap() == false {
-                panic!("Error: stream is closed");
-            }
-            in_memory_stream.Seek(0).unwrap();
-        }
+        //if cfg!(debug_assertions) {
+        //    if in_memory_stream.CanRead().unwrap() == false {
+        //        panic!("Error: stream is closed");
+        //    }
+        //    println!(
+        //        "DEBUG: slice_to_memstream() - Stream size: {:?} bytes, position: {:?}",
+        //        in_memory_stream.Size(),
+        //        in_memory_stream.Position()
+        //    );
+        //    if in_memory_stream.CanRead().unwrap() == false {
+        //        panic!("Error: stream is closed");
+        //    }
+        //    // for debug, dump this as a PNG file
+        //    in_memory_stream.Seek(0).unwrap();
+        //    Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_001.png").await;
+        //    if in_memory_stream.CanRead().unwrap() == false {
+        //        panic!("Error: stream is closed");
+        //    }
+        //    in_memory_stream.Seek(0).unwrap(); // why does it panic here?
+        //    if in_memory_stream.CanRead().unwrap() == false {
+        //        panic!("Error: stream is closed");
+        //    }
+        //    // we dump twice to verify that no matter how many times we dump, the READ stream is still valid
+        //    Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_002.png").await;
+        //    if in_memory_stream.CanRead().unwrap() == false {
+        //        panic!("Error: stream is closed");
+        //    }
+        //    in_memory_stream.Seek(0).unwrap();
+        //}
         // ######################## DEBUG END
 
         // reset seek position to 0 because Position() is currently equali to Size()
@@ -724,9 +725,10 @@ impl OcrWinMedia {
             "Evaluating (OCR recognizing) for lanaguage: {:?}",
             language.LanguageTag()?
         );
-        let timeout_in_seconds = 15;
+        let timeout_in_seconds = 30;
         let duration: Duration = Duration::from_secs(timeout_in_seconds);
         println!("evaluate_async(): Creating BitmapDecoder...");
+        let create_decoder_timer_start = std::time::Instant::now();
         let decode: BitmapDecoder =
             match Self::create_decoder_with_timeout(stream, timeout_in_seconds).await {
                 Ok(decoder) => decoder,
@@ -735,7 +737,10 @@ impl OcrWinMedia {
                     return Err(e.into());
                 }
             };
-        println!("evaluate_async(): Stream created...");
+        println!(
+            "evaluate_async(): Stream created...  {} mSec",
+            create_decoder_timer_start.elapsed().as_millis()
+        );
         //let bitmap: windows::Graphics::Imaging::SoftwareBitmap =
         //    match decode.GetSoftwareBitmapAsync()?.await {
         //        Ok(bitmap) => bitmap,
@@ -744,12 +749,16 @@ impl OcrWinMedia {
         //            return Err(e.into());
         //        }
         //    };
+        let software_bitmap_timer_start = std::time::Instant::now();
         let bitmap: windows::Graphics::Imaging::SoftwareBitmap =
             timeout(duration.clone(), decode.GetSoftwareBitmapAsync().unwrap())
                 .await
                 .unwrap()
                 .unwrap();
-        println!("evaluate_async(): Bitmap created...");
+        println!(
+            "evaluate_async(): Bitmap created... {} mSec",
+            software_bitmap_timer_start.elapsed().as_millis()
+        );
 
         let engine: OcrEngine = match OcrEngine::TryCreateFromUserProfileLanguages() {
             Ok(engine) => engine,
@@ -758,15 +767,16 @@ impl OcrWinMedia {
                 return Err(e.into());
             }
         };
-        println!("evaluate_async(): Engine created...  time started...");
-        let start = std::time::Instant::now();
+        println!("evaluate_async(): Engine created...");
+
+        let ocr_recognize_start = std::time::Instant::now();
         //let ocr_result: std::prelude::v1::Result<OcrResult, windows::core::Error> = engine.RecognizeAsync(&bitmap)?.await;
         let ocr_result = timeout(duration.clone(), engine.RecognizeAsync(&bitmap).unwrap())
             .await
             .unwrap();
         println!(
             "evaluate_async(): OCR took: {} mSec, result (OK?): {}",
-            start.elapsed().as_millis(),
+            ocr_recognize_start.elapsed().as_millis(),
             ocr_result.is_ok()
         );
 
