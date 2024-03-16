@@ -324,18 +324,20 @@ fn capture_and_ocr(
     // 7. draw the magnified image onto the window
     // convert DC to RGBA - probably can get away with 24-bit but for better byte alignment, will stay at 32-bit
     let gray_scale_image = screenshot.grayscale(); // Convert the image to grayscale
+    let ocr_start_time = std::time::Instant::now();
     let ocr_result = ocr.evaluate(&gray_scale_image);
+    let ocr_time = ocr_start_time.elapsed().as_millis();
 
     // now run kakasi to convert the kanji to hiragana
     // Translate Japanese text to hiragana
     let start_kakasi = std::time::Instant::now();
     let translate = match ocr_result {
         Ok(result) => {
-            println!("OCR Result: '{:?}'", result.text);
+            println!("OCR Result: '{:?}' {} mSec", result.text, ocr_time);
             let res = kakasi::convert(result.text);
             res.hiragana
         }
-        Err(e) => format!("Error: {:?}", e).into(),
+        Err(e) => format!("Error: {:?} - {} mSec", e, ocr_time).into(),
     };
     println!(
         "Kakasi Result ({} mSec): '{:?}'",
