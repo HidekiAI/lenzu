@@ -114,9 +114,35 @@ And the following is for tesseract:
     real    0m4.579s
     user    0m13.241s
     sys     0m0.223s
+    /dev/shm$ time tesseract ./ubunchu01_02.png stdout -l jpn_vert+jpn+osd --psm 3
+    ーー サコ NN ミニ
+    ささ ミ テ NN パ 届
+    S 絢 と 身 癌 / つ
+
+    』 ASN
+    へ
+
+    プン ズ
+
+    (=
+
+    で て / 一 ーー ン ン ! ー- < ここ ーー テー - い
+    lele9 ラ この 2 ペー と ん な =
+    Fc NN ーー
+
+    ノ /) ん 1 ゼ 欠
+    / 多 4 |
+
+    ん                                                                                                                                                                                                                                                                                      DD
+
+    MN っ
+
+    real    0m3.751s
+    user    0m10.499s
+    sys     0m0.252s
     ```
 
-Note that I've tried both MinGW and Linux, and on Linux, I've attempted both PSM 5 and 6 just in case...
+Note that I've tried both MinGW and Linux, and on Linux, I've attempted PSM 3, 5 and 6 just in case...
 
 And with manga-ocr via mokuro:
 
@@ -323,10 +349,20 @@ While I'm at it, might as well mention the recognition comparison on clustered i
     user    0m0.751s
     sys     0m0.182s
     ```
-
+A
 - Oddly, though tesseract (somehow) knows the textbox is top-to-bottom-right-to-left, it's recognizing Orientation==0 (horizontal left-to-right) for both cases
 - From what I understood, TextlineOrder (think of it as rowset order) should be 1 (top-to-bottom), but oddly 2 (bottom-to-top).
 
 All in all, in conclusion, IF you can assist tesseract (i.e. via OpenCV, etc) to provide data that it was trained on (i.e. it's highly likely that trained data was just purely text/fonts on plain background and not scattered and/or unaligned), you CAN actually get highly accurate character recognition.  Though I keep saying I should train manga109s, truth is, unless I train it WITH the condition that the texts are scattered and unaligned, most likely I will probably get same disappointing result (in other words, tesseract trained data commonly are trained by boxing the group of texts in the first place, commonly by hand or tools), hence until I get the OpenCV integrated and evaluate tesseract's accuracies, it's just a waste of time even bothering to deal with manga109s texts.  
 
-Just a brief mention of what manga109 is, in a paragarah, are that it is a collection of untrained [annotated data](http://www.manga109.org/ja/annotations.html) to be used for training in which you are provided with rectangle coordinates and what the text (UTF8) should say in that rectangle.  In other words, they've done the hard work for us of the data you need to teach/train your M.L., and that the images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!
+Just a brief mention of what manga109 is, in a (OK, few) paragarah(s), are that it is a collection of untrained [annotated data](http://www.manga109.org/ja/annotations.html) to be used for training in which you are provided with rectangle coordinates and what the text (UTF8) should say in that rectangle.  In other words, they've done the hard work for us of the data you need to teach/train your M.L.
+
+Another way to put it is, currently, if you were to manually integrate OpenCV to pass just the rectangle of text to tesseract, that rectangle you'd surround the text with is what the folks at manga109.org have done for you (I'm sure they've just used that technique to automate these 109 manga collections to detect the rectangle coordinates and output an XML for it).  Once you have the text isolated into a rectangle without the noise (or at least, least amount of noice) of images and background, you can just pass that rectangle down to tesseract, and I'm sure it can translate it with very reasonable accuracies.
+
+But that's NOT what we want IF we do not integrate OpenCV.  Without OpenCV, if you were to teach M.L. to recognize text in manga, it has to observe the entire page of collections of texts and images (usually boxed into panels) and correctly convert the imaged-based texts to UTF8-based text.  Not only that, but it has to somehow realize that some Japanese texts are horizontal left-to-right, and in rare but some cases, English will also be found.
+
+Perhaps the M.L. will learn that text are commonly grouped via text-bubbles and rectangles (but somtimes, narations and songs/poems are just raw text with and/or without image-background, etc).  Whatever M.L. can do, to "recognize" texts...  Maybe all that irrelevant, I do not know...
+
+But in any cases, none of that needs to be of concern, because (again) the folks at manga109.org did all that hard work for us, and what A.I. needs to care about is, by looking at the entire page of images, it needs to just learn that at coorindates (X1, Y1) as upper left corner of the rectangle and (X2, Y2) as bottom right, there exists a text of "ABC".  It does not (and should not) care what "ABC" means, nor care whether it is vertical or horizontal.  All it knows is that if they encounter a rectangle with this pattern, it means what the annotation says.  And more and more samples you give it, gradually it learns that box-pattern-A has similar characters as box-pattern-B, and according to the annotation, that sub-pattern indicates the (character) image that looks like "X"; and then, it finds sub-pattern of character that looks like "Y", and then "Z"...  but then, it finds that at times, when sub-pattern character "X" is next to (left of) "Y", it differs from "X" is below "Y".  And it learns the pattern of horizontal and vertical...  It also learns that annotations indicates that it is to evaluate from right-to-left but also at most times, top-to-bottom, and so on...  If anybody has a [Jupyter Notebook](https://jupyter.org/) for this using [TensorFlow](https://www.tensorflow.org/), please share with me :smile:
+
+In any case, as for manga109.org, images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors for permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!  Even if they do not say to credit them, do credit them, the labor they put in is very significant!
