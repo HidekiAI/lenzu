@@ -1,6 +1,8 @@
 # lenzu
 
-Desktop lens (almost like desktop magnifier commonly found in accessibility application for the visually impaired users) which detects images (initially started as OCR) to real-time analyze (possibly via OpenCV) the small window where the mouse cursor hovers (for example, for OCR, it can then add furigana to all the kanji via kakasi or analyze for phonetics via mecab for possibly screen-reading).
+Desktop lens (almost like desktop magnifier commonly found in accessibility application for the visually impaired users) which detects images via OFFLINE OCR to real-time analyze (possibly via OpenCV in the future) the small window where the mouse cursor hovers to convert kanji to hiragana (will not furigana) dynamically similar to Yomitan/Rikaichan/Rikaikun (and other browser extension for plain-TEXT).
+
+Again, the key differences is that it is an OCR (optical chracter recognition) from images, NOT plain (UTF8) TEXT.  For UTF8 based texts, use the aforementioned (reliable and proven to work) tool such as [Yomitan](https://github.com/themoeway/yomitan).
 
 ## Libraries
 
@@ -16,13 +18,13 @@ Target platforms are Linux (Debian) and Windows (MinGW64).  Not really relevant 
 
 Firstly, I want to emphasize that performance means nothing, if accuracies is just crap...  With that said, currently for offline OCR, I've tried
 
-- [Tesseract](https://github.com/tesseract-ocr/tesseract)
+- [Tesseract](https://github.com/tesseract-ocr/tesseract) - Note that "jpn_vert" scripts (according to [github](https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc)) did not become available until tesseract 4.
 - [Windows Media.OCR](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr)
 - [Manga-OCR](https://github.com/kha-white/manga-ocr) (Note that his work `mokuro` which integrates manga-ocr is just superior!)
 
-Note that though I've installed EasyOCR, but it turns out it does NOT handle vertical Japanese, hence it's not even part of the considerations.  I've also tried to run [gazou](https://github.com/kamui-fin/gazou) but if you look in the "Dependencies" section, it clearly states it requires tesseract (and leptonica), so I've skipped on that.  Incidentally, installing leptonica (even via MinGW) is just painfully time-consuming on Windows (it's really a breeze on Linux).
+Note that though I've installed EasyOCR, but it turns out it does NOT handle vertical Japanese, hence it's not even part of the considerations.  I've also tried to run [gazou](https://github.com/kamui-fin/gazou) but if you look in the "Dependencies" section, it clearly states it requires tesseract (and leptonica), so I've skipped on that.  Incidentally, installing [leptonica](https://github.com/DanBloomberg/leptonica) (even via MinGW) is just painfully time-consuming on Windows (it's really a breeze on Linux).
 
-With that said, I've found that Manga-OCR is the most accurate, but the problem it turns out, is that the folks who publishes the [Manga109s dataset](http://www.manga109.org/ja/index.html) are not too responsive and never got back to me, so I have to toss this out of my toolbox as well.
+With that said, I've found that Manga-OCR was/is the most accurate (though I no longer have proof since I cannot reinstall it again and make it work) which uses [Manga109s dataset](http://www.manga109.org/ja/index.html), but the problem it turns out, is that the folks who publishes the manga109 are not too responsive and never got back to me, so I have to toss this (manga-ocr and manga109s) out of my toolbox as well.
 
     NOTE: As of 2024-03-05 (password expired in 5 days), I've finally got a response from them, and have acquired UID+password to download the data (3.1GB) they've used for training.  Hence I may attempt to retrain "jpn_vert" for tesseract-traineddata using their batch in the future (if/when I have time).
 
@@ -32,7 +34,7 @@ So I'm now left with tesseract and Windows Media.Ocr...  First, the test I've us
 
 Here's the text converted result for Microsoft.Media.Ocr:
 
-    ```text
+    ```bash
     $ time cargo run --bin sample_ocr media/ubunchu01_02.png
         Finished dev [unoptimized + debuginfo] target(s) in 0.55s
         Running `target\debug\sample_ocr.exe media/ubunchu01_02.png`
@@ -48,7 +50,8 @@ Note: See comments below in regards to "くださいよー!" being correct on on
 
 And the following is for tesseract:
 
-    ```text
+    ```bash
+    # Windows/MinGW:
     $ time tesseract.exe media/ubunchu01_02.png stdout -l jpn+jpn_vert+osd --psm 6
     =    N    2    。 465
     、 いい       必メ - の        い
@@ -72,9 +75,52 @@ And the following is for tesseract:
     sys     0m0.000s
     ```
 
+
+    ```bash
+    # Linux (Debian)
+    /dev/shm$ time tesseract ./ubunchu01_02.png stdout -l jpn_vert+jpn+osd --psm 6
+    ラニ
+    = 2 。 2465
+    お タン 人 ジ 」 メ
+    スッ の こん / ち
+    こ // が cs ジジ バ
+    ミミ / MM? 6@
+    ※ うぶ ん あみ ゅ で は な くり プッ ヒ ゥ で 3 NN の
+    ーー ん が 3
+    ン | ュ ス < ラ M/ 7 4eN の NN スム ン の 。/.
+    Se 人 人 人
+    M N いじ ] KJ ーー
+    へ で 2 、 し NNN 7 へ |」
+    だ 討 明 KNN いぶ N ェ グ 4
+    WA
+    1 MM 仁和 2 ラリ ))
+    - SE
+    real    0m5.334s
+    user    0m15.639s
+    sys     0m0.317s
+    /dev/shm$ time tesseract ./ubunchu01_02.png stdout -l jpn_vert+jpn+osd --psm 5
+    こい ん
+    ーー MM で > いい の <
+    …: 2 rs の
+    NA 了 (AS NL
+    人 編 (, だ トン ん ーー
+    上 立 ー ル ジ ー ジ ダダ 人 NT SN
+    N | 5 還 | Re =
+    > て | ペク ド アア ||- NN Se
+    人 \ N | ーー トン ンー
+    、 | 計 ツン きか
+    ご GY1 SN こき の な 外 で | 検 語 いよ ー!
+    ンジ
+    real    0m4.579s
+    user    0m13.241s
+    sys     0m0.223s
+    ```
+
+Note that I've tried both MinGW and Linux, and on Linux, I've attempted both PSM 5 and 6 just in case...
+
 And with manga-ocr via mokuro:
 
-    ```text
+    ```bash
     # time mokuro  --disable_confirmation=True /tmp/mangadir/ ; ls -lAh
     Paths to process:
     C:\msys64\tmp\mangadir
@@ -92,13 +138,13 @@ I had to use mokuro because manga-ocr kept on crashing...  But the "Processing p
 
 Overall, I think manga-ocr is probably the most ideal candidate IF it works, but it's just too finiky and I think I spent more time trying to install it more than code/test it.
 
-As for tesseract, I've tried ALL PSM settings, and PSM==5 was the closest it go to some recognition, hence I really wanted to get a hold of that manga109s data to train tesseract, but they're not responding, so I've given up.
+As for tesseract, I've tried [ALL PSM settings](https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc), and PSM==5 was the closest it go to some recognition, hence I really wanted to get a hold of that manga109s data to train tesseract, but they're not responding, so I've given up for now (see later section on my goals on tesseract).
 
 Lastly, the most attractive (ease of library usage, documentations, free/access, accuracies, performance, dependabilities, linking against libs, etc) Microsoft.Media.Ocr is just the most ideal choice!  I cannot stop praising  Microsoft!  But unfortunately, this library restricts to just Windows.
 
-Somebody on reddit mentioned that Apple also has descent accuracies but you'd have to download the language seprately and it is proprietary;  These are commonly due to the commercial operating system companies wanting to make sure the target country has language support.  For Windows for example, if you want Japanese support in which your installation was from non-Japanese installer version, you will have to have the desktop settings system download the Japanese language supprts from Microsoft (see for example [TryCreateFromUserProfileLanguages()](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr.ocrengine.trycreatefromuserprofilelanguages) method) in which if the target [Language](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.language) is not installed, it will not be able to OCR successfully.  And as mentioned, unfortunately, it is propritary to the operating systems.  And in general, these are somewhat tied mainly IMHO (this is just an opinion) because it needs to support accessibilities for screen-readers (TTS) for vision-impared.
+Somebody on reddit mentioned (replied to me) that Apple also has descent accuracies but you'd have to download the language seprately and it is proprietary (similar to Windows);  These are commonly due to the commercial operating system companies wanting to make sure the target country has language support.  For Windows for example, if you want Japanese support in which your installation was from non-Japanese installer version, you will have to have the desktop settings system download the Japanese language supprts from Microsoft (see for example [TryCreateFromUserProfileLanguages()](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr.ocrengine.trycreatefromuserprofilelanguages) method) in which if the target [Language](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.language) is not installed, it will not be able to OCR successfully.  And as mentioned, unfortunately, it is propritary to the operating systems.  And in general, these are somewhat tied mainly IMHO (this is just an opinion) because it needs to support accessibilities for screen-readers (TTS) for vision-impared.  As for Android, you're supposed to install and use Google Lens, which once you start using it, no other competition (free or paid) will come close!
 
-I'm sure Linux Desktop has TTS accessibilities which does screen-reader, but I've never been able to successfully get [mecab](https://taku910.github.io/mecab/) or Orca (yes, I like Gnome) to work well in harmony.  There are some excellent web-based TTS which even will flavor the voice according to your choices, but that's actually non-OCR topic, mainly because these are post-OCR-processed applications (they expect actual TEXT, after image has been optically recognized and converted to text).  And lastly (on this topic outside OCD) most screen-readers for vision-impared do NOT OCR (read images), they usally only read texts (UTF-8, JIS, etc), which is a different topic (see mecab, and other libraries which will analyze neighboring texts and determine how to pronounce it (phonetically) - for my purpose, I use [kakasi](http://kakasi.namazu.org/index.html.ja) which does neighbor analysis based on dictionary/jisho (basically, jisho already have "words" of 2 or more sequential kanji in pronounciation via hiragana); but enough on non-OCR topic...
+I'm sure Linux Desktop has TTS accessibilities which does screen-reader, but I've never been able to successfully get [mecab](https://taku910.github.io/mecab/) or Orca (yes, I like Gnome) to work well in harmony.  There are some excellent web-based TTS which even will flavor the voice according to your choices, but that's actually non-OCR topic, mainly because these are post-OCR-processed applications (they expect actual TEXT, after image has been optically recognized and converted to text).  And lastly (outside this topic from OCR) most screen-readers for vision-impared do NOT OCR (analyze/text-recognize images), they usally only read texts (UTF-8, JIS, etc), which is a different topic (see mecab, and other libraries which will analyze neighboring texts and determine how to pronounce it (phonetically) - for my purpose, I use [kakasi](http://kakasi.namazu.org/index.html.ja) which does neighbor analysis based on dictionary/jisho (basically, jisho already have "words" of 2 or more sequential kanji in pronounciation via hiragana); but enough on non-OCR topic...
 
 In the end, for now, I've given up on other platforms and concentrating strictly on Windows using Microsoft's Windows.Microsoft.Media.Ocr library, since I just want offline OCR (that's the key, "offline OCR").
 
@@ -175,11 +221,13 @@ For windows.Media.Ocr integrations with rust, you'll need to at least enable 2 f
 
 All in all, I prefer things to be usable offline (mainly for performance) as long as it works 80% of the time.  If (in the future) if a translator feature was needed, for offline mode, ideally all one has to do is use the jisho library such as jdict used by kakasi to lookup (or any other Japanese-to-<your_language> dictionary) and be done (do minimal).
 
-On the other hand, if going online, it would probably be nice to also have features such as OpenAI, ChatGPT, and (of course) Google Translate to auto-translate for you (which requires either an API key or OAuth2).
+On the other hand, if going online, it would probably be nice to also have features such as OpenAI, ChatGPT, and (of course) Google Translate to auto-translate for you (which requires either an API key or OAuth2).  
+
+On the note of online translation, I won't mention DeepL here other than the fact that probably, for normal and informal conversations with slangs (amongst younger audiences I'd imagine), DeepL seems to be more on the conventional paths, but at least to me, the translation on DeepL compared to Google Translate was less literal.  I used to watch Anime with English subtitles, and just for kicks, I'd read the subtitles; At times, I'd cringe at how somebody attempted to translate it based on (probably) that translator's culture and background and to me, it made no sense.  This is similar to those issues of something of a "common sense" in one culture, is not a "common sense" in another (I'm not sure if "culture shock" is the right term, but you get the point).  This commonly happens also on jokes, especially puns (I once inquired one of the YouTuber who reviewed "kage no jitsuryokusha ni naritakute" about a scene where Shadow is digging the snow because the antagonist he had beaten up had pointed at the character named Yukime who was laying on the snow, and Shadow misinterpreted that the dieing words of the antagonist was pointing at the character and saying "yu... ki..." and as a manga reader, we understood the misunderstandings;  I am unsure if there is a legit comic book company that translated this to English or if it was pirated, but apparently, the YouTuber had/must have read the translated version, so I inquired how well was this misunderstanding of "yuki" and "Yu..ki..me.." was translated...)  In any case, my recommendations is that until A.I. (more specificially, somebody will go out of its ways to teach M.L. to interpret text based on specific cultures), I'd recommend just sticking with Google Translate which is more literal translation.  When ChatGPT first came out for beta prior to public usage, I once asked ChatGPT to come up with puzzles and riddles that worked for both American and Japanese culutres to both be able to understand, and ChatGPT failed miserably (believe me, I've tried to steer it towards explicitly mentiong that "X works for American culture, but Japanese will not comprehend it", as well as vice versa, for about 2-3 hours before I finally gave up with conclusions that it's too biased towards single culture).  A.I. are not "intelligent", they just know what they are taught and no more, and if what they are taught are biased, you'd get conclusions such as "all famous and important people in history are male"...
 
 Going online also means few things:
 
-- Pro: The major pro, is that with Google Cloud or Microsoft Azure (Microsoft has larger language support than Google) you get high-accuracy image recognition and confidence.  
+- Pro: The major pro, is that with Google Cloud or Microsoft Azure (last I've checked, Microsoft has larger language support than Google) you get high-accuracy image recognition and confidence.  Especially on the M.L. domain.
 - Con: The con is you most likely will have to pay some money for using the service if you go over the daily quota/limit/cap.
 - Pro (for me), Con for you: I'm all for having each end-users use OAuth2 to authenticate against their own Google account, this way, privacy is based on between the end-user and Google, not to MY server...  This by the way, unless I'm doing it wrong, requires each individuals to have their own gmail account, in which, they will have to setup their own gcloud and register for their own api-key to access Cloud Vision.  You can however define single server that accepts user-lists assigned in gcloud for the single/same api-key (i.e. family members shares the same gcloud)
 - Con: You have cap/ceiling on queries to Google Cloud per hour (or per day), and above that, you have to pay according to GCloud.
@@ -204,3 +252,81 @@ Going online also means few things:
 
 - One of the most time-consuming factor was in fact to debug/diagnose `windows-rs` (specifically, images as streams that needed to be passed to OCR).  Integration (not just determining what `features` to be added to Cargo.toml, but actual coding/implementations) was very trivial, almost as if you were integrating in C++.  The part that was NOT obvious was due to the quality of Microsoft documentations has dropping significantly!  It used to be that if you go to the "Remarks" section of the API documentations, it will give so many helpful hints on what it does implicitly under the hood.  One of the issue I had lost 2 days on was tracking down why my `InMemoryRandomAccessStream` was "closed" when I accessed it.  At times, I even began to convince myself that I should not be using `tokio` for async I/O because I began suspecting that it could be that on a separate thread, my stream was getting closed.  Going back to the lost quality of Microsoft's API documentation, I found a small remark on [DataReader.DetachBuffer Method](https://learn.microsoft.com/en-us/uwp/api/windows.storage.streams.datareader.detachbuffer) that it is `...useful if you want to retain the buffer after you dispose the data reader.`  (Note that I found this AFTER conincidential desparation trial-and-error of detaching at different parts before both `DataReader` and `DataWriter` goes out of scope - you can see residual of comments, commented code, and logics where I've tried many different things to track why streams were getting closed).  In any case, I guess when you attach/create/construct `DataReader` and/or `DataWriter` with stream, it implicitly close that stream for you as if it was the owner of the stream...
 - Tesseract trained data for Japanese is specific to fonts that are probably not used on manga.  I should have researched this prior to installing it.  I spent most of my time (not on Linux, only on Windows) trying to figure out how to link `leptonica` that is needed/depended by tesseract for some of the rust crates.  In the end, I ended up installing `MinGW` package via `pacman` of tesseract (I'm sure I could have also installed `Cygwin` version if there were any) and used the cargo `rusty-tesseract` which seems to just called the executable/binary (i.e. for Windows, .exe) version of tesseract (via CLI) and passing args to it.  The BASH (shell script) mentality/approach, in which IMHO has it's own merits (easy to maintain and upgrade due to isolation) and demerits (dependency checking and installations needs documenting, etc, or if app crashes or hangs, it's hard to handle error, or usage of named-pipes can be tricky, or security concerns, etc, etc).  But I like it, since most *NIX based application/tools are CLI with rich arguments so that you can write BASH/shell scripts to pipe from one tool to another.
+
+### Tesseract
+
+Although I seem to sound like tesseract is unreliable, it's the reverse.  I am the one that is making tesseract unreliable.  For example, my current implementation is based on collections of manga panels.  Indeed, Windows OCR does superior job in comparison, but if I was to separate each block of texts (i.e. using OpenCV) and then pass it down to tesseract, it can do quite well as-is.  For example, look at this:
+
+![Ubunchu Manga - partitioned](assets/ubunchu01_02_panel01_section_02.png)
+
+    ```bash
+    # Windows (MinGW) version:
+    $ tesseract.exe ubunchu01_02_panel01_section_02.png stdout -l jpn_vert+jpn+osd --psm 5
+    最近 人 気 の ム
+    デス クト ッ プ な
+    リナ ックス で す !
+
+    $ tesseract.exe ubunchu01_02_panel01_section_02.png stdout -l jpn_vert+jpn+osd --psm 5 | kakasi.exe -k
+    さいきん にん き の む
+    です くと っ ぷ な
+    りな っくす で す !
+    ```
+
+Note that I'm using rust-cargo version of [kakasi](https://crates.io/crates/kakasi), hence the options is limited to `-k` - on real version, usually you want something like `-JH` like so:
+
+    ```bash
+    # Linux (Debian) version:
+    /dev/shm$ time tesseract ./ubunchu01_02_panel01_section_02.png stdout -l jpn_vert+jpn+osd
+    最近 人 気 の 生
+
+    デス クト ッ プ な
+    リナ ックス で す !
+
+    4
+    real    0m0.955s
+    user    0m1.653s
+    sys     0m0.204s
+    /dev/shm$ tesseract ./ubunchu01_02_panel01_section_02.png stdout -l jpn_vert+jpn+osd | kakasi -JH -i utf8
+    さいきん にん き の なま
+
+    デス クト ッ プ な
+    リナ ックス で す !
+
+    4    
+    ```
+
+Couple things I must praise are that:
+
+1. Auto-detection - Tesseract (if it can recognize) will read it top-to-bottom-right-to-left
+2. Page Segmentation Mode (PSM) - Also note when textbox is isolated, I do NOT have to hint via `--psm` (note that if I had to force it, the best result is still via `--psm 5` or `--psm 3`)
+3. Accuracies (as I've mentioned) is pretty decent, in fact it's spot-on
+
+While I'm at it, might as well mention the recognition comparison on clustered image versus isolated image based on OCR evaluator:
+
+    ```bash
+    # First on isolated text-box on first panel:
+    /dev/shm$ time tesseract ./ubunchu01_02_panel01_section_02.png stdout -l jpn_vert+jpn+osd --psm 2
+    Orientation: 0
+    WritingDirection: 2
+    TextlineOrder: 1
+    Deskew angle: 0.0000
+    real    0m0.587s
+    user    0m0.407s
+    sys     0m0.179s
+    # Next, on clustered:
+    /dev/shm$ time tesseract ./ubunchu01_02.png stdout -l jpn_vert+jpn+osd --psm 2
+    Orientation: 0
+    WritingDirection: 0
+    TextlineOrder: 2
+    Deskew angle: 0.0118
+    real    0m0.933s
+    user    0m0.751s
+    sys     0m0.182s
+    ```
+
+- Oddly, though tesseract (somehow) knows the textbox is top-to-bottom-right-to-left, it's recognizing Orientation==0 (horizontal left-to-right) for both cases
+- From what I understood, TextlineOrder (think of it as rowset order) should be 1 (top-to-bottom), but oddly 2 (bottom-to-top).
+
+All in all, in conclusion, IF you can assist tesseract (i.e. via OpenCV, etc) to provide data that it was trained on (i.e. it's highly likely that trained data was just purely text/fonts on plain background and not scattered and/or unaligned), you CAN actually get highly accurate character recognition.  Though I keep saying I should train manga109s, truth is, unless I train it WITH the condition that the texts are scattered and unaligned, most likely I will probably get same disappointing result (in other words, tesseract trained data commonly are trained by boxing the group of texts in the first place, commonly by hand or tools), hence until I get the OpenCV integrated and evaluate tesseract's accuracies, it's just a waste of time even bothering to deal with manga109s texts.  
+
+Just a brief mention of what manga109 is, in a paragarah, are that it is a collection of untrained [annotated data](http://www.manga109.org/ja/annotations.html) to be used for training in which you are provided with rectangle coordinates and what the text (UTF8) should say in that rectangle.  In other words, they've done the hard work for us of the data you need to teach/train your M.L., and that the images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!
