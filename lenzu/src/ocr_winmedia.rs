@@ -1,4 +1,3 @@
-
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
 //use futures::sink::Buffer;
@@ -79,11 +78,11 @@ impl OcrTrait for OcrWinMedia {
                     Ok(in_memory_stream) => {
                         // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
                         if cfg!(debug_assertions) {
-                            futures::executor::block_on(Self::dump_stream_to_png(
-                                &in_memory_stream,
-                                "debug_slice_to_memstream_evaluate.png",
-                            ));
-                            in_memory_stream.Seek(0).unwrap();
+                            //futures::executor::block_on(Self::dump_stream_to_png(
+                            //    &in_memory_stream,
+                            //    "debug_slice_to_memstream_evaluate.png",
+                            //));
+                            //in_memory_stream.Seek(0).unwrap();
                         }
                         // ######################## DEBUG END
 
@@ -160,7 +159,8 @@ impl OcrWinMedia {
         let mut absolute_filepaths_buf: std::path::PathBuf = std::env::current_dir().unwrap();
         absolute_filepaths_buf.push(arg_image_path);
         absolute_filepaths_buf = absolute_filepaths_buf.canonicalize().unwrap(); // make sure it's absolute path without ".." or "."
-                                                                                 // on Windows, canonicalize() will convert  who "C:\foo\..\bar" to  "\\?C:\bar" (UNC path?), so remove the "\\?\" prefix
+
+        // on Windows, canonicalize() will convert  who "C:\foo\..\bar" to  "\\?C:\bar" (UNC path?), so remove the "\\?\" prefix
         if cfg!(target_os = "windows") {
             absolute_filepaths_buf = std::path::PathBuf::from(
                 absolute_filepaths_buf
@@ -423,7 +423,7 @@ impl OcrWinMedia {
     }
 
     async fn dump_stream_to_png(in_memory_stream: &InMemoryRandomAccessStream, filename: &str) {
-        println!("\nDumping to {}", filename);
+        println!("\n######################## Dumping to '{}'", filename);
         // first, check if stream has been closed, and if so, panic
         if in_memory_stream.CanRead().unwrap() == false {
             panic!("Error: stream is closed");
@@ -471,7 +471,9 @@ impl OcrWinMedia {
 
         if in_memory_stream.Position().unwrap() != 0 {
             println!(">>> Resetting stream position to 0...");
-            let _ = in_memory_stream.Seek(0);
+            in_memory_stream
+                .Seek(0)
+                .expect(format!("Failed to seek to 0 in in_memory_stream").as_str());
         }
 
         // just in case, make sure stream is still valid/open, maybe DataReader may have implicitly closed it?
@@ -481,6 +483,7 @@ impl OcrWinMedia {
                 in_memory_stream.Position().unwrap(), // it should panic if stream is closed...
             );
         }
+        println!("########################\n\n");
     }
 
     async fn slice_to_memstream(&self, slice: &[u8]) -> Result<InMemoryRandomAccessStream> {
@@ -621,22 +624,28 @@ impl OcrWinMedia {
                 println!("create_decoder_with_timeout(): Stream position: {}", pos);
                 if pos != 0 {
                     println!("create_decoder_with_timeout(): Resetting stream position to 0...");
-                    let _ = in_memory_stream.Seek(0);
+                    in_memory_stream
+                        .Seek(0)
+                        .expect(format!("Failed to seek to 0 in in_memory_stream").as_str());
                 }
             }
             Err(e) => {
                 println!("Error: {:?}", e);
             }
         }
+
+        println!("create_decoder_with_timeout(): Creating BitmapDecoder...");
         let create_decoder_future_result = BitmapDecoder::CreateAsync(in_memory_stream);
+        println!("create_decoder_with_timeout(): Done creating BitmapDecoder...");
 
         // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
         if cfg!(debug_assertions) {
-            futures::executor::block_on(Self::dump_stream_to_png(
-                &in_memory_stream,
-                "debug_slice_to_memstream_create_decoder.png",
-            ));
-            in_memory_stream.Seek(0).unwrap();
+            //Self::dump_stream_to_png(
+            //    &in_memory_stream,
+            //    "debug_slice_to_memstream_create_decoder.png",
+            //)
+            //.await;
+            //in_memory_stream.Seek(0).unwrap();
         }
         // ######################## DEBUG END
 
@@ -698,7 +707,8 @@ impl OcrWinMedia {
             software_bitmap_timer_start.elapsed().as_millis()
         );
 
-        let engine: OcrEngine = match OcrEngine::TryCreateFromUserProfileLanguages() {
+        // NOTE: OcrEngine::TryCreateFromUserProfileLanguages() is unreliable, use TryCreateFromLanguage() and explicitly state what language to use
+        let engine: OcrEngine = match OcrEngine::TryCreateFromLanguage(&self.language) {
             Ok(engine) => engine,
             Err(e) => {
                 println!("Error: {:?}", e);
@@ -758,7 +768,7 @@ impl OcrWinMedia {
 
     // NOTE: Paths passed needs to match the path separator of the OS, hence
     // if you pass in for example "media/foo.png" on Windows, it will fail!
-    async fn test_main_async(png_paths: &str, language: &Language) -> Result<()> {
+    async fn test_main_async(&self, png_paths: &str) -> Result<()> {
         let mut arg_image_path = String::new();
         // for windows, replace all occurances of '/' with "\\"
         if cfg!(target_os = "windows") {
@@ -781,20 +791,15 @@ impl OcrWinMedia {
                 }
             }
         }
-        let mut message = std::env::current_dir().unwrap();
-        message.push(arg_image_path);
-        let file =
-            StorageFile::GetFileFromPathAsync(&HSTRING::from(message.to_str().unwrap()))?.await?;
-        let stream = file.OpenAsync(FileAccessMode::Read)?.await?;
-
+        let stream = self.get_filestream(png_paths).await?;
         let decode = BitmapDecoder::CreateAsync(&stream)?.await?;
         let bitmap = decode.GetSoftwareBitmapAsync()?.await?;
-
-        //let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
-        let engine = OcrEngine::TryCreateFromLanguage(language)?;
-        //let result = engine.RecognizeAsync(&bitmap)?.await?;
+        let engine = OcrEngine::TryCreateFromLanguage(&self.language)?; // NOTE: OcrEngine::TryCreateFromUserProfileLanguages() is unreliable, use TryCreateFromLanguage() and explicitly state what language to use
         if let Ok(result) = engine.RecognizeAsync(&bitmap)?.await {
-            println!("{}", result.Text()?);
+            println!(
+                "OCR Success!\n### OCR BEGIN:\n{}\n### OCR END\n",
+                result.Text()?
+            );
         } else {
             panic!("Failed to recognize text");
         }
@@ -802,36 +807,12 @@ impl OcrWinMedia {
         Ok(())
     }
 
-    pub fn test_seek_multiple(&self) -> Result<OcrTraitResult> {
-        // let's make sure JP is supported in desktop/user profile:
-        let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
-        let japanese_language: Language =
-            Language::CreateLanguage(&hstr).expect("Failed to create Language");
-        let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
-            .expect("Japanese is not installed in your profile");
-        if profile_valid == false {
-            panic!("Japanese is not installed in your profile");
-        }
-        // arg1: filename (full paths)
-        let png_paths = match std::env::args().len() {
-            2 => std::env::args().nth(1).unwrap(),
-            _ => {
-                // use default file...
-                println!("Usage: {} <image_path>", std::env::args().nth(0).unwrap());
-                // if assets directory exists on current dir, use that, else go one dir up
-                if std::path::Path::new("assets").exists() {
-                    "assets/ubunchu01_02.png".to_string()
-                } else {
-                    "../assets/ubunchu01_02.png".to_string()
-                }
-            }
-        };
+    pub fn test_seek_multiple(&self, png_paths: &str) -> Result<OcrTraitResult> {
         let ret = futures::executor::block_on(
-            self.evaluate_async_path(png_paths.clone().as_str(), &japanese_language),
+            self.evaluate_async_path(png_paths.clone(), &self.language),
         );
         // now seek back to 0, and transform to memory stream
-        let file_stream =
-            futures::executor::block_on(self.get_filestream(png_paths.as_str())).unwrap();
+        let file_stream = futures::executor::block_on(self.get_filestream(png_paths)).unwrap();
         // NOTE: in_memory_stream here will not be async since it's not awaited
         let in_memory_stream =
             futures::executor::block_on(self.fstream_to_memstream(&file_stream)).unwrap();
@@ -853,7 +834,9 @@ impl OcrWinMedia {
             &in_memory_stream,
             "test_seek_multiple_2.png",
         ));
-        let _ = in_memory_stream.Seek(0);
+        in_memory_stream
+            .Seek(0)
+            .expect(format!("Failed to seek to 0 in in_memory_stream").as_str());
         println!(
             "\n###############\nDumping to test_seek_multiple_3.png - {:?}",
             in_memory_stream.Position().unwrap()
@@ -872,8 +855,6 @@ impl OcrWinMedia {
         ));
         ret
     }
-
-
 }
 
 #[cfg(test)]
@@ -884,23 +865,15 @@ mod tests {
     #[test]
     fn test_seek_multiple() {
         let ocr = OcrWinMedia::new();
-        ocr.test_seek_multiple().unwrap();
-    }
-
-    // NOTE: Paths passed needs to match the path separator of the OS, hence
-    // if you pass in for example "media/foo.png" on Windows, it will fail!
-    #[tokio::test]
-    //async fn test_main_async(png_paths: &str, language: &Language) -> Result<()> {
-    async fn test_main_async() {
         // let's make sure JP is supported in desktop/user profile:
-        let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
-        let japanese_language: Language =
-            Language::CreateLanguage(&hstr).expect("Failed to create Language");
-        let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
-            .expect("Japanese is not installed in your profile");
-        if profile_valid == false {
-            panic!("Japanese is not installed in your profile");
-        }
+        //let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
+        //let japanese_language: Language =
+        //    Language::CreateLanguage(&hstr).expect("Failed to create Language");
+        //let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
+        //    .expect("Japanese is not installed in your profile");
+        //if profile_valid == false {
+        //    panic!("Japanese is not installed in your profile");
+        //}
         // arg1: filename (full paths)
         let png_paths = match std::env::args().len() {
             2 => std::env::args().nth(1).unwrap(),
@@ -915,6 +888,29 @@ mod tests {
                 }
             }
         };
-        OcrWinMedia::test_main_async(png_paths.as_str(), &japanese_language).await.unwrap();
+        ocr.test_seek_multiple(png_paths.as_str()).unwrap();
+    }
+
+    // NOTE: Paths passed needs to match the path separator of the OS, hence
+    // if you pass in for example "media/foo.png" on Windows, it will fail!
+    #[tokio::test]
+    //async fn test_main_async(png_paths: &str, language: &Language) -> Result<()> {
+    async fn test_main_async() {
+        // arg1: filename (full paths)
+        let png_paths = match std::env::args().len() {
+            2 => std::env::args().nth(1).unwrap(),
+            _ => {
+                // use default file...
+                println!("Usage: {} <image_path>", std::env::args().nth(0).unwrap());
+                // if assets directory exists on current dir, use that, else go one dir up
+                if std::path::Path::new("assets").exists() {
+                    "assets/ubunchu01_02.png".to_string()
+                } else {
+                    "../assets/ubunchu01_02.png".to_string()
+                }
+            }
+        };
+        let ocr = OcrWinMedia::new();
+        ocr.test_main_async(png_paths.as_str()).await.unwrap();
     }
 }
