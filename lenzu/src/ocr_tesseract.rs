@@ -1,5 +1,6 @@
-use crate::ocr_traits::{self, OcrTrait};
+use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use anyhow::Error;
+use image::GenericImageView;
 use rusty_tesseract::Args;
 
 // derive from OcrTrait
@@ -77,9 +78,22 @@ impl OcrTrait for OcrTesseract {
         let total_time = start_ocr.elapsed().as_millis();
         println!("OCR Result ({} mSec): '{:?}'", total_time, ocr_result);
         let ocr_str = ocr_result.unwrap();
-        let result = ocr_traits::OcrTraitResult {
+        let x_min = 0;
+        let y_min = 0;
+        let result = OcrTraitResult {
             text: ocr_str.clone(),
             lines: vec![ocr_str.split("\n").collect()],
+            rects: vec![(
+                OcrRect::new(
+                    x_min,
+                    y_min,
+                    x_min + image.width() as i32,
+                    y_min + image.height() as i32,
+                ),
+                vec![ocr_str.split("\n").collect()],
+            )]
+            .into_iter()
+            .collect(),
         };
         Ok(result)
     }

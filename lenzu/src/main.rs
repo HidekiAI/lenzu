@@ -1,13 +1,18 @@
 extern crate winapi;
+mod cursor_data;
+mod interpreter_ja;
+mod interpreter_traits;
 mod ocr_tesseract;
 mod ocr_traits;
 mod ocr_winmedia;
+mod orcr_gcloud;
+//use crate::interpreter_traits::InterpreterTrait;
+use crate::interpreter_traits::InterpreterTrait;
 use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 
-use kakasi::convert;
-use kakasi::IsJapanese;
-
+use cursor_data::CursorData;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
+use interpreter_ja::InterpreterJa;
 use ocr_winmedia::OcrWinMedia;
 use std::collections::HashMap;
 use std::env::args;
@@ -45,104 +50,6 @@ enum ToggleState {
 
 static mut TOGGLE_STATE: ToggleState = ToggleState::Free;
 
-#[derive(Debug, Clone, Copy)]
-struct CursorData {
-    x: i32, // cursor positions may be negative based on monitor positon relative to primary monitor (i.e. monitors left of primary monitor have negative X coordinates)
-    y: i32,
-    // info about current monitor the cursor at (x,y) is located, probably only useful for capturing the WHOLE screen
-    monitor_x: i32, // upper left corner of the monitor relative to the PRIMARY monitor
-    monitor_y: i32,
-    monitor_width: u32, // rcMonitor.right - rcMonitor.left (even if both are negative, it should come out as positive) - i.e. (0 - -1024 = 1024), (-1024 - -2048 = 1024), etc
-    monitor_height: u32,
-    // current window
-    window_x: i32, // position of the window on the monitor that is recalculated based off of cursor (x,y) and upper-left is offset by center of window to be where the mouse cursor will be
-    window_y: i32,
-    window_width: u32,
-    window_height: u32,
-}
-
-impl CursorData {
-    fn new() -> Self {
-        CursorData {
-            x: 0,
-            y: 0,
-            monitor_x: 0,
-            monitor_y: 0,
-            monitor_width: 1024,
-            monitor_height: 768,
-            window_x: 0,
-            window_y: 0,
-            window_width: 1,
-            window_height: 1,
-        }
-    }
-
-    fn update(&mut self, application_window_handle: winapi::shared::windef::HWND) {
-        // first, get cursor position so that we can dtermine which monitor we are on
-        let mut cursor_pos = winapi::shared::windef::POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut cursor_pos) } == 0 {
-            // Handle the error appropriately if necessary.
-            println!("Could not get cursor position");
-            // post quit
-            unsafe { PostQuitMessage(-1) };
-        }
-        self.x = cursor_pos.x;
-        self.y = cursor_pos.y;
-
-        // Get dimension of the monitor the cursor is currently on (see MonitorFromPoint()) via GetMonitorInfoW()
-        let h_monitor = unsafe { MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST) };
-        let mut monitor_info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            rcMonitor: RECT {
-                // display area rectangle
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
-            rcWork: RECT {
-                // work area rectangle (rectangle not obscured by taskbar and toolbar)
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
-            dwFlags: 0,
-        };
-
-        unsafe {
-            GetMonitorInfoW(h_monitor, &mut monitor_info);
-        }
-        // note that we use rcWork rectangle, so that we can ignore the taskbar and toolbar
-        // work area, unlike monitor area, is usually/should-be positive because it's the area that's not obscured by the taskbar and toolbar
-        self.monitor_x = monitor_info.rcWork.left; // can be negative, based on being placed LEFT of the PRIMARY monitor
-        self.monitor_y = monitor_info.rcWork.top;
-        self.monitor_width =
-            std::cmp::max(monitor_info.rcWork.right - monitor_info.rcWork.left, 1024) as u32;
-        self.monitor_height =
-            std::cmp::max(monitor_info.rcWork.bottom - monitor_info.rcWork.top, 768) as u32;
-
-        // get current dimension of the windown on the monitor via via GetWindowRect() (GetWindowInfo() can do the same, but it provides more info that we care...)
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        // get the dimension of the application window
-        unsafe {
-            GetWindowRect(application_window_handle, &mut window_rect);
-        }
-        self.window_width = (window_rect.right - window_rect.left) as u32;
-        self.window_height = (window_rect.bottom - window_rect.top) as u32;
-        // window position (upper left corner) is recalculated based off of cursor (x,y) and upper-left is offset by center of window to be where the mouse cursor will be
-        // the tricky part of this is that the windows position coordinate can be negative (same as cursor position) so it's not possible to test for min()/max() for
-        // edge of the monitor, and so we'll not do snap to monitor and allow windows to get beyond the edges of the monitors
-        self.window_x = self.x - (self.window_width as i32 / 2) as i32;
-        self.window_y = self.y - (self.window_height as i32 / 2) as i32;
-    }
-}
-
 fn create_ocr(args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
     let force_windows_ocr = cfg!(target_os = "windows");
     if force_windows_ocr {
@@ -157,6 +64,10 @@ fn create_ocr(args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
     Box::new(ocr_tesseract::OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
 }
 
+fn create_interpreter(args: &Vec<String>) -> Box<dyn crate::interpreter_traits::InterpreterTrait> {
+    Box::new(interpreter_ja::InterpreterJa::new())
+}
+
 // NOTE: Make sure to call ShowWindow(hwnd, SW_IDE) prior to calling this method and ShowWindow(hwnd, SW_SHOW) after image is captured
 // this is so that we do not get the image-echo effect (like a mirror reflecting a mirror) when we capture the screen
 // will need to experiment, but it seems we do not need to invalidate since ShowWindow() will implicitly refresh window
@@ -169,8 +80,8 @@ fn from_screen_to_image(cursor_pos: CursorData) -> DynamicImage {
     let destination_bitmap = unsafe {
         CreateCompatibleBitmap(
             source_desktop_dc,
-            cursor_pos.window_width as i32,
-            cursor_pos.window_height as i32,
+            cursor_pos.window_width() as i32,
+            cursor_pos.window_height() as i32,
         )
     };
 
@@ -188,11 +99,11 @@ fn from_screen_to_image(cursor_pos: CursorData) -> DynamicImage {
             destination_memory_dc, // destination device context
             0,                     // destination x
             0,                     // destination y
-            cursor_pos.window_width as i32,
-            cursor_pos.window_height as i32,
-            source_desktop_dc,          // source device context
-            cursor_pos.window_x as i32, // source x - note that coordinate can be negative value (e.g. cursor is on the left side of the PRIMARY monitor)
-            cursor_pos.window_y as i32, // source y
+            cursor_pos.window_width() as i32,
+            cursor_pos.window_height() as i32,
+            source_desktop_dc,     // source device context
+            cursor_pos.window_x(), // source x - note that coordinate can be negative value (e.g. cursor is on the left side of the PRIMARY monitor)
+            cursor_pos.window_y(), // source y
             SRCCOPY,
         );
 
@@ -203,32 +114,36 @@ fn from_screen_to_image(cursor_pos: CursorData) -> DynamicImage {
         // Create a BITMAPINFO structure to receive the bitmap data
         let mut info: BITMAPINFO = std::mem::zeroed();
         info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFO>() as u32;
-        info.bmiHeader.biWidth = cursor_pos.window_width as i32;
-        info.bmiHeader.biHeight = -(cursor_pos.window_height as i32); // top-down bitmap
+        info.bmiHeader.biWidth = cursor_pos.window_width() as i32;
+        info.bmiHeader.biHeight = -(cursor_pos.window_height() as i32); // top-down bitmap
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32; // each pixel is a 32-bit RGB color
         info.bmiHeader.biCompression = BI_RGB;
 
         // Allocate a buffer to receive the bitmap data
         let mut data: Vec<BYTE> =
-            vec![0; (cursor_pos.window_width * cursor_pos.window_height * 4) as usize];
+            vec![0; (cursor_pos.window_width() * cursor_pos.window_height() * 4) as usize];
 
         // Get the bitmap data
         GetDIBits(
             destination_memory_dc,
             destination_bitmap,
             0,
-            cursor_pos.window_height,
+            cursor_pos.window_height(),
             data.as_mut_ptr() as *mut _,
             &mut info,
             DIB_RGB_COLORS,
         );
 
         // Convert the data to a DynamicImage
-        image = ImageBuffer::from_fn(cursor_pos.window_width, cursor_pos.window_height, |x, y| {
-            let i = ((y * cursor_pos.window_width + x) * 4) as usize;
-            image::Rgba([data[i + 2], data[i + 1], data[i], 255])
-        })
+        image = ImageBuffer::from_fn(
+            cursor_pos.window_width(),
+            cursor_pos.window_height(),
+            |x, y| {
+                let i = ((y * cursor_pos.window_width() + x) * 4) as usize;
+                image::Rgba([data[i + 2], data[i + 1], data[i], 255])
+            },
+        )
         .into(); // At this point, image is a DynamicImage containing the bitmap image
 
         DeleteDC(destination_memory_dc);
@@ -302,6 +217,7 @@ fn capture_and_ocr(
     ocr: &mut Box<dyn crate::ocr_traits::OcrTrait>,
     cursor_pos: CursorData,
     supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
+    interpreter: &mut Box<dyn crate::interpreter_traits::InterpreterTrait>,
 ) {
     // first, hide application window
     unsafe { ShowWindow(hwnd, SW_HIDE) };
@@ -330,18 +246,18 @@ fn capture_and_ocr(
 
     // now run kakasi to convert the kanji to hiragana
     // Translate Japanese text to hiragana
-    let start_kakasi = std::time::Instant::now();
+    let start_interpreter = std::time::Instant::now();
     let translate = match ocr_result {
         Ok(result) => {
             println!("OCR Result: '{:?}' {} mSec", result.text, ocr_time);
-            let res = kakasi::convert(result.text);
-            res.hiragana
+            let res = interpreter.convert(result.text.as_str()).unwrap();
+            res.text
         }
         Err(e) => format!("Error: {:?} - {} mSec", e, ocr_time).into(),
     };
     println!(
-        "Kakasi Result ({} mSec): '{:?}'",
-        start_kakasi.elapsed().as_millis(),
+        "Interpreter Result ({} mSec): '{:?}'",
+        start_interpreter.elapsed().as_millis(),
         translate
     );
 
@@ -478,6 +394,7 @@ async fn main() {
     // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
     let mut ocr = create_ocr(&args);
     let ocr_langugages = ocr.init();
+    let mut interpreter = create_interpreter(&args);
 
     // initialize a view-window via winit so that it is universal to both Linux and Windows
     //let event_loop = EventLoop::new();
@@ -596,8 +513,8 @@ async fn main() {
                     winapi::um::winuser::SetWindowPos(
                         hwnd,
                         ptr::null_mut(),
-                        cursor.window_x.clone(),
-                        cursor.window_y.clone(),
+                        cursor.window_x(),
+                        cursor.window_y(),
                         0, // width will be ignored because will use SWP_NOSIZE to retain current size
                         0, // height ignored
                         winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
@@ -609,7 +526,13 @@ async fn main() {
                 ToggleState::Capture => {
                     // capture the screen and magnify it
                     let supported_languages = ocr_langugages.join("+");
-                    capture_and_ocr(hwnd, &mut ocr, cursor, supported_languages.clone().as_str());
+                    capture_and_ocr(
+                        hwnd,
+                        &mut ocr,
+                        cursor,
+                        supported_languages.clone().as_str(),
+                        &mut interpreter,
+                    );
                     // once it's blitted to that window, stay still..
                     TOGGLE_STATE = ToggleState::Captured;
                 }

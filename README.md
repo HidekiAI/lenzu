@@ -350,6 +350,7 @@ While I'm at it, might as well mention the recognition comparison on clustered i
     sys     0m0.182s
     ```
 A
+
 - Oddly, though tesseract (somehow) knows the textbox is top-to-bottom-right-to-left, it's recognizing Orientation==0 (horizontal left-to-right) for both cases
 - From what I understood, TextlineOrder (think of it as rowset order) should be 1 (top-to-bottom), but oddly 2 (bottom-to-top).
 
