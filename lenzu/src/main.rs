@@ -13,27 +13,19 @@ use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be a
 use cursor_data::CursorData;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
 
-
-
-
-use std::{
-    ffi::{CString},
-    ptr,
-};
+use std::{ffi::CString, ptr, thread::current};
 use winapi::{
-    shared::{minwindef::BYTE},
+    shared::minwindef::BYTE,
     um::{
         wingdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            GetDIBits, SelectObject, SetDIBits, BITMAPINFO, BI_RGB,
-            DIB_RGB_COLORS, SRCCOPY,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
+            SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
         winuser::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW,
-            GetDC, GetMessageW,
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetDC, GetMessageW, GetWindowLongW,
             PostQuitMessage, RegisterClassW, ReleaseDC, ShowWindow, TranslateMessage,
-            CW_USEDEFAULT, MSG, SW_HIDE,
-            SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT, GWL_EXSTYLE, MSG, SW_HIDE, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
+            WS_OVERLAPPEDWINDOW,
         },
     },
 };
@@ -288,15 +280,54 @@ fn capture_and_ocr(
     from_image_to_window(hwnd, screenshot);
 }
 
+// In order to now get the mirror-effect, we have to hide the window, capture the screen, show the window, then render the captured screen
+// unfortunately, "hide" isn't based on ShowWindow(SW_HIDE) because that effect is similar/same as when the window is minimized, and
+// you completely loose control of the window (i.e. you cannot move window, nor will hitting the ESCAPE key work because the window is NOT in focus!)
+// Hence, when we "hide" the window, it actually is more like setting the transparancy of the window to 99% (i.e. almost invisible)
+fn hide_window(hwnd: *mut winapi::shared::windef::HWND__) {
+    unsafe {
+        let current_flags = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let new_flags: i32 = (winapi::um::winuser::WS_EX_LAYERED as i32 | current_flags)
+            .try_into()
+            .unwrap();
+        // have to turn ON the Layered bit first...
+        winapi::um::winuser::SetWindowLongW(hwnd, winapi::um::winuser::GWL_EXSTYLE, new_flags);
+        // now set it to 1%
+        winapi::um::winuser::SetLayeredWindowAttributes(
+            hwnd,
+            0,
+            (((1u32 * 255u32) / 100u32) & 0xFF) as u8, // 100% transparancy
+            winapi::um::winuser::LWA_ALPHA,
+        );
+    }
+}
+fn show_window(hwnd: *mut winapi::shared::windef::HWND__) {
+    unsafe {
+        let current_flags = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let new_flags: i32 = (winapi::um::winuser::WS_EX_LAYERED as i32 & !current_flags)
+            .try_into()
+            .unwrap();
+        // have to turn OFF the layered bit
+        winapi::um::winuser::SetWindowLongW(hwnd, winapi::um::winuser::GWL_EXSTYLE, new_flags);
+        // now set it to 100%
+        winapi::um::winuser::SetLayeredWindowAttributes(
+            hwnd,
+            0,
+            (((100u32 * 255u32) / 100u32) & 0xFF) as u8, // 100% transparancy
+            winapi::um::winuser::LWA_ALPHA,
+        );
+    }
+}
+
 fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: CursorData) {
-    // first, hide application window
-    //unsafe { ShowWindow(hwnd, SW_HIDE) };
+    // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
+    hide_window(hwnd);
 
     // now capture the screen
     let screenshot = from_screen_to_image(cursor_pos);
 
     // show the application window again
-    //unsafe { ShowWindow(hwnd, SW_SHOW) };
+    show_window(hwnd);
 
     // now render what we've captured
     // TODO: scale/stretchBlt()
@@ -372,17 +403,6 @@ fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Cu
     //}
 }
 
-#[derive(Debug)]
-struct Foo {
-    a: i32,
-    b: i32,
-}
-
-fn do_something(_foo: &str) -> Result<Foo, anyhow::Error> {
-    let f = Foo { a: 1, b: 2 };
-    Ok(f)
-}
-
 #[tokio::main]
 async fn main() {
     let args = std::env::args().collect::<Vec<String>>();
@@ -394,21 +414,6 @@ async fn main() {
     let mut ocr = create_ocr(&args);
     let ocr_langugages = ocr.init();
     let mut interpreter = create_interpreter(&args);
-
-    // initialize a view-window via winit so that it is universal to both Linux and Windows
-    //let event_loop = EventLoop::new();
-    //let window = WindowBuilder::new()
-    //    .with_title(window_name)
-    //    .with_inner_size(LogicalSize::new(1024, 768)) // initial size of the window
-    //    .with_min_inner_size(LogicalSize::new(1024, 768)) // minimum size of the window
-    //    .build(&event_loop.unwrap())
-    //    .unwrap();
-    //let hw = match window.window_handle().unwrap() {
-    //    WindowHandle::Wayland(handle) => handle.wayland_display().unwrap(),
-    //    WindowHandle::X(handle) => handle.xlib_display().unwrap(),
-    //    WindowHandle::win32(handle) => handle.hwnd().unwrap(),
-    //    _ => panic!("Unsupported platform"),
-    //};
 
     let h_instance = ptr::null_mut();
     let class_name_cstr = CString::new(class_name).expect("CString creation failed");
