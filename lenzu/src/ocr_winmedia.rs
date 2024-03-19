@@ -1,19 +1,16 @@
-use std::fmt::format;
 
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
-use futures::{FutureExt, TryFutureExt};
 //use futures::sink::Buffer;
 use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
-use winapi::shared::cfg;
 
-use crate::ocr_traits::{self, OcrTrait, OcrTraitResult};
+use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use tokio::time::{timeout, Duration};
 use windows::{
     core::*,
     Globalization::Language,
     Graphics::Imaging::BitmapDecoder,
-    Media::Ocr::{OcrEngine, OcrResult},
+    Media::Ocr::OcrEngine,
     Storage::{
         FileAccessMode, StorageFile,
         Streams::{DataReader, DataWriter, IRandomAccessStream, InMemoryRandomAccessStream},
@@ -80,6 +77,16 @@ impl OcrTrait for OcrWinMedia {
                     futures::executor::block_on(self.slice_to_memstream(&raw_buffer_u8));
                 match in_memory_stream_transform_result {
                     Ok(in_memory_stream) => {
+                        // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
+                        if cfg!(debug_assertions) {
+                            futures::executor::block_on(Self::dump_stream_to_png(
+                                &in_memory_stream,
+                                "debug_slice_to_memstream_evaluate.png",
+                            ));
+                            in_memory_stream.Seek(0).unwrap();
+                        }
+                        // ######################## DEBUG END
+
                         let eval_result = futures::executor::block_on(
                             self.evaluate_async(&self.language, &in_memory_stream),
                         );
@@ -103,77 +110,6 @@ impl OcrTrait for OcrWinMedia {
 }
 
 impl OcrWinMedia {
-    pub fn test_seek_multiple(&self) -> Result<OcrTraitResult> {
-        // let's make sure JP is supported in desktop/user profile:
-        let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
-        let japanese_language: Language =
-            Language::CreateLanguage(&hstr).expect("Failed to create Language");
-        let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
-            .expect("Japanese is not installed in your profile");
-        if profile_valid == false {
-            panic!("Japanese is not installed in your profile");
-        }
-        // arg1: filename (full paths)
-        let png_paths = match std::env::args().len() {
-            2 => std::env::args().nth(1).unwrap(),
-            _ => {
-                // use default file...
-                println!("Usage: {} <image_path>", std::env::args().nth(0).unwrap());
-                // if assets directory exists on current dir, use that, else go one dir up
-                if std::path::Path::new("assets").exists() {
-                    "assets/ubunchu01_02.png".to_string()
-                } else {
-                    "../assets/ubunchu01_02.png".to_string()
-                }
-            }
-        };
-        let ret = futures::executor::block_on(
-            self.evaluate_async_path(png_paths.clone().as_str(), &japanese_language),
-        );
-        // now seek back to 0, and transform to memory stream
-        let file_stream =
-            futures::executor::block_on(self.get_filestream(png_paths.as_str())).unwrap();
-        // NOTE: in_memory_stream here will not be async since it's not awaited
-        let in_memory_stream =
-            futures::executor::block_on(self.fstream_to_memstream(&file_stream)).unwrap();
-
-        // as a test, write it once with no seek(0), then write it  again, then seek(0) and write again twice
-        println!(
-            "\n###############\nDumping to test_seek_multiple_1.png - {:?}",
-            in_memory_stream.Position().unwrap()
-        );
-        futures::executor::block_on(Self::dump_stream_to_png(
-            &in_memory_stream,
-            "test_seek_multiple_1.png",
-        ));
-        println!(
-            "\n###############\nDumping to test_seek_multiple_2.png - {:?}",
-            in_memory_stream.Position().unwrap()
-        );
-        futures::executor::block_on(Self::dump_stream_to_png(
-            &in_memory_stream,
-            "test_seek_multiple_2.png",
-        ));
-        let _ = in_memory_stream.Seek(0);
-        println!(
-            "\n###############\nDumping to test_seek_multiple_3.png - {:?}",
-            in_memory_stream.Position().unwrap()
-        );
-        futures::executor::block_on(Self::dump_stream_to_png(
-            &in_memory_stream,
-            "test_seek_multiple_3.png",
-        ));
-        println!(
-            "\n###############\nDumping to test_seek_multiple_4.png - {:?}",
-            in_memory_stream.Position().unwrap()
-        );
-        futures::executor::block_on(Self::dump_stream_to_png(
-            &in_memory_stream,
-            "test_seek_multiple_4.png",
-        ));
-        ret
-    }
-
     // NOTE: Paths passed needs to match the path separator of the OS, hence
     // if you pass in for example "media/foo.png" on Windows, it will fail!
     async fn evaluate_async_path(
@@ -609,35 +545,35 @@ impl OcrWinMedia {
             .expect(format!("Failed to detach stream from writer").as_str());
 
         // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
-        //if cfg!(debug_assertions) {
-        //    if in_memory_stream.CanRead().unwrap() == false {
-        //        panic!("Error: stream is closed");
-        //    }
-        //    println!(
-        //        "DEBUG: slice_to_memstream() - Stream size: {:?} bytes, position: {:?}",
-        //        in_memory_stream.Size(),
-        //        in_memory_stream.Position()
-        //    );
-        //    if in_memory_stream.CanRead().unwrap() == false {
-        //        panic!("Error: stream is closed");
-        //    }
-        //    // for debug, dump this as a PNG file
-        //    in_memory_stream.Seek(0).unwrap();
-        //    Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_001.png").await;
-        //    if in_memory_stream.CanRead().unwrap() == false {
-        //        panic!("Error: stream is closed");
-        //    }
-        //    in_memory_stream.Seek(0).unwrap(); // why does it panic here?
-        //    if in_memory_stream.CanRead().unwrap() == false {
-        //        panic!("Error: stream is closed");
-        //    }
-        //    // we dump twice to verify that no matter how many times we dump, the READ stream is still valid
-        //    Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_002.png").await;
-        //    if in_memory_stream.CanRead().unwrap() == false {
-        //        panic!("Error: stream is closed");
-        //    }
-        //    in_memory_stream.Seek(0).unwrap();
-        //}
+        if cfg!(debug_assertions) {
+            if in_memory_stream.CanRead().unwrap() == false {
+                panic!("Error: stream is closed");
+            }
+            println!(
+                "DEBUG: slice_to_memstream() - Stream size: {:?} bytes, position: {:?}",
+                in_memory_stream.Size(),
+                in_memory_stream.Position()
+            );
+            //if in_memory_stream.CanRead().unwrap() == false {
+            //    panic!("Error: stream is closed");
+            //}
+            //// for debug, dump this as a PNG file
+            //in_memory_stream.Seek(0).unwrap();
+            //Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_001.png").await;
+            //if in_memory_stream.CanRead().unwrap() == false {
+            //    panic!("Error: stream is closed");
+            //}
+            //in_memory_stream.Seek(0).unwrap(); // why does it panic here?
+            //if in_memory_stream.CanRead().unwrap() == false {
+            //    panic!("Error: stream is closed");
+            //}
+            //// we dump twice to verify that no matter how many times we dump, the READ stream is still valid
+            //Self::dump_stream_to_png(&in_memory_stream, "debug_slice_to_memstream_002.png").await;
+            //if in_memory_stream.CanRead().unwrap() == false {
+            //    panic!("Error: stream is closed");
+            //}
+            in_memory_stream.Seek(0).unwrap();
+        }
         // ######################## DEBUG END
 
         // reset seek position to 0 because Position() is currently equali to Size()
@@ -672,27 +608,37 @@ impl OcrWinMedia {
     }
 
     async fn create_decoder_with_timeout(
-        stream: &InMemoryRandomAccessStream,
+        in_memory_stream: &InMemoryRandomAccessStream,
         timeout_in_seconds: u64,
     ) -> Result<BitmapDecoder> {
         // first, check if stream has been closed, and if so, panic
-        if stream.CanRead().unwrap() == false {
+        if in_memory_stream.CanRead().unwrap() == false {
             panic!("Error: stream is closed");
         }
 
-        match stream.Position() {
+        match in_memory_stream.Position() {
             Ok(pos) => {
                 println!("create_decoder_with_timeout(): Stream position: {}", pos);
                 if pos != 0 {
                     println!("create_decoder_with_timeout(): Resetting stream position to 0...");
-                    let _ = stream.Seek(0);
+                    let _ = in_memory_stream.Seek(0);
                 }
             }
             Err(e) => {
                 println!("Error: {:?}", e);
             }
         }
-        let create_decoder_future_result = BitmapDecoder::CreateAsync(stream);
+        let create_decoder_future_result = BitmapDecoder::CreateAsync(in_memory_stream);
+
+        // ######################## DEBUG BEGIN: dump some info  if in DEBUG build:
+        if cfg!(debug_assertions) {
+            futures::executor::block_on(Self::dump_stream_to_png(
+                &in_memory_stream,
+                "debug_slice_to_memstream_create_decoder.png",
+            ));
+            in_memory_stream.Seek(0).unwrap();
+        }
+        // ######################## DEBUG END
 
         // Error: 'there is no reactor running, must be called from the context of a Tokio 1.x runtime'
         match create_decoder_future_result {
@@ -714,10 +660,10 @@ impl OcrWinMedia {
     async fn evaluate_async(
         &self,
         language: &Language,
-        stream: &InMemoryRandomAccessStream,
+        in_memory_stream: &InMemoryRandomAccessStream,
     ) -> Result<ocr_traits::OcrTraitResult> {
         // first, check if stream has been closed, and if so, panic
-        if stream.CanRead().unwrap() == false {
+        if in_memory_stream.CanRead().unwrap() == false {
             panic!("Error: stream is closed");
         }
 
@@ -730,7 +676,7 @@ impl OcrWinMedia {
         println!("evaluate_async(): Creating BitmapDecoder...");
         let create_decoder_timer_start = std::time::Instant::now();
         let decode: BitmapDecoder =
-            match Self::create_decoder_with_timeout(stream, timeout_in_seconds).await {
+            match Self::create_decoder_with_timeout(in_memory_stream, timeout_in_seconds).await {
                 Ok(decoder) => decoder,
                 Err(e) => {
                     println!("Error: {:?}", e);
@@ -741,14 +687,6 @@ impl OcrWinMedia {
             "evaluate_async(): Stream created...  {} mSec",
             create_decoder_timer_start.elapsed().as_millis()
         );
-        //let bitmap: windows::Graphics::Imaging::SoftwareBitmap =
-        //    match decode.GetSoftwareBitmapAsync()?.await {
-        //        Ok(bitmap) => bitmap,
-        //        Err(e) => {
-        //            println!("Error: {:?}", e);
-        //            return Err(e.into());
-        //        }
-        //    };
         let software_bitmap_timer_start = std::time::Instant::now();
         let bitmap: windows::Graphics::Imaging::SoftwareBitmap =
             timeout(duration.clone(), decode.GetSoftwareBitmapAsync().unwrap())
@@ -790,9 +728,22 @@ impl OcrWinMedia {
                 .collect::<Vec<_>>();
 
             println!("evaluate_async():\n{}", str_block);
+            let x_min = 0;
+            let y_min = 0;
             let trait_result = OcrTraitResult {
                 text: str_block,
-                lines: lines,
+                lines: lines.clone(),
+                rects: vec![(
+                    OcrRect::new(
+                        x_min,
+                        y_min,
+                        x_min + bitmap.PixelWidth().unwrap(),
+                        y_min + bitmap.PixelHeight().unwrap() as i32,
+                    ),
+                    lines.clone(),
+                )]
+                .into_iter()
+                .collect(),
             };
             println!(
                 "evaluate_async(): Recognized text: {:?}",
@@ -803,5 +754,167 @@ impl OcrWinMedia {
             //panic!("Failed to recognize text");
             return Err(ocr_result.unwrap_err().into());
         }
+    }
+
+    // NOTE: Paths passed needs to match the path separator of the OS, hence
+    // if you pass in for example "media/foo.png" on Windows, it will fail!
+    async fn test_main_async(png_paths: &str, language: &Language) -> Result<()> {
+        let mut arg_image_path = String::new();
+        // for windows, replace all occurances of '/' with "\\"
+        if cfg!(target_os = "windows") {
+            println!("Windows: Evaluating '{:?}' for forward-slashes", png_paths);
+            for c in png_paths.chars() {
+                if c == '/' {
+                    arg_image_path.push_str("\\");
+                } else {
+                    arg_image_path.push(c);
+                }
+            }
+        } else {
+            println!("Linux: Evaluating '{:?}' for back-slashes", png_paths);
+            // for linux, replace all occurances of '\' with "/"
+            for c in png_paths.chars() {
+                if c == '\\' {
+                    arg_image_path.push('/');
+                } else {
+                    arg_image_path.push(c);
+                }
+            }
+        }
+        let mut message = std::env::current_dir().unwrap();
+        message.push(arg_image_path);
+        let file =
+            StorageFile::GetFileFromPathAsync(&HSTRING::from(message.to_str().unwrap()))?.await?;
+        let stream = file.OpenAsync(FileAccessMode::Read)?.await?;
+
+        let decode = BitmapDecoder::CreateAsync(&stream)?.await?;
+        let bitmap = decode.GetSoftwareBitmapAsync()?.await?;
+
+        //let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
+        let engine = OcrEngine::TryCreateFromLanguage(language)?;
+        //let result = engine.RecognizeAsync(&bitmap)?.await?;
+        if let Ok(result) = engine.RecognizeAsync(&bitmap)?.await {
+            println!("{}", result.Text()?);
+        } else {
+            panic!("Failed to recognize text");
+        }
+
+        Ok(())
+    }
+
+    pub fn test_seek_multiple(&self) -> Result<OcrTraitResult> {
+        // let's make sure JP is supported in desktop/user profile:
+        let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
+        let japanese_language: Language =
+            Language::CreateLanguage(&hstr).expect("Failed to create Language");
+        let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
+            .expect("Japanese is not installed in your profile");
+        if profile_valid == false {
+            panic!("Japanese is not installed in your profile");
+        }
+        // arg1: filename (full paths)
+        let png_paths = match std::env::args().len() {
+            2 => std::env::args().nth(1).unwrap(),
+            _ => {
+                // use default file...
+                println!("Usage: {} <image_path>", std::env::args().nth(0).unwrap());
+                // if assets directory exists on current dir, use that, else go one dir up
+                if std::path::Path::new("assets").exists() {
+                    "assets/ubunchu01_02.png".to_string()
+                } else {
+                    "../assets/ubunchu01_02.png".to_string()
+                }
+            }
+        };
+        let ret = futures::executor::block_on(
+            self.evaluate_async_path(png_paths.clone().as_str(), &japanese_language),
+        );
+        // now seek back to 0, and transform to memory stream
+        let file_stream =
+            futures::executor::block_on(self.get_filestream(png_paths.as_str())).unwrap();
+        // NOTE: in_memory_stream here will not be async since it's not awaited
+        let in_memory_stream =
+            futures::executor::block_on(self.fstream_to_memstream(&file_stream)).unwrap();
+
+        // as a test, write it once with no seek(0), then write it  again, then seek(0) and write again twice
+        println!(
+            "\n###############\nDumping to test_seek_multiple_1.png - {:?}",
+            in_memory_stream.Position().unwrap()
+        );
+        futures::executor::block_on(OcrWinMedia::dump_stream_to_png(
+            &in_memory_stream,
+            "test_seek_multiple_1.png",
+        ));
+        println!(
+            "\n###############\nDumping to test_seek_multiple_2.png - {:?}",
+            in_memory_stream.Position().unwrap()
+        );
+        futures::executor::block_on(OcrWinMedia::dump_stream_to_png(
+            &in_memory_stream,
+            "test_seek_multiple_2.png",
+        ));
+        let _ = in_memory_stream.Seek(0);
+        println!(
+            "\n###############\nDumping to test_seek_multiple_3.png - {:?}",
+            in_memory_stream.Position().unwrap()
+        );
+        futures::executor::block_on(OcrWinMedia::dump_stream_to_png(
+            &in_memory_stream,
+            "test_seek_multiple_3.png",
+        ));
+        println!(
+            "\n###############\nDumping to test_seek_multiple_4.png - {:?}",
+            in_memory_stream.Position().unwrap()
+        );
+        futures::executor::block_on(OcrWinMedia::dump_stream_to_png(
+            &in_memory_stream,
+            "test_seek_multiple_4.png",
+        ));
+        ret
+    }
+
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ocr_traits::OcrTrait;
+
+    #[test]
+    fn test_seek_multiple() {
+        let ocr = OcrWinMedia::new();
+        ocr.test_seek_multiple().unwrap();
+    }
+
+    // NOTE: Paths passed needs to match the path separator of the OS, hence
+    // if you pass in for example "media/foo.png" on Windows, it will fail!
+    #[tokio::test]
+    //async fn test_main_async(png_paths: &str, language: &Language) -> Result<()> {
+    async fn test_main_async() {
+        // let's make sure JP is supported in desktop/user profile:
+        let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);
+        let japanese_language: Language =
+            Language::CreateLanguage(&hstr).expect("Failed to create Language");
+        let profile_valid = OcrEngine::IsLanguageSupported(&japanese_language)
+            .expect("Japanese is not installed in your profile");
+        if profile_valid == false {
+            panic!("Japanese is not installed in your profile");
+        }
+        // arg1: filename (full paths)
+        let png_paths = match std::env::args().len() {
+            2 => std::env::args().nth(1).unwrap(),
+            _ => {
+                // use default file...
+                println!("Usage: {} <image_path>", std::env::args().nth(0).unwrap());
+                // if assets directory exists on current dir, use that, else go one dir up
+                if std::path::Path::new("assets").exists() {
+                    "assets/ubunchu01_02.png".to_string()
+                } else {
+                    "../assets/ubunchu01_02.png".to_string()
+                }
+            }
+        };
+        OcrWinMedia::test_main_async(png_paths.as_str(), &japanese_language).await.unwrap();
     }
 }
