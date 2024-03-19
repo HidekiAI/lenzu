@@ -12,28 +12,27 @@ use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be a
 
 use cursor_data::CursorData;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
-use interpreter_ja::InterpreterJa;
-use ocr_winmedia::OcrWinMedia;
-use std::collections::HashMap;
-use std::env::args;
+
+
+
+
 use std::{
-    ffi::{CStr, CString},
+    ffi::{CString},
     ptr,
 };
 use winapi::{
-    shared::{minwindef::BYTE, windef::RECT},
+    shared::{minwindef::BYTE},
     um::{
         wingdi::{
-            AlphaBlend, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-            GetDIBits, SelectObject, SetDIBits, StretchBlt, TextOutW, BITMAPINFO, BI_RGB,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            GetDIBits, SelectObject, SetDIBits, BITMAPINFO, BI_RGB,
             DIB_RGB_COLORS, SRCCOPY,
         },
-        winnt::{LPSTR, LPWSTR},
         winuser::{
-            BeginPaint, CreateWindowExW, DefWindowProcW, DispatchMessageW, EndPaint, GetCursorPos,
-            GetDC, GetMessageW, GetMonitorInfoW, GetWindowRect, InvalidateRect, MonitorFromPoint,
+            CreateWindowExW, DefWindowProcW, DispatchMessageW,
+            GetDC, GetMessageW,
             PostQuitMessage, RegisterClassW, ReleaseDC, ShowWindow, TranslateMessage,
-            CW_USEDEFAULT, MONITORINFO, MONITOR_DEFAULTTONEAREST, MSG, PAINTSTRUCT, SW_HIDE,
+            CW_USEDEFAULT, MSG, SW_HIDE,
             SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
         },
     },
@@ -64,7 +63,7 @@ fn create_ocr(args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
     Box::new(ocr_tesseract::OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
 }
 
-fn create_interpreter(args: &Vec<String>) -> Box<dyn crate::interpreter_traits::InterpreterTrait> {
+fn create_interpreter(_args: &Vec<String>) -> Box<dyn crate::interpreter_traits::InterpreterTrait> {
     Box::new(interpreter_ja::InterpreterJa::new())
 }
 
@@ -92,7 +91,7 @@ fn from_screen_to_image(cursor_pos: CursorData) -> DynamicImage {
             destination_bitmap as *mut winapi::ctypes::c_void,
         )
     };
-    let mut image: DynamicImage;
+    let image: DynamicImage;
     unsafe {
         // BitBlt from the screen DC to the memory DC
         BitBlt(
@@ -216,7 +215,7 @@ fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
     ocr: &mut Box<dyn crate::ocr_traits::OcrTrait>,
     cursor_pos: CursorData,
-    supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
+    _supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
     interpreter: &mut Box<dyn crate::interpreter_traits::InterpreterTrait>,
 ) {
     // first, hide application window
@@ -379,7 +378,7 @@ struct Foo {
     b: i32,
 }
 
-fn do_something(foo: &str) -> Result<Foo, anyhow::Error> {
+fn do_something(_foo: &str) -> Result<Foo, anyhow::Error> {
     let f = Foo { a: 1, b: 2 };
     Ok(f)
 }
