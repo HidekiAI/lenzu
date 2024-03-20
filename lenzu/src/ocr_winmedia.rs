@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
 //use futures::sink::Buffer;
@@ -680,7 +682,7 @@ impl OcrWinMedia {
             "Evaluating (OCR recognizing) for lanaguage: {:?}",
             language.LanguageTag()?
         );
-        let timeout_in_seconds = 30;
+        let timeout_in_seconds = 5;
         let duration: Duration = Duration::from_secs(timeout_in_seconds);
         println!("evaluate_async(): Creating BitmapDecoder...");
         let create_decoder_timer_start = std::time::Instant::now();
@@ -736,6 +738,33 @@ impl OcrWinMedia {
                 .into_iter()
                 .map(|x| x.Text().unwrap().to_string())
                 .collect::<Vec<_>>();
+            // bounding rectangles are based off of "words" (OcrWord) which Lines are collections of Words...
+            // Note that we deal with it in 2 phases, first is as-is (as a tuple), then we convert it to a hashmap
+            // so that if we want to make sure all keys are unique, we can  handle it (note that in Rust collection,
+            // just like F#, it will upsert rather than throw exception like C#)...
+            let rects: Vec<(OcrRect, Vec<String>)> = result
+                .Lines()
+                .unwrap()
+                .into_iter()
+                .map(|x| x.Words().unwrap())
+                .flatten()
+                .map(|x| {
+                    (
+                        OcrRect::new(
+                            x.BoundingRect().unwrap().X as i32,
+                            x.BoundingRect().unwrap().Y as i32,
+                            (x.BoundingRect().unwrap().X + x.BoundingRect().unwrap().Width) as i32,
+                            (x.BoundingRect().unwrap().Y + x.BoundingRect().unwrap().Height) as i32,
+                        ),
+                        x.Text()
+                            .unwrap()
+                            .to_string()
+                            .split('\n')
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
 
             println!("evaluate_async():\n{}", str_block);
             let x_min = 0;
@@ -743,17 +772,11 @@ impl OcrWinMedia {
             let trait_result = OcrTraitResult {
                 text: str_block,
                 lines: lines.clone(),
-                rects: vec![(
-                    OcrRect::new(
-                        x_min,
-                        y_min,
-                        x_min + bitmap.PixelWidth().unwrap(),
-                        y_min + bitmap.PixelHeight().unwrap() as i32,
-                    ),
-                    lines.clone(),
-                )]
-                .into_iter()
-                .collect(),
+                // convert vector or paired-tuple to hashmap
+                rects: rects
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<HashMap<_, _>>(),
             };
             println!(
                 "evaluate_async(): Recognized text: {:?}",

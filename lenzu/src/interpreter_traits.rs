@@ -1,6 +1,6 @@
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
-
+use std::fmt::{self, Display, Formatter};
 
 pub trait InterpreterTrait {
     // without 'Sized',  won't be able to Box<dyn InterpreterTrait>
@@ -17,7 +17,23 @@ pub trait InterpreterTrait {
     fn convert(&self, text: &str) -> Result<InterpreterTraitResult, Error>;
 }
 
+#[derive(Debug)]
 pub(crate) struct InterpreterTraitResult {
     pub text: String,
     pub lines: Vec<String>,
+}
+impl InterpreterTraitResult {
+    pub(crate) fn new() -> InterpreterTraitResult {
+        //panic!("InterpreterTraitResult::new() should not be called");
+        InterpreterTraitResult {
+            text: "".to_string(),
+            lines: vec![],
+        }
+    }
+}
+
+impl Display for InterpreterTraitResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.text)
+    }
 }

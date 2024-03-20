@@ -1,7 +1,10 @@
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
 use image::DynamicImage;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fmt::{self, Display, Formatter},
+};
 
 pub trait OcrTrait {
     // without 'Sized',  won't be able to Box<dyn OcrTrait>
@@ -54,12 +57,43 @@ impl OcrRect {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct OcrTraitResult {
-    pub lines: Vec<String>, // each line of text, sequentially ordered (up to OCR whether it is horizontal:left-to-right, or vertical:top-to-bottom-left-to-right )
     pub text: String,       // entier text split via newlines (built from lines)
-    pub rects: HashMap<OcrRect, Vec<String>>, // for each (rectangle) block of text (see lines)
+    pub lines: Vec<String>, // each line of text (collection of words), sequentially ordered (up to OCR whether it is horizontal:left-to-right, or vertical:top-to-bottom-left-to-right )
+    pub rects: HashMap<OcrRect, Vec<String>>, // for each (rectangle) block of text (collection of words, see lines)
+}
+
+impl Display for OcrTraitResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let str_lines = self.lines.join("\n");
+        // join all words into single  line, and split  each rects into newlines
+        let str_rects = self
+            .rects
+            .iter()
+            .fold("".to_string(), |acc, (rect, words)| {
+                // make the collection of words into single line without any separations (this becomes tricky for English, but for
+                // Japanese, it is trivial since there are no such thing as spaces, hence there are tools such as mecab that tries
+                // to interpret where to separate for speach and dictionary lookups...)
+                format!("{}\n{:?}:{}", acc, rect, words.join(" ")) // previous lines, concatinated with new line in format of rect:words
+            });
+
+        write!(
+            f,
+            "OcrTraitResult {{\n text: {:?}\n lines: {:?}\n rects: {:?}\n }}",
+            self.text, str_lines, str_rects
+        )
+    }
 }
 
 impl OcrTraitResult {
-    //pub fn new() -> Self { }  // NOTE: There will be no default constructor because we want to make sure that we have the necessary data
+    pub fn new() -> Self {
+        // NOTE: There will be no default constructor because we want to make sure that we have the necessary data
+        //panic!("OcrTraitResult::new() should not be called");
+        OcrTraitResult {
+            text: "".to_string(),
+            lines: vec![],
+            rects: HashMap::new(),
+        }
+    }
 }
