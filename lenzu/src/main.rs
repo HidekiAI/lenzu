@@ -7,7 +7,7 @@ mod ocr_traits;
 mod ocr_winmedia;
 mod orcr_gcloud;
 //use crate::interpreter_traits::InterpreterTrait;
-use crate::interpreter_traits::InterpreterTrait;
+use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult};
 use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 
 use cursor_data::CursorData;
@@ -30,8 +30,11 @@ use winapi::{
     },
 };
 
-const MAGNIFY_SCALE_FACTOR: u32 = 2;
+const MAGNIFY_SCALE_FACTOR: u32 = 1;
 const TOGGLE_WINDOW_MOVE_KEY: std::ffi::c_int = VK_SPACE;
+const DEFAULT_WINDOW_WIDTH: i32 = 1024;
+const DEFAULT_WINDOW_HEIGHT: i32 = 768;
+
 enum ToggleState {
     Free,
     MoveWindow,
@@ -238,46 +241,79 @@ fn capture_and_ocr(
     // now run kakasi to convert the kanji to hiragana
     // Translate Japanese text to hiragana
     let start_interpreter = std::time::Instant::now();
-    let translate = match ocr_result {
-        Ok(result) => {
-            println!("OCR Result: '{:?}' {} mSec", result.text, ocr_time);
-            let res = interpreter.convert(result.text.as_str()).unwrap();
-            res.text
+    let possible_result_tupled = match ocr_result {
+        Ok(recognized_result) => {
+            println!("OCR Result: '{:?}' {} mSec", recognized_result, ocr_time);
+            let possible_translate_result = interpreter.convert(recognized_result.text.as_str());
+            match possible_translate_result {
+                Ok(translate_result) => {
+                    println!(
+                        "Interpreter Result: '{:?}' {} mSec",
+                        translate_result,
+                        start_interpreter.elapsed().as_millis()
+                    );
+                    Some((recognized_result, translate_result))
+                }
+                Err(e) => {
+                    println!(
+                        "Error: {:?} - {} mSec",
+                        e,
+                        start_interpreter.elapsed().as_millis()
+                    );
+                    Some((recognized_result, InterpreterTraitResult::new()))
+                }
+            }
         }
-        Err(e) => format!("Error: {:?} - {} mSec", e, ocr_time).into(),
+        Err(e) => {
+            println!("Error: {:?} - {} mSec", e, ocr_time);
+            None
+        }
     };
-    println!(
-        "Interpreter Result ({} mSec): '{:?}'",
-        start_interpreter.elapsed().as_millis(),
-        translate
-    );
+    match possible_result_tupled {
+        Some((recognized_result, translate_result)) => {
+            println!(
+                "########################## Interpreter Result ({} mSec):\n'{:?}'\n'{:?}'\n",
+                start_interpreter.elapsed().as_millis(),
+                recognized_result,
+                translate_result,
+            );
+            // Blend the topmost layer onto the primary image
+            //let blend_func = winapi::um::wingdi::BLENDFUNCTION {
+            //    BlendOp: winapi::um::wingdi::AC_SRC_OVER,
+            //    BlendFlags: 0,
+            //    SourceConstantAlpha: 128, // Adjust alpha value (0-255) for transparency
+            //    AlphaFormat: winapi::um::wingdi::AC_SRC_ALPHA,
+            //};
+            //unsafe {
+            //    AlphaBlend(
+            //        destination_dc,
+            //        0,
+            //        0,
+            //        cursor_pos.window_width as i32,
+            //        cursor_pos.window_height as i32,
+            //        mem_dc_topmost,
+            //        0,
+            //        0,
+            //        cursor_pos.window_width as i32,
+            //        cursor_pos.window_height as i32,
+            //        blend_func,
+            //    );
+            //}
 
-    //// Blend the topmost layer onto the primary image
-    //let blend_func = winapi::um::wingdi::BLENDFUNCTION {
-    //    BlendOp: winapi::um::wingdi::AC_SRC_OVER,
-    //    BlendFlags: 0,
-    //    SourceConstantAlpha: 128, // Adjust alpha value (0-255) for transparency
-    //    AlphaFormat: winapi::um::wingdi::AC_SRC_ALPHA,
-    //};
-    //unsafe {
-    //    AlphaBlend(
-    //        destination_dc,
-    //        0,
-    //        0,
-    //        cursor_pos.window_width as i32,
-    //        cursor_pos.window_height as i32,
-    //        mem_dc_topmost,
-    //        0,
-    //        0,
-    //        cursor_pos.window_width as i32,
-    //        cursor_pos.window_height as i32,
-    //        blend_func,
-    //    );
-    //}
-
-    // now render what we've captured
-    // TODO: scale/stretchBlt()
-    from_image_to_window(hwnd, screenshot);
+            // render translated text onto the window
+            let recognized_image = gray_scale_image.clone();     // for now, just use same image...
+            from_image_to_window(hwnd, recognized_image);
+        }
+        None => {
+            println!(
+                "Interpreter Result ({} mSec): '{:?}'",
+                start_interpreter.elapsed().as_millis(),
+                possible_result_tupled
+            );
+            // render what we've captured originally instead
+            from_image_to_window(hwnd, screenshot);
+        }
+    }
 }
 
 // In order to now get the mirror-effect, we have to hide the window, capture the screen, show the window, then render the captured screen
@@ -444,8 +480,8 @@ async fn main() {
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            DEFAULT_WINDOW_WIDTH,  // CW_USEDEFAULT,
+            DEFAULT_WINDOW_HEIGHT, // CW_USEDEFAULT,
             ptr::null_mut(),
             ptr::null_mut(),
             h_instance,
