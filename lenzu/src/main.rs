@@ -8,18 +8,31 @@ mod ocr_winmedia;
 mod orcr_gcloud;
 //use crate::interpreter_traits::InterpreterTrait;
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult};
-use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
+use crate::ocr_traits::OcrTrait;
+use imageproc::drawing::text_size;
+// NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
+use rusttype::{point, Font, PositionedGlyph, Scale, ScaledGlyph};
 
 use cursor_data::CursorData;
-use image::{DynamicImage, GenericImageView, ImageBuffer};
+// NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
+use imageproc::{
+    drawing::draw_text_mut,
+    image::{
+        self, imageops::overlay, load_from_memory, ColorType, DynamicImage, GenericImageView,
+        GrayAlphaImage, ImageBuffer, Rgba,
+    },
+};
 
-use std::{ffi::CString, ptr, thread::current};
+use ab_glyph::FontRef;
+use std::io::Read;
+use std::{cmp::max, ffi::CString, path::Path, ptr, thread::current};
 use winapi::{
     shared::minwindef::BYTE,
     um::{
+        gl,
         wingdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-            SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+            AlphaBlend, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            GetDIBits, SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
         winuser::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetDC, GetMessageW, GetWindowLongW,
@@ -30,10 +43,12 @@ use winapi::{
     },
 };
 
-const MAGNIFY_SCALE_FACTOR: u32 = 1;
+const MAGNIFY_SCALE_FACTOR: u32 = 2;
 const TOGGLE_WINDOW_MOVE_KEY: std::ffi::c_int = VK_SPACE;
 const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
+
+const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 enum ToggleState {
     Free,
@@ -152,6 +167,9 @@ fn from_image_to_window(
     image: DynamicImage,
 ) {
     unsafe {
+        // just in case, show window
+        ShowWindow(application_window_handle, SW_SHOW);
+
         // Convert the DynamicImage to raw pixel data
         let (width, height) = image.dimensions();
         let mut data: Vec<BYTE> = Vec::with_capacity((width * height * 4) as usize);
@@ -201,6 +219,9 @@ fn from_image_to_window(
             SRCCOPY,
         );
 
+        //    EndPaint(hwnd, &repaint_area);
+        //    InvalidateRect(hwnd, ptr::null_mut(), 0); // mark for refresh/update
+        //    SelectObject(destination_dc, destination_buffer);
         // Clean up: Select the old bitmap back into the memory DC
         SelectObject(hdc_mem, hbitmap_old);
     }
@@ -272,36 +293,24 @@ fn capture_and_ocr(
     match possible_result_tupled {
         Some((recognized_result, translate_result)) => {
             println!(
-                "########################## Interpreter Result ({} mSec):\n'{:?}'\n'{:?}'\n",
+                "########################## Interpreter Result ({} mSec):\n'{}'\n'{}'\n",
                 start_interpreter.elapsed().as_millis(),
                 recognized_result,
                 translate_result,
             );
-            // Blend the topmost layer onto the primary image
-            //let blend_func = winapi::um::wingdi::BLENDFUNCTION {
-            //    BlendOp: winapi::um::wingdi::AC_SRC_OVER,
-            //    BlendFlags: 0,
-            //    SourceConstantAlpha: 128, // Adjust alpha value (0-255) for transparency
-            //    AlphaFormat: winapi::um::wingdi::AC_SRC_ALPHA,
-            //};
-            //unsafe {
-            //    AlphaBlend(
-            //        destination_dc,
-            //        0,
-            //        0,
-            //        cursor_pos.window_width as i32,
-            //        cursor_pos.window_height as i32,
-            //        mem_dc_topmost,
-            //        0,
-            //        0,
-            //        cursor_pos.window_width as i32,
-            //        cursor_pos.window_height as i32,
-            //        blend_func,
-            //    );
-            //}
+
+            // And then, layer this PNG onto the original image (blend  png_buffer onto gray_scale_image)
+            // image width and height is based on max of the two
+            // now create a PNG with alpha channel and draw the text onto the image
+            let mut recognized_image = screenshot;
+            if !translate_result.text.is_empty() {
+                recognized_image =
+                    overlay_text(translate_result.text.as_str(), 0, 0, &recognized_image);
+            }
+            //println!("Saving debug image: recognized_image.png");
+            //recognized_image.save("recognized_image.png").unwrap();
 
             // render translated text onto the window
-            let recognized_image = gray_scale_image.clone();     // for now, just use same image...
             from_image_to_window(hwnd, recognized_image);
         }
         None => {
@@ -439,6 +448,184 @@ fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Cu
     //}
 }
 
+//fn my_draw_text_mut(
+//    image: &mut image::RgbImage,
+//    color: Rgba<u8>,
+//    x: i32,
+//    y: i32,
+//    scale: Scale,
+//    font: &Font,
+//    text: &str,
+//) {
+//    let v_metrics = font.v_metrics(scale);
+//    let glyphs: Vec<PositionedGlyph> = font
+//        .layout(text, scale, point(x as f32, y as f32 + v_metrics.ascent))
+//        .collect();
+//
+//    for glyph in glyphs {
+//        if let Some(bb) = glyph.pixel_bounding_box() {
+//            glyph.draw(|gx, gy, gv| {
+//                let x = x + gx as i32;
+//                let y = y + gy as i32;
+//                let alpha = (gv * 255.0) as u8;
+//                image.put_pixel(
+//                    x as u32,
+//                    y as u32,
+//                    Rgba([color[0], color[1], color[2], alpha]),
+//                );
+//            });
+//        }
+//    }
+//}
+
+fn overlay_text(
+    text: &str,
+    textx: i32,
+    texty: i32,
+    background_image: &DynamicImage,
+) -> DynamicImage {
+    if text.is_empty() {
+        println!("Warning: No text to overlay onto image");
+        return background_image.clone(); // return back the original cloned (for optimization, make sure to pretest text length before calling here, so we won't even need to clone here)
+    }
+
+    let scale = Scale::uniform(2.0 * DEFAULT_FONT_SIZE);
+    println!("overlay_text() - Scale: {:?}", scale);
+
+    // first, we need to determine how wide the text is, and if it is wider than the image,
+    // we need to break the text down to multiple lines
+    let image_char_width = std::cmp::max((background_image.width() / scale.x as u32) - 10u32, 1);
+    let mut text_width: u32 = text.len() as u32; // number of characters
+    let mut text_height: u32 = 1; // number of lines
+    let mut text_width_pixels: u32 = text_width * scale.x as u32;
+    let mut text_height_pixels: u32 = text_height * scale.y as u32;
+    if text_width > image_char_width {
+        // if the text is wider than the image, then we need to break it down to multiple lines
+        text_width = image_char_width;
+        text_height = (text.len() as u32 / text_width) + 1;
+        text_width_pixels = text_width * scale.x as u32;
+        text_height_pixels = text_height * scale.y as u32;
+    }
+    // iterate each char and add newline when we reach text_width
+    let binding = text
+        .chars()
+        .enumerate()
+        .map(|(i, c)| {
+            if (i as u32 + 1) % text_width == 0 {
+                format!("{}\n", c)
+            } else {
+                format!("{}", c)
+            }
+        })
+        .collect::<String>();
+    let multi_lined_text: Vec<&str> = binding.split("\n").collect();
+
+    // Note that imageproc::overlay() only works on same byte depth (i.e. 8-bit, 16-bit, 24-bit, 32-bit, etc.),
+    // so we cannot render text to GrayAlphaImage
+    //let mut text_image_canvas: ImageBuffer<image::LumaA<u8>, Vec<u8>> = GrayAlphaImage::new(
+    //    text.len() as u32 * DEFAULT_FONT_SIZE as u32,
+    //    DEFAULT_FONT_SIZE as u32 * 2,
+    //);
+    let mut text_image_canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::new(text_width_pixels, text_height_pixels);
+
+    // Load a font (you can replace this with your own font)
+    // Create a font (Meiryo or any other suitable Japanese font)
+    let font_data: &[u8] = if cfg!(target_os = "windows") {
+        include_bytes!("..\\..\\assets\\fonts\\kochi-mincho-subst.ttf")
+    } else {
+        include_bytes!("../../assets/fonts/kochi-mincho-subst.ttf")
+    };
+    //let font: Font<'_> = rusttype::Font::try_from_bytes(font_data).expect("Failed to load font");
+    let font: ab_glyph::FontArc = ab_glyph::FontArc::try_from_slice(font_data)
+        .expect("Failed to load font 'kochi-mincho-subst.ttf'");
+    //let scale = Scale {
+    //    x: image.width() as f32 * 0.2,
+    //    y: font.scale_for_pixel_height(DEFAULT_FONT_SIZE),
+    //};
+    //let fscale = font.scale_for_pixel_height(DEFAULT_FONT_SIZE);
+
+    // render text on the text_image_canvas
+    println!(
+        "Width: {}\nHeight: {}\n{:?}\n\n",
+        text_width, text_height, multi_lined_text,
+    );
+
+    // Draw each line
+    let mut line_y: u32 = 0;
+    for (index, line) in multi_lined_text.iter().enumerate() {
+        println!(
+            "Line {}: Y={} - '{}' ({} chars)",
+            index,
+            line_y,
+            line,
+            line.len()
+        );
+        draw_text_mut(
+            &mut text_image_canvas,                // canvas surface
+            image::Rgba([0xff, 0x40, 0x40, 0xff]), // font color
+            0,
+            line_y as i32, // Q: Do we need to shift pixels down?
+            scale.y,
+            &font,
+            &line, // text to render (will come out as blank if the UTF8 is not supported by ttf)
+        );
+        let (ts_width, ts_height) = text_size(scale.y, &font, line); // Adjust y position for the next line
+        line_y += ts_height;
+    }
+
+    // overlay the two images.  Bottom (background) image is the original image, and the top (foreground) image is the text
+    let mut overlayed_image: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        background_image.as_rgba8().unwrap().clone();
+    let overlay_x: i64 = textx as i64 + scale.x as i64;
+    let overlay_y: i64 = texty as i64 + scale.y as i64;
+    overlay(
+        &mut overlayed_image,
+        &mut text_image_canvas,
+        overlay_x,
+        overlay_y,
+    );
+
+    // and finally, convert it back to DynamicImage
+    let ret = DynamicImage::ImageRgba8(overlayed_image);
+    println!(
+        "Overlayed text onto image ({}x{}) - {} chars",
+        ret.width(),
+        ret.height(),
+        text.len()
+    );
+    if cfg!(debug_assertions) {
+        // append first 10 characters of the text to the filename ( replace space with no-space)
+        let first_10 = &text[0..10]
+            .replace(" ", "")
+            .replace(":", "_")
+            .replace("?", "_")
+            .replace("\\", "_")
+            .replace("/", "_");
+        let filename = format!("overlay_text_{}.png", first_10);
+        println!("Saving: {}", filename.clone());
+        match text_image_canvas.save(filename.clone()) {
+            Ok(_) => println!(
+                "Saved: {} - {} bytes",
+                filename.clone(),
+                text_image_canvas.len()
+            ),
+            Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
+        }
+        let filename = format!("overlayed_text_{}.png", first_10);
+        match ret.clone().save(filename.clone()) {
+            Ok(_) => println!(
+                "Saved: {} - {} bytes",
+                filename.clone(),
+                ret.clone().as_bytes().len()
+            ),
+            Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
+        }
+    }
+
+    ret
+}
+
 #[tokio::main]
 async fn main() {
     let args = std::env::args().collect::<Vec<String>>();
@@ -520,6 +707,7 @@ async fn main() {
         }
         cursor.update(hwnd);
 
+        // either left-click or keydown to toggle states
         if msg.message == WM_KEYDOWN {
             match msg.wParam as std::ffi::c_int {
                 VK_ESCAPE => {
@@ -542,6 +730,21 @@ async fn main() {
                     }
                 }
                 _ => (),
+            }
+        } else if msg.message == winapi::um::winuser::WM_LBUTTONUP {
+            // on left button click RELEASE (as in, it was pressed and now released)
+            // unsure why I need to use unsafe here, but compiler complains if I don't
+            unsafe {
+                TOGGLE_STATE = match TOGGLE_STATE {
+                    ToggleState::Free => ToggleState::MoveWindow,
+                    ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
+                    ToggleState::Captured => ToggleState::Free,
+                    ToggleState::Capture => {
+                        // should never be in this state
+                        assert!(false, "unexpected toggle_state");
+                        ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
+                    }
+                }
             }
         }
 
@@ -583,4 +786,64 @@ async fn main() {
             }
         }
     } // loop
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
+    use imageproc::{
+        drawing::draw_text_mut,
+        image::{
+            self, imageops::overlay, load_from_memory, ColorType, DynamicImage, GenericImageView,
+            GrayAlphaImage, ImageBuffer, Rgba,
+        },
+    };
+    use rusttype::{point, Font, Scale, ScaledGlyph};
+
+    #[test]
+    fn test_text_over_image() {
+        // download image over https
+        let imgbytes = &reqwest::blocking::get(
+            "https://github.com/HidekiAI/lenzu/blob/trunk/assets/ubunchu01_02.png",
+        )
+        .unwrap()
+        .bytes()
+        .unwrap()
+        .to_vec() as &[u8];
+        let img = image::load_from_memory(imgbytes).unwrap();
+        let result_bytes = overlay_text("最近人気のデスクトップ", 0, 0, &img);
+        // Now you can use `result_bytes` as needed (e.g., send it over the network, etc.)
+    }
+
+    #[test]
+    fn test_draw_text_mut() {
+        // Create a new blank image
+        let mut img = GrayAlphaImage::new(100, 100);
+        let font_data: &[u8] = if cfg!(target_os = "windows") {
+            include_bytes!("..\\..\\assets\\fonts\\kochi-mincho-subst.ttf")
+        } else {
+            include_bytes!("../../assets/fonts/kochi-mincho-subst.ttf")
+        };
+
+        // Draw some text onto the image
+        let font: ab_glyph::FontArc = ab_glyph::FontArc::try_from_slice(font_data).unwrap();
+        draw_text_mut(
+            &mut img,                  // canvas surface
+            image::LumaA([255, 0x7f]), // font color
+            0,                         // font x position
+            0,                         // font y position
+            24.0,                      // font scale
+            &font,
+            "最近人気のデスクトップなリナックスです!", // text to draw
+        );
+
+        // Convert the image back to raw bytes
+        let result_bytes = img.into_raw();
+        // Now you can use `result_bytes` as needed (e.g., send it over the network, etc.)
+
+        // save it as a file for visual confirmation
+        let img = image::GrayAlphaImage::from_raw(100, 100, result_bytes).unwrap();
+        img.save("test_draw_text_mut.png").unwrap();
+    }
 }
