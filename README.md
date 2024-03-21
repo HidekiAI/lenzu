@@ -8,7 +8,7 @@ Again, the key differences is that it is an OCR (optical chracter recognition) f
 
 Target platforms are Linux (Debian) and Windows (MinGW64).  Not really relevant to list it here since all you need to do is look at my Cargo.toml but just in case:
 
-- kakasi (I believe rust version is self-contained, so no need to install executable version)
+- kakasi (I believe rust version is self-contained, so no need to install executable version) - note that rust wrapper for [kaksi](https://crates.io/crates/kakasi) is VERY LIMITED
 - tesseract (rusty-tesseract expects tesseract-ocr executable and it's trained-data pre-installed)
 - leptonica (the MinGW pacman version statically links leptonica it seems, so you won't find MinGW libs for this one, you'll have to hand-compile using MinGW gcc)
 - windows-rs (features: Media_Ocr, Globalization) - also want to make sure to install (in Windows Settings) for Japanese language
@@ -243,6 +243,53 @@ For windows.Media.Ocr integrations with rust, you'll need to at least enable 2 f
     $ cargo add windows-rs --features Media_Ocr,Globalization,Storage_Streams
     ```
 
+## Sample outputs and results
+
+All results are based on Microsoft Windows Media OCR Engine.
+
+First, some sample Debug output texts:
+
+    ```text
+    ########################## Interpreter Result (1 mSec):
+    'text:
+        最近人気のデスクトップなリナックスですー
+    lines:
+        最近人気の
+        デスクトップな
+        リナックスですー
+    rects:
+        OcrLine { 
+        line: [ OcrWord { word: "最", line_index: 0, rect: OcrRect { x_min: 956, y_min: 174, x_max: 978, y_max: 196 } }, 
+                OcrWord { word: "近", line_index: 0, rect: OcrRect { x_min: 956, y_min: 198, x_max: 978, y_max: 220 } }, 
+                OcrWord { word: "人", line_index: 0, rect: OcrRect { x_min: 956, y_min: 223, x_max: 978, y_max: 244 } }, 
+                OcrWord { word: "気", line_index: 0, rect: OcrRect { x_min: 956, y_min: 246, x_max: 978, y_max: 269 } }, 
+                OcrWord { word: "の", line_index: 0, rect: OcrRect { x_min: 957, y_min: 273, x_max: 977, y_max: 291 } }] }
+        OcrLine { 
+        line: [ OcrWord { word: "デ", line_index: 1, rect: OcrRect { x_min: 923, y_min: 174, x_max: 945, y_max: 195 } }, 
+                OcrWord { word: "ス", line_index: 1, rect: OcrRect { x_min: 923, y_min: 201, x_max: 942, y_max: 218 } }, 
+                OcrWord { word: "ク", line_index: 1, rect: OcrRect { x_min: 924, y_min: 224, x_max: 942, y_max: 243 } }, 
+                OcrWord { word: "ト", line_index: 1, rect: OcrRect { x_min: 929, y_min: 248, x_max: 940, y_max: 268 } }, 
+                OcrWord { word: "ッ", line_index: 1, rect: OcrRect { x_min: 928, y_min: 276, x_max: 942, y_max: 289 } }, 
+                OcrWord { word: "プ", line_index: 1, rect: OcrRect { x_min: 925, y_min: 295, x_max: 945, y_max: 316 } }, 
+                OcrWord { word: "な", line_index: 1, rect: OcrRect { x_min: 924, y_min: 320, x_max: 942, y_max: 342 } }] }
+        OcrLine { 
+        line: [ OcrWord { word: "リ", line_index: 2, rect: OcrRect { x_min: 892, y_min: 175, x_max: 904, y_max: 194 } }, 
+                OcrWord { word: "ナ", line_index: 2, rect: OcrRect { x_min: 889, y_min: 200, x_max: 908, y_max: 219 } }, 
+                OcrWord { word: "ッ", line_index: 2, rect: OcrRect { x_min: 893, y_min: 227, x_max: 908, y_max: 241 } }, 
+                OcrWord { word: "ク", line_index: 2, rect: OcrRect { x_min: 890, y_min: 249, x_max: 907, y_max: 267 } }, 
+                OcrWord { word: "ス", line_index: 2, rect: OcrRect { x_min: 889, y_min: 274, x_max: 907, y_max: 291 } }, 
+                OcrWord { word: "で", line_index: 2, rect: OcrRect { x_min: 889, y_min: 297, x_max: 909, y_max: 316 } }, 
+                OcrWord { word: "す", line_index: 2, rect: OcrRect { x_min: 888, y_min: 320, x_max: 910, y_max: 342 } }, 
+                OcrWord { word: "ー", line_index: 2, rect: OcrRect { x_min: 897, y_min: 344, x_max: 901, y_max: 360 } }] } '
+    'さい きん にん き の で す く と っ ぷ な り な っ く す で す ー'
+
+    ```
+
+- text: the raw text block captured by OcrEngine
+- lines: OcrEngine breaking it down into per column (notice that it's correctly ordered from top-to-bottom-right-to-left)
+- rects: rectangle coordinates grouped by line index
+- final line: kakasi result (to hiragana) - this version is still prototype, so using the limited kakasi that only can convert to either romaji or hiragana.
+
 ## Other Thoughts
 
 All in all, I prefer things to be usable offline (mainly for performance) as long as it works 80% of the time.  If (in the future) if a translator feature was needed, for offline mode, ideally all one has to do is use the jisho library such as jdict used by kakasi to lookup (or any other Japanese-to-<your_language> dictionary) and be done (do minimal).
@@ -273,6 +320,7 @@ Going online also means few things:
 - Have other features like Rikaikun/chan and/or Yomitan to have it translate and dictionary/jisho lookup to native languages (not just English)
 - I've done my best to not hard-code the OCR modules, so that whatever languages are installed (i.e. for Windows Media OCR, it's based on Desktop Profile Settings, on Tesseract (Linux and Windows), that's commonly based on what you install via package managers and doing `tesseract --list-langs`) so that when it captures the image and passes down to `evaluate()` method (traits), it will just return text/string that the engine has detected; but due to my current goals are mainly for manga and graphics-novels (note that light novels are already in TEXT, hence you only need some browser-extensions), there may be places that makes hard assumptions - i.e. I'm passing the text to `kakasi` to convert kanji to hiragana without checking whether the text is in fact Japanese.
 - I'm not an U.I. expert, not do I have the keenness of these experts, hence my U.I. just lacks the quality, and will need revisiting when I have time
+- drop usage of [rust kakasi](https://crates.io/crates/kakasi) and just write my own, since the version right now on crates.io is just calling CLI version, and I really need the XML (or other) output that has box/rectangle coordinates to match the Windows Media OcrEngine output.
 
 ## Post mortem
 
