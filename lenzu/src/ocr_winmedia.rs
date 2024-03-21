@@ -3,7 +3,8 @@ use std::collections::HashMap;
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
 //use futures::sink::Buffer;
-use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+// We're using imageproc version of image so that it matches the rest...
+use imageproc::image::{codecs::png::PngEncoder, ColorType, ExtendedColorType, ImageEncoder};
 
 use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use tokio::time::{timeout, Duration};
@@ -51,13 +52,13 @@ impl OcrTrait for OcrWinMedia {
         &self,
         image_path: &str,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
-        let img = image::open(image_path).unwrap();
+        let img = imageproc::image::open(image_path).unwrap();
         self.evaluate(&img)
     }
 
     fn evaluate(
         &self,
-        image: &image::DynamicImage,
+        image: &imageproc::image::DynamicImage,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let mut raw_buffer_u8: Vec<u8> = Vec::new();
         let cursor = std::io::Cursor::new(&mut raw_buffer_u8);
@@ -66,7 +67,8 @@ impl OcrTrait for OcrWinMedia {
         let encoder = PngEncoder::new(cursor);
         let width = image.width();
         let height = image.height();
-        let color_type = ColorType::from(image.color());
+        //let color_type = ColorType::from(image.color());
+        let color_type: ExtendedColorType = image.color().into();
         match encoder.write_image(
             image.clone().into_bytes().as_slice(), // have to clone (unfortunately)
             width,
@@ -111,6 +113,41 @@ impl OcrTrait for OcrWinMedia {
 }
 
 impl OcrWinMedia {
+    fn to_ocr_rect(rect: windows::Foundation::Rect) -> OcrRect {
+        OcrRect::from(
+            rect.X as i32,
+            rect.Y as i32,
+            rect.Width as u32,
+            rect.Height as u32,
+        )
+    }
+
+    fn to_ocr_word(line_index: u16, word: &windows::Media::Ocr::OcrWord) -> ocr_traits::OcrWord {
+        let rect = Self::to_ocr_rect(word.BoundingRect().unwrap());
+        ocr_traits::OcrWord::new(word.Text().unwrap().to_string(), line_index, rect)
+    }
+
+    fn to_ocr_line(
+        line_index: u16,
+        words: &windows::Foundation::Collections::IVectorView<windows::Media::Ocr::OcrWord>,
+    ) -> ocr_traits::OcrLine {
+        let mut ocr_words = Vec::new();
+        for word in words {
+            ocr_words.push(Self::to_ocr_word(line_index, &word));
+        }
+        ocr_traits::OcrLine::new(ocr_words)
+    }
+
+    fn to_ocr_lines(
+        lines: &windows::Foundation::Collections::IVectorView<windows::Media::Ocr::OcrLine>,
+    ) -> Vec<ocr_traits::OcrLine> {
+        let mut ocr_lines = Vec::new();
+        for (i, line) in lines.into_iter().enumerate() {
+            ocr_lines.push(Self::to_ocr_line(i as u16, &line.Words().unwrap()));
+        }
+        ocr_lines
+    }
+
     // NOTE: Paths passed needs to match the path separator of the OS, hence
     // if you pass in for example "media/foo.png" on Windows, it will fail!
     async fn evaluate_async_path(
@@ -467,7 +504,7 @@ impl OcrWinMedia {
         // interestingly, the last thing copy_stream_to_vec() does is to reset the stream position to 0, yet if I tried to reset here, it will panic
         in_memory_stream.Seek(0).unwrap(); // if it doesn't panic here, we've got something working...
 
-        let img = image::load_from_memory(&data_slice).unwrap();
+        let img = imageproc::image::load_from_memory(&data_slice).unwrap();
         img.save(filename).unwrap();
         println!(">> Dumped done...");
 
@@ -742,29 +779,19 @@ impl OcrWinMedia {
             // Note that we deal with it in 2 phases, first is as-is (as a tuple), then we convert it to a hashmap
             // so that if we want to make sure all keys are unique, we can  handle it (note that in Rust collection,
             // just like F#, it will upsert rather than throw exception like C#)...
-            let rects: Vec<(OcrRect, Vec<String>)> = result
-                .Lines()
-                .unwrap()
-                .into_iter()
-                .map(|x| x.Words().unwrap())
-                .flatten()
-                .map(|x| {
-                    (
-                        OcrRect::new(
-                            x.BoundingRect().unwrap().X as i32,
-                            x.BoundingRect().unwrap().Y as i32,
-                            (x.BoundingRect().unwrap().X + x.BoundingRect().unwrap().Width) as i32,
-                            (x.BoundingRect().unwrap().Y + x.BoundingRect().unwrap().Height) as i32,
-                        ),
-                        x.Text()
-                            .unwrap()
-                            .to_string()
-                            .split('\n')
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                    )
-                })
-                .collect::<Vec<_>>();
+            // Here is a sample (order preserved, see notes) of what a data may look like:
+            //      text: "じ ゃ あ 頼 ん だ わ よ"
+            //      lines: "じ ゃ あ
+            //              頼 ん だ わ よ"
+            //      rects: "OcrRect { x_min: 697, y_min: 142, x_max: 733, y_max: 184 }:じ   <- Line 1, 1st character
+            //              OcrRect { x_min: 627, y_min: 140, x_max: 674, y_max: 186 }:頼   <- Line 2, 1st character
+            //              OcrRect { x_min: 697, y_min: 195, x_max: 733, y_max: 231 }:ゃ   <- Line 1, 2nd character
+            //              OcrRect { x_min: 630, y_min: 237, x_max: 676, y_max: 281 }:だ   <- Line 2, 3rd character
+            //              OcrRect { x_min: 632, y_min: 338, x_max: 669, y_max: 381 }:よ   <- Line 2, 5th character
+            //              OcrRect { x_min: 692, y_min: 238, x_max: 732, y_max: 284 }:あ   <- Line 1, 3rd character
+            //              OcrRect { x_min: 631, y_min: 191, x_max: 672, y_max: 234 }:ん   <- Line 2, 2nd character
+            //              OcrRect { x_min: 630, y_min: 288, x_max: 671, y_max: 331 }:わ"  <- Line 2, 4th character
+            let rects: Vec<ocr_traits::OcrLine> = Self::to_ocr_lines(&result.Lines().unwrap());
 
             println!("evaluate_async():\n{}", str_block);
             let x_min = 0;
@@ -773,10 +800,7 @@ impl OcrWinMedia {
                 text: str_block,
                 lines: lines.clone(),
                 // convert vector or paired-tuple to hashmap
-                rects: rects
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<HashMap<_, _>>(),
+                rects: rects,
             };
             println!(
                 "evaluate_async(): Recognized text: {:?}",
