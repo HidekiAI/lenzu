@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
+use image::{
+    DynamicImage, // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
+};
 //use futures::sink::Buffer;
 // We're using imageproc version of image so that it matches the rest...
 use imageproc::image::{codecs::png::PngEncoder, ColorType, ExtendedColorType, ImageEncoder};
@@ -52,13 +55,13 @@ impl OcrTrait for OcrWinMedia {
         &self,
         image_path: &str,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
-        let img = imageproc::image::open(image_path).unwrap();
+        let img = image::open(image_path).unwrap();
         self.evaluate(&img)
     }
 
     fn evaluate(
         &self,
-        image: &imageproc::image::DynamicImage,
+        image: &DynamicImage,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let mut raw_buffer_u8: Vec<u8> = Vec::new();
         let cursor = std::io::Cursor::new(&mut raw_buffer_u8);
@@ -68,7 +71,7 @@ impl OcrTrait for OcrWinMedia {
         let width = image.width();
         let height = image.height();
         //let color_type = ColorType::from(image.color());
-        let color_type: ExtendedColorType = image.color().into();
+        let color_type: image::ExtendedColorType = image::ExtendedColorType::from(image.color());
         match encoder.write_image(
             image.clone().into_bytes().as_slice(), // have to clone (unfortunately)
             width,
@@ -909,8 +912,8 @@ mod tests {
     use super::*;
     use crate::ocr_traits::OcrTrait;
 
-    #[test]
-    fn test_seek_multiple() {
+    #[tokio::test]
+    async fn test_seek_multiple() {
         let ocr = OcrWinMedia::new();
         // let's make sure JP is supported in desktop/user profile:
         //let hstr: HSTRING = HSTRING::from(JAPANESE_LANGUAGE);

@@ -7,18 +7,18 @@ build = "build.rs"
 [build-dependencies]
 libc = "0.2"
 
+# If you start getting link errors, try MAKE SURE you are calling `cargo build` on a REAL MinGW64 terminal
 [dependencies]
-imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image
-#image = "^0.24.9"    # NOTE: rusty-tesseract (currently) expects image v0.24.9
+image = "0.25.0"    # NOTE: rusty-tesseract (currently) expects image v0.24.9
+imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image, make sure they match! (current imageproc v0.24.0 relies on image 0.25.0)
+# NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
+rusty-tesseract = "1.1.9" # depends on thiserror and image
+
 anyhow = "1.0.80"
 reqwest = { version = "0.12.0", features = ["json", "gzip", "blocking"] }
 
-################ crates that implicitly dependens on other crates that are tied to specific version:
-# If you start getting link errors, try MAKE SURE you are calling `cargo build` on a REAL MinGW64 terminal
 kakasi = "0.1.0" # depends on phf
 
-# NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
-rusty-tesseract = "1.1.9" # depends on thiserror
 
 winit = { version = "^0.29", features = ["mint", "wayland", "x11"] }
 
