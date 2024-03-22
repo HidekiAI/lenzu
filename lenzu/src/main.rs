@@ -1,14 +1,18 @@
 extern crate winapi;
 mod cursor_data;
+mod image_handling;
 mod interpreter_ja;
 mod interpreter_traits;
+mod ocr_gcloud;
 mod ocr_tesseract;
 mod ocr_traits;
 mod ocr_winmedia;
-mod orcr_gcloud;
+use crate::image_handling::OCRImage;
 //use crate::interpreter_traits::InterpreterTrait;
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult};
 use crate::ocr_traits::OcrTrait;
+
+use image::DynamicImage; // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
 use imageproc::drawing::text_size;
 // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 use rusttype::{point, Font, PositionedGlyph, Scale, ScaledGlyph};
@@ -18,8 +22,8 @@ use cursor_data::CursorData;
 use imageproc::{
     drawing::draw_text_mut,
     image::{
-        self, imageops::overlay, load_from_memory, ColorType, DynamicImage, GenericImageView,
-        GrayAlphaImage, ImageBuffer, Rgba,
+        self, imageops::overlay, load_from_memory, ColorType, GenericImageView, GrayAlphaImage,
+        ImageBuffer, Rgba,
     },
 };
 
@@ -48,8 +52,6 @@ const MAGNIFY_SCALE_FACTOR: u32 = 2;
 const TOGGLE_WINDOW_MOVE_KEY: std::ffi::c_int = VK_SPACE;
 const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
-
-const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 enum ToggleState {
     Free,
@@ -232,17 +234,18 @@ fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
     ocr: &mut Box<dyn crate::ocr_traits::OcrTrait>,
     cursor_pos: CursorData,
+    ocr_font: &mut OCRImage,
     _supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
     interpreter: &mut Box<dyn crate::interpreter_traits::InterpreterTrait>,
 ) {
-    // first, hide application window
-    unsafe { ShowWindow(hwnd, SW_HIDE) };
+    // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
+    hide_window(hwnd);
 
     // now capture the screen
     let screenshot = from_screen_to_image(cursor_pos);
 
     // show the application window again
-    unsafe { ShowWindow(hwnd, SW_SHOW) };
+    show_window(hwnd);
 
     // the image we just captured, we'll need to now pass it down to OCR and get the text back
     // We will (for now) assume it is either "jpn" or "jpn_vert" and we'll just pass it down
@@ -305,11 +308,15 @@ fn capture_and_ocr(
             // now create a PNG with alpha channel and draw the text onto the image
             let mut recognized_image = screenshot;
             if !translate_result.text.is_empty() {
-                recognized_image =
-                    overlay_text(translate_result.text.as_str(), 0, 0, &recognized_image);
+                ocr_font.set_image(recognized_image);
+                recognized_image = ocr_font.overlay_text(translate_result.text.as_str(), 0, 0);
             }
-            //println!("Saving debug image: recognized_image.png");
-            //recognized_image.save("recognized_image.png").unwrap();
+
+            if cfg!(debug_assertions) {
+                // save the image for debugging purposes
+                println!("Saving debug image: recognized_image.png");
+                recognized_image.save("recognized_image.png").unwrap();
+            }
 
             // render translated text onto the window
             from_image_to_window(hwnd, recognized_image);
@@ -365,7 +372,7 @@ fn show_window(hwnd: *mut winapi::shared::windef::HWND__) {
     }
 }
 
-fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: CursorData) {
+fn capture_and_scale(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: CursorData) {
     // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
     hide_window(hwnd);
 
@@ -376,77 +383,7 @@ fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Cu
     show_window(hwnd);
 
     // now render what we've captured
-    // TODO: scale/stretchBlt()
     from_image_to_window(hwnd, screenshot);
-
-    //let destination_bitmap = unsafe {
-    //    CreateCompatibleBitmap(
-    //        source_dc,
-    //        cursor_pos.window_width as i32,
-    //        cursor_pos.window_height as i32,
-    //    )
-    //};
-
-    //let destination_buffer = unsafe {
-    //    SelectObject(
-    //        destination_dc,
-    //        destination_bitmap as *mut winapi::ctypes::c_void,
-    //    )
-    //};
-    //unsafe {
-    //    BitBlt(
-    //        destination_dc, // destination device context
-    //        0,              // destination x
-    //        0,              // destination y
-    //        cursor_pos.window_width as i32,
-    //        cursor_pos.window_height as i32,
-    //        source_dc,                  // source device context
-    //        cursor_pos.window_x as i32, // source x
-    //        cursor_pos.window_y as i32, // source y
-    //        SRCCOPY,
-    //    )
-    //};
-
-    //let mut repaint_area = PAINTSTRUCT {
-    //    hdc: ptr::null_mut(),
-    //    fErase: 0,
-    //    rcPaint: RECT {
-    //        left: 0,
-    //        top: 0,
-    //        right: 0,
-    //        bottom: 0,
-    //    },
-    //    fRestore: 0,
-    //    fIncUpdate: 0,
-    //    rgbReserved: [0; 32],
-    //};
-
-    //let final_destination_dc = unsafe { BeginPaint(hwnd, &mut repaint_area) };
-
-    //// scale/mangify
-    //unsafe {
-    //    StretchBlt(
-    //        final_destination_dc,
-    //        0,
-    //        0,
-    //        (cursor_pos.window_width * MAGNIFY_SCALE_FACTOR) as i32,
-    //        (cursor_pos.window_height * MAGNIFY_SCALE_FACTOR) as i32,
-    //        destination_dc,
-    //        0,
-    //        0,
-    //        cursor_pos.window_width as i32,
-    //        cursor_pos.window_height as i32,
-    //        SRCCOPY,
-    //    );
-
-    //    EndPaint(hwnd, &repaint_area);
-    //    InvalidateRect(hwnd, ptr::null_mut(), 0); // mark for refresh/update
-    //    SelectObject(destination_dc, destination_buffer);
-
-    //    DeleteDC(destination_dc);
-    //    ReleaseDC(ptr::null_mut(), source_dc);
-    //    DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
-    //}
 }
 
 //fn my_draw_text_mut(
@@ -479,179 +416,6 @@ fn capture_and_magnify(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Cu
 //    }
 //}
 
-fn overlay_text(
-    text: &str,
-    textx: i32,
-    texty: i32,
-    c_background_image: &DynamicImage,
-) -> DynamicImage {
-    let mut background_image = c_background_image.clone();
-    if text.is_empty() {
-        println!("Warning: No text to overlay onto image");
-        return background_image; // return back the original cloned (for optimization, make sure to pretest text length before calling here, so we won't even need to clone here)
-    }
-
-    let scale = Scale::uniform(2.0 * DEFAULT_FONT_SIZE);
-    println!("overlay_text() - Scale: {:?}", scale);
-
-    // first, we need to determine how wide the text is, and if it is wider than the image,
-    // we need to break the text down to multiple lines
-    let image_char_width = std::cmp::max((background_image.width() / scale.x as u32) - 10u32, 1);
-    let mut text_width: u32 = text.len() as u32; // number of characters
-    let mut text_height: u32 = 1; // number of lines
-    let mut text_width_pixels: u32 = text_width * scale.x as u32;
-    let mut text_height_pixels: u32 = text_height * scale.y as u32;
-    if text_width > image_char_width {
-        // if the text is wider than the image, then we need to break it down to multiple lines
-        text_width = image_char_width;
-        text_height = (text.len() as u32 / text_width) + 1;
-        text_width_pixels = text_width * scale.x as u32;
-        text_height_pixels = text_height * scale.y as u32;
-    }
-    // iterate each char and add newline when we reach text_width
-    let binding = text
-        .chars()
-        .enumerate()
-        .map(|(i, c)| {
-            if (i as u32 + 1) % text_width == 0 {
-                format!("{}\n", c)
-            } else {
-                format!("{}", c)
-            }
-        })
-        .collect::<String>();
-    let multi_lined_text: Vec<&str> = binding.split("\n").collect();
-
-    // Note that imageproc::overlay() only works on same byte depth (i.e. 8-bit, 16-bit, 24-bit, 32-bit, etc.),
-    let mut color_type: ColorType = background_image.color();
-
-    // see if we can transform the background_image to  Rgba<u8> IF it is just plain gray scale or other format other than 32-bits
-    // if this is not possible, we'll always just convert to Luma<u8>  (lowest comman denominator) but I'd like to have it as 32-bits
-    // so that I can have the text in RED...
-    if color_type != ColorType::Rgba8 {
-        // convert to Rgba<u8>
-        let (img_width, img_height) = background_image.dimensions().clone();
-        let binding = background_image.into_rgba8().clone();
-        let cloned_bg = binding.as_raw().as_slice();
-        if ocr_traits::is_valid_png(cloned_bg) {
-            println!("overlay_text() - Image is PNG");
-        } else {
-            println!("overlay_text() - Image is NOT PNG");
-        }
-        let rgba_image: DynamicImage =
-            ocr_traits::to_imageproc_dynamic_image(cloned_bg, img_width, img_height);
-        let rgba_image_buffer=  // : ImageBuffer<Rgba<u8>, Vec<u8>> =
-            rgba_image.as_rgba8().unwrap();
-        // now convert it back to DynamicImge
-        let ret = DynamicImage::ImageRgba8(rgba_image_buffer.clone());
-        background_image = ret;
-        color_type = background_image.color();
-    }
-    println!("overlay_text() - ColorType: {:?}", color_type);
-
-    // instantiate ImageBuffer matching same type as background_image via creating a sample pixel matching color_type
-    let p = image::Rgba([0u8, 0, 0, 0]);
-    let mut text_image_canvas = ImageBuffer::from_pixel(text_width_pixels, text_height_pixels, p);
-
-    // Load a font (you can replace this with your own font)
-    // Create a font (Meiryo or any other suitable Japanese font)
-    let font_data: &[u8] = if cfg!(target_os = "windows") {
-        include_bytes!("..\\..\\assets\\fonts\\kochi-mincho-subst.ttf")
-    } else {
-        include_bytes!("../../assets/fonts/kochi-mincho-subst.ttf")
-    };
-    //let font: Font<'_> = rusttype::Font::try_from_bytes(font_data).expect("Failed to load font");
-    let font: ab_glyph::FontArc = ab_glyph::FontArc::try_from_slice(font_data)
-        .expect("Failed to load font 'kochi-mincho-subst.ttf'");
-    //let scale = Scale {
-    //    x: image.width() as f32 * 0.2,
-    //    y: font.scale_for_pixel_height(DEFAULT_FONT_SIZE),
-    //};
-    //let fscale = font.scale_for_pixel_height(DEFAULT_FONT_SIZE);
-
-    // render text on the text_image_canvas
-    println!(
-        "Width: {}\nHeight: {}\n{:?}\n\n",
-        text_width, text_height, multi_lined_text,
-    );
-
-    // Draw each line
-    let mut line_y: u32 = 0;
-    for (index, line) in multi_lined_text.iter().enumerate() {
-        println!(
-            "Line {}: Y={} - '{}' ({} chars)",
-            index,
-            line_y,
-            line,
-            line.len()
-        );
-        draw_text_mut(
-            &mut text_image_canvas,                // canvas surface
-            image::Rgba([0xff, 0x40, 0x40, 0xff]), // font color
-            0,
-            line_y as i32, // Q: Do we need to shift pixels down?
-            scale.y,
-            &font,
-            &line, // text to render (will come out as blank if the UTF8 is not supported by ttf)
-        );
-        let (ts_width, ts_height) = text_size(scale.y, &font, line); // Adjust y position for the next line
-        line_y += ts_height;
-    }
-
-    // overlay the two images.  Bottom (background) image is the original image, and the top (foreground) image is the text
-    let mut overlayed_image: ImageBuffer<Rgba<u8>, Vec<u8>> = background_image
-        .as_rgba8()
-        .expect("Unable to convert bg-image as rgba8")
-        .clone();
-    let overlay_x: i64 = textx as i64 + scale.x as i64;
-    let overlay_y: i64 = texty as i64 + scale.y as i64;
-    overlay(
-        &mut overlayed_image,
-        &mut text_image_canvas,
-        overlay_x,
-        overlay_y,
-    );
-
-    // and finally, convert it back to DynamicImage
-    let ret = DynamicImage::ImageRgba8(overlayed_image);
-    println!(
-        "Overlayed text onto image ({}x{}) - {} chars",
-        ret.width(),
-        ret.height(),
-        text.len()
-    );
-    //if cfg!(debug_assertions) {
-    //    // append first 10 characters of the text to the filename ( replace space with no-space)
-    //    let first_10 = &text[0..10]
-    //        .replace(" ", "")
-    //        .replace(":", "_")
-    //        .replace("?", "_")
-    //        .replace("\\", "_")
-    //        .replace("/", "_");
-    //    let filename = format!("overlay_text_{}.png", first_10);
-    //    println!("Saving: {}", filename.clone());
-    //    match text_image_canvas.save(filename.clone()) {
-    //        Ok(_) => println!(
-    //            "Saved: {} - {} bytes",
-    //            filename.clone(),
-    //            text_image_canvas.len()
-    //        ),
-    //        Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
-    //    }
-    //    let filename = format!("overlayed_text_{}.png", first_10);
-    //    match ret.clone().save(filename.clone()) {
-    //        Ok(_) => println!(
-    //            "Saved: {} - {} bytes",
-    //            filename.clone(),
-    //            ret.clone().as_bytes().len()
-    //        ),
-    //        Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
-    //    }
-    //}
-
-    ret
-}
-
 #[tokio::main]
 async fn main() {
     let args = std::env::args().collect::<Vec<String>>();
@@ -663,6 +427,8 @@ async fn main() {
     let mut ocr = create_ocr(&args);
     let ocr_langugages = ocr.init();
     let mut interpreter = create_interpreter(&args);
+
+    let mut ocr_font = OCRImage::new(None);
 
     let h_instance = ptr::null_mut();
     let class_name_cstr = CString::new(class_name).expect("CString creation failed");
@@ -776,7 +542,7 @@ async fn main() {
 
         unsafe {
             match TOGGLE_STATE {
-                ToggleState::Free => capture_and_magnify(hwnd, cursor),
+                ToggleState::Free => capture_and_scale(hwnd, cursor),
                 ToggleState::MoveWindow => {
                     // move the window to the cursor position (a sticky window)
                     winapi::um::winuser::SetWindowPos(
@@ -790,7 +556,7 @@ async fn main() {
                     );
                     //// invalidate the window so it can redraw the window onto the Desktop/monitor
                     //InvalidateRect(hwnd, ptr::null_mut(), 0);
-                    capture_and_magnify(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
+                    capture_and_scale(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
                 }
                 ToggleState::Capture => {
                     // capture the screen and magnify it
@@ -799,6 +565,7 @@ async fn main() {
                         hwnd,
                         &mut ocr,
                         cursor,
+                        &mut ocr_font,
                         supported_languages.clone().as_str(),
                         &mut interpreter,
                     );
@@ -829,18 +596,15 @@ mod tests {
 
     #[test]
     fn test_text_over_image() {
-        let img_width = 1024;
-        let img_height = 768;
-        let imgbytes = include_bytes!("../../assets/ubunchu01_02.png");
-        let is_valid = ocr_traits::is_valid_png(imgbytes);
+        let mut ocr_image = OCRImage::new(None);
+        ocr_image.load_image("../assets/ubunchu01_02.png").unwrap();
+        let is_valid = ocr_image.is_png();
         println!("Is valid PNG: {}", is_valid);
 
         // and turn those bytes into a DynamicImage
-        println!("Converting bytes to image...");
-        let img: DynamicImage = ocr_traits::to_imageproc_dynamic_image(imgbytes, img_width, img_height);
-
         println!("Overlaying text onto image...");
-        let result_bytes = overlay_text("最近人気のデスクトップ", 0, 0, &img);
+        let result_bytes =
+            ocr_image.overlay_text("最近人気の\nデスクトップな\nリナックスです!", 0, 0);
         // Now you can use `result_bytes` as needed (e.g., send it over the network, etc.)
 
         // save it as a file for visual confirmation
@@ -850,31 +614,25 @@ mod tests {
     #[test]
     fn test_draw_text_mut() {
         // Create a new blank image
-        let mut img = GrayAlphaImage::new(100, 100);
-        let font_data: &[u8] = if cfg!(target_os = "windows") {
-            include_bytes!("..\\..\\assets\\fonts\\kochi-mincho-subst.ttf")
-        } else {
-            include_bytes!("../../assets/fonts/kochi-mincho-subst.ttf")
-        };
+        let mut ocr_image = OCRImage::from(GrayAlphaImage::new(1024, 768));
+        //let mut img: ImageBuffer<image::LumaA<u8>, Vec<u8>> = GrayAlphaImage::new(1024, 768);
+        //let img = ImageBuffer::from(ocr_image.get_image().to_luma8());
+        let mut canvas = ocr_image.get_image().to_luma_alpha8();
 
         // Draw some text onto the image
-        let font: ab_glyph::FontArc = ab_glyph::FontArc::try_from_slice(font_data).unwrap();
         draw_text_mut(
-            &mut img,                  // canvas surface
+            &mut canvas,
             image::LumaA([255, 0x7f]), // font color
             0,                         // font x position
             0,                         // font y position
             24.0,                      // font scale
-            &font,
-            "最近人気のデスクトップなリナックスです!", // text to draw
+            &ocr_image.get_font_bold(),
+            "最近人気の\nデスクトップな\nリナックスです!", // text to draw
         );
 
-        // Convert the image back to raw bytes
-        let result_bytes = img.into_raw();
-        // Now you can use `result_bytes` as needed (e.g., send it over the network, etc.)
-
-        // save it as a file for visual confirmation
-        let img = image::GrayAlphaImage::from_raw(100, 100, result_bytes).unwrap();
+        let img =
+            image::GrayAlphaImage::from_raw(canvas.width(), canvas.height(), canvas.into_raw())
+                .unwrap();
         img.save("test_draw_text_mut.png").unwrap();
     }
 }

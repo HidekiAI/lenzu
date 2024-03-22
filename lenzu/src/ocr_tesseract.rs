@@ -1,6 +1,7 @@
+use crate::image_handling::OCRImage;
 use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use anyhow::Error;
-use rusty_tesseract::image::GenericImageView;
+use image::DynamicImage;    // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
 use rusty_tesseract::Args;
 
 // derive from OcrTrait
@@ -88,7 +89,7 @@ impl OcrTrait for OcrTesseract {
         image_path: &str,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let img = rusty_tesseract::image::open(image_path).unwrap();
-        self.evaluate(&ocr_traits::to_imageproc_dynamic_image(
+        self.evaluate(&OCRImage::to_imageproc_dynamic_image(
             img.as_bytes(),
             img.width(),
             img.height(),
@@ -97,9 +98,9 @@ impl OcrTrait for OcrTesseract {
 
     fn evaluate(
         &self,
-        image: &imageproc::image::DynamicImage,
+        image: &DynamicImage,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
-        let rusty_image = &ocr_traits::to_rusty_tesseract_dynamic_image(
+        let rusty_image = &OCRImage::to_rusty_tesseract_dynamic_image(
             image.as_bytes(),
             image.width(),
             image.height(),
