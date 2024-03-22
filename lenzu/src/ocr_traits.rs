@@ -1,16 +1,111 @@
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
+use imageproc::image::*;
+use rusty_tesseract::image::{GenericImage as _, GenericImageView as _, *};
 use std::{
     collections::HashMap,
     fmt::{self, Display, Formatter},
 };
 
-// because there seems to be mismatch on the types of images, we need to convert the image to the
-pub fn to_imageproc_dynamic_image(image: &[u8]) -> imageproc::image::DynamicImage {
-    imageproc::image::load_from_memory(image).unwrap()
+// some PNG's are not kosher...
+pub fn is_valid_png(image: &[u8]) -> bool {
+    let guess: imageproc::image::ImageFormat =
+    match imageproc::image::guess_format(image) {
+        Ok(format) => format,
+        Err(_) => return false
+    };
+
+    // PNG signature: Check the PNG Header: The first 8 bytes of a valid PNG file should be the
+    // following hexadecimal values: 89 50 4E 47 0D 0A 1A 0A.
+    // These represent the PNG magic number. Verify that your &[u8] array starts with these bytes.
+    let png_signature: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    let has_png_signature = image.len() >= 8 && image[0..8] == png_signature;
+
+    // PNG IHDR
+    let has_png_ihdr = image.len() >= 16 && &image[12..16] == b"IHDR";
+
+    // PNG IEND
+    let has_png_iend = image.len() >= 12 && &image[image.len() - 12..] == b"IEND\xae\x42\x60\x82";
+
+    has_png_signature && image.len() > 8 || (guess == imageproc::image::ImageFormat::Png)
 }
-pub fn to_rusty_tesseract_dynamic_image(image: &[u8]) -> rusty_tesseract::image::DynamicImage {
-    rusty_tesseract::image::load_from_memory(image).unwrap()
+
+// because there seems to be mismatch on the types of images, we need to convert the image to the
+pub fn to_imageproc_dynamic_image(
+    image: &[u8],
+    width: u32,
+    height: u32,
+) -> imageproc::image::DynamicImage {
+    // if the buffer is just raw buffer rather than PNG buffer, we need to load it differently
+    if is_valid_png(image) {
+        let transformed_image = imageproc::image::load_from_memory(image).expect(
+            format!(
+                "\nUnable to load image from memory ({} bytes)!",
+                image.len()
+            )
+            .as_str(),
+        );
+        println!(
+            "to_imageproc_dynamic_image() - Image is {} bytes, ColorType: {:?},  Dimensions: {:?}",
+            image.len(),
+            transformed_image.color(),
+            transformed_image.dimensions()
+        );
+        transformed_image
+    } else {
+        // create a blank image
+        let mut img = imageproc::image::DynamicImage::new_rgba8(width, height);
+        // now update image with buffer data as if the data is a PNG (order by height (row-ordered))
+        for y in 0..height {
+            for x in 0..width {
+                let index = (y * width + x) as usize * 4;
+                let r = image[index];
+                let g = image[index + 1];
+                let b = image[index + 2];
+                let a = image[index + 3];
+                img.put_pixel(x, y, imageproc::image::Rgba([r, g, b, a]));
+            }
+        }
+        img
+    }
+}
+pub fn to_rusty_tesseract_dynamic_image(
+    image: &[u8],
+    width: u32,
+    height: u32,
+) -> rusty_tesseract::image::DynamicImage {
+    if is_valid_png(image) {
+        let transformed_image = rusty_tesseract::image::load_from_memory(image).expect(
+            format!(
+                "\nUnable to load image from memory ({} bytes)!",
+                image.len()
+            )
+            .as_str(),
+        );
+        println!(
+        "to_rusty_tesseract_dynamic_image() - Image is {} bytes, ColorType: {:?},  Dimensions: {:?}",
+        image.len(),
+        transformed_image.color(),
+        transformed_image.dimensions()
+    );
+        transformed_image
+    } else {
+        // create a blank image
+        let mut img = rusty_tesseract::image::DynamicImage::new_rgba8(width, height);
+        // now update image with buffer data as if the data is a PNG (order by height (row-ordered))
+        for y in 0..height {
+            for x in 0..width {
+                let index = (y * width + x) as usize * 4;
+                let r = image[index];
+                let g = image[index + 1];
+                let b = image[index + 2];
+                let a = image[index + 3];
+                let pixel = rusty_tesseract::image::Rgba([r, g, b, a]);
+                img.put_pixel(x, y, pixel);
+            }
+        }
+        img
+    }
 }
 
 pub trait OcrTrait {
