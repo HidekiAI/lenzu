@@ -24,6 +24,7 @@ use imageproc::{
 };
 
 use ab_glyph::FontRef;
+use rusty_tesseract::image::Luma;
 use std::io::Read;
 use std::{cmp::max, ffi::CString, path::Path, ptr, thread::current};
 use winapi::{
@@ -482,11 +483,12 @@ fn overlay_text(
     text: &str,
     textx: i32,
     texty: i32,
-    background_image: &DynamicImage,
+    c_background_image: &DynamicImage,
 ) -> DynamicImage {
+    let mut background_image = c_background_image.clone();
     if text.is_empty() {
         println!("Warning: No text to overlay onto image");
-        return background_image.clone(); // return back the original cloned (for optimization, make sure to pretest text length before calling here, so we won't even need to clone here)
+        return background_image; // return back the original cloned (for optimization, make sure to pretest text length before calling here, so we won't even need to clone here)
     }
 
     let scale = Scale::uniform(2.0 * DEFAULT_FONT_SIZE);
@@ -521,13 +523,35 @@ fn overlay_text(
     let multi_lined_text: Vec<&str> = binding.split("\n").collect();
 
     // Note that imageproc::overlay() only works on same byte depth (i.e. 8-bit, 16-bit, 24-bit, 32-bit, etc.),
-    // so we cannot render text to GrayAlphaImage
-    //let mut text_image_canvas: ImageBuffer<image::LumaA<u8>, Vec<u8>> = GrayAlphaImage::new(
-    //    text.len() as u32 * DEFAULT_FONT_SIZE as u32,
-    //    DEFAULT_FONT_SIZE as u32 * 2,
-    //);
-    let mut text_image_canvas: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::new(text_width_pixels, text_height_pixels);
+    let mut color_type: ColorType = background_image.color();
+
+    // see if we can transform the background_image to  Rgba<u8> IF it is just plain gray scale or other format other than 32-bits
+    // if this is not possible, we'll always just convert to Luma<u8>  (lowest comman denominator) but I'd like to have it as 32-bits
+    // so that I can have the text in RED...
+    if color_type != ColorType::Rgba8 {
+        // convert to Rgba<u8>
+        let (img_width, img_height) = background_image.dimensions().clone();
+        let binding = background_image.into_rgba8().clone();
+        let cloned_bg = binding.as_raw().as_slice();
+        if ocr_traits::is_valid_png(cloned_bg) {
+            println!("overlay_text() - Image is PNG");
+        } else {
+            println!("overlay_text() - Image is NOT PNG");
+        }
+        let rgba_image: DynamicImage =
+            ocr_traits::to_imageproc_dynamic_image(cloned_bg, img_width, img_height);
+        let rgba_image_buffer=  // : ImageBuffer<Rgba<u8>, Vec<u8>> =
+            rgba_image.as_rgba8().unwrap();
+        // now convert it back to DynamicImge
+        let ret = DynamicImage::ImageRgba8(rgba_image_buffer.clone());
+        background_image = ret;
+        color_type = background_image.color();
+    }
+    println!("overlay_text() - ColorType: {:?}", color_type);
+
+    // instantiate ImageBuffer matching same type as background_image via creating a sample pixel matching color_type
+    let p = image::Rgba([0u8, 0, 0, 0]);
+    let mut text_image_canvas = ImageBuffer::from_pixel(text_width_pixels, text_height_pixels, p);
 
     // Load a font (you can replace this with your own font)
     // Create a font (Meiryo or any other suitable Japanese font)
@@ -575,8 +599,10 @@ fn overlay_text(
     }
 
     // overlay the two images.  Bottom (background) image is the original image, and the top (foreground) image is the text
-    let mut overlayed_image: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        background_image.as_rgba8().unwrap().clone();
+    let mut overlayed_image: ImageBuffer<Rgba<u8>, Vec<u8>> = background_image
+        .as_rgba8()
+        .expect("Unable to convert bg-image as rgba8")
+        .clone();
     let overlay_x: i64 = textx as i64 + scale.x as i64;
     let overlay_y: i64 = texty as i64 + scale.y as i64;
     overlay(
@@ -594,34 +620,34 @@ fn overlay_text(
         ret.height(),
         text.len()
     );
-    if cfg!(debug_assertions) {
-        // append first 10 characters of the text to the filename ( replace space with no-space)
-        let first_10 = &text[0..10]
-            .replace(" ", "")
-            .replace(":", "_")
-            .replace("?", "_")
-            .replace("\\", "_")
-            .replace("/", "_");
-        let filename = format!("overlay_text_{}.png", first_10);
-        println!("Saving: {}", filename.clone());
-        match text_image_canvas.save(filename.clone()) {
-            Ok(_) => println!(
-                "Saved: {} - {} bytes",
-                filename.clone(),
-                text_image_canvas.len()
-            ),
-            Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
-        }
-        let filename = format!("overlayed_text_{}.png", first_10);
-        match ret.clone().save(filename.clone()) {
-            Ok(_) => println!(
-                "Saved: {} - {} bytes",
-                filename.clone(),
-                ret.clone().as_bytes().len()
-            ),
-            Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
-        }
-    }
+    //if cfg!(debug_assertions) {
+    //    // append first 10 characters of the text to the filename ( replace space with no-space)
+    //    let first_10 = &text[0..10]
+    //        .replace(" ", "")
+    //        .replace(":", "_")
+    //        .replace("?", "_")
+    //        .replace("\\", "_")
+    //        .replace("/", "_");
+    //    let filename = format!("overlay_text_{}.png", first_10);
+    //    println!("Saving: {}", filename.clone());
+    //    match text_image_canvas.save(filename.clone()) {
+    //        Ok(_) => println!(
+    //            "Saved: {} - {} bytes",
+    //            filename.clone(),
+    //            text_image_canvas.len()
+    //        ),
+    //        Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
+    //    }
+    //    let filename = format!("overlayed_text_{}.png", first_10);
+    //    match ret.clone().save(filename.clone()) {
+    //        Ok(_) => println!(
+    //            "Saved: {} - {} bytes",
+    //            filename.clone(),
+    //            ret.clone().as_bytes().len()
+    //        ),
+    //        Err(e) => println!("Error: Could not save {} - {}", filename.clone(), e),
+    //    }
+    //}
 
     ret
 }
@@ -803,17 +829,22 @@ mod tests {
 
     #[test]
     fn test_text_over_image() {
-        // download image over https
-        let imgbytes = &reqwest::blocking::get(
-            "https://github.com/HidekiAI/lenzu/blob/trunk/assets/ubunchu01_02.png",
-        )
-        .unwrap()
-        .bytes()
-        .unwrap()
-        .to_vec() as &[u8];
-        let img = image::load_from_memory(imgbytes).unwrap();
+        let img_width = 1024;
+        let img_height = 768;
+        let imgbytes = include_bytes!("../../assets/ubunchu01_02.png");
+        let is_valid = ocr_traits::is_valid_png(imgbytes);
+        println!("Is valid PNG: {}", is_valid);
+
+        // and turn those bytes into a DynamicImage
+        println!("Converting bytes to image...");
+        let img: DynamicImage = ocr_traits::to_imageproc_dynamic_image(imgbytes, img_width, img_height);
+
+        println!("Overlaying text onto image...");
         let result_bytes = overlay_text("最近人気のデスクトップ", 0, 0, &img);
         // Now you can use `result_bytes` as needed (e.g., send it over the network, etc.)
+
+        // save it as a file for visual confirmation
+        result_bytes.save("test_text_over_image.png").unwrap();
     }
 
     #[test]

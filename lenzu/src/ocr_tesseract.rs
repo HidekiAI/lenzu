@@ -88,14 +88,22 @@ impl OcrTrait for OcrTesseract {
         image_path: &str,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
         let img = rusty_tesseract::image::open(image_path).unwrap();
-        self.evaluate(&ocr_traits::to_imageproc_dynamic_image(img.as_bytes()))
+        self.evaluate(&ocr_traits::to_imageproc_dynamic_image(
+            img.as_bytes(),
+            img.width(),
+            img.height(),
+        ))
     }
 
     fn evaluate(
         &self,
         image: &imageproc::image::DynamicImage,
     ) -> core::result::Result<ocr_traits::OcrTraitResult, Error> {
-        let rusty_image = &ocr_traits::to_rusty_tesseract_dynamic_image(image.as_bytes());
+        let rusty_image = &ocr_traits::to_rusty_tesseract_dynamic_image(
+            image.as_bytes(),
+            image.width(),
+            image.height(),
+        );
         let supported_lang = rusty_tesseract::get_tesseract_langs().unwrap().join("+");
         // Default OEM=3 (based on what is available)
         // For Manga, PSM should be 6 in gener
