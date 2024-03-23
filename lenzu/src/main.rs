@@ -29,6 +29,7 @@ use imageproc::{
 
 use ab_glyph::FontRef;
 use rusty_tesseract::image::Luma;
+use winapi::um::winuser::InvalidateRect;
 use std::io::Read;
 use std::{cmp::max, ffi::CString, path::Path, ptr, thread::current};
 use winapi::{
@@ -222,9 +223,8 @@ fn from_image_to_window(
             SRCCOPY,
         );
 
-        //    EndPaint(hwnd, &repaint_area);
-        //    InvalidateRect(hwnd, ptr::null_mut(), 0); // mark for refresh/update
-        //    SelectObject(destination_dc, destination_buffer);
+        //EndPaint(hwnd, &repaint_area);
+        InvalidateRect(application_window_handle, ptr::null_mut(), 0); // mark for refresh/update
         // Clean up: Select the old bitmap back into the memory DC
         SelectObject(hdc_mem, hbitmap_old);
     }
