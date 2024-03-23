@@ -2,7 +2,7 @@
     resolver = "2"
     members = [
         "lenzu",
-        "windows-rs/ocr"
+        "prototypes/windows-rs/ocr"
     ]
 
 
