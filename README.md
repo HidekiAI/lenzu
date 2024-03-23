@@ -290,6 +290,8 @@ First, some sample Debug output texts:
 - rects: rectangle coordinates grouped by line index
 - final line: kakasi result (to hiragana) - this version is still prototype, so using the limited kakasi that only can convert to either romaji or hiragana.
 
+![running demo](assets/demo.gif)
+
 ## Other Thoughts
 
 All in all, I prefer things to be usable offline (mainly for performance) as long as it works 80% of the time.  If (in the future) if a translator feature was needed, for offline mode, ideally all one has to do is use the jisho library such as jdict used by kakasi to lookup (or any other Japanese-to-<your_language> dictionary) and be done (do minimal).
