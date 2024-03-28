@@ -8,11 +8,13 @@ Again, the key differences is that it is an OCR (optical chracter recognition) f
 
 Target platforms are Linux (Debian) and Windows (MinGW64).  Not really relevant to list it here since all you need to do is look at my Cargo.toml but just in case:
 
-- kakasi (I believe rust version is self-contained, so no need to install executable version) - note that rust wrapper for [kaksi](https://crates.io/crates/kakasi) is VERY LIMITED
+- kakasi - I call via process so just install the executable.  On Linux, that would be simple as `$ apt install kakasi kakasidict` (and possibly `libkaksi`), but for Windows, you'll have to hand-compile/build it yourself.  I've created a version that will [compile under MinGW64](https://github.com/HidekiAI/kakasi).
 - tesseract (rusty-tesseract expects tesseract-ocr executable and it's trained-data pre-installed)
 - leptonica (the MinGW pacman version statically links leptonica it seems, so you won't find MinGW libs for this one, you'll have to hand-compile using MinGW gcc)
 - windows-rs (features: Media_Ocr, Globalization) - also want to make sure to install (in Windows Settings) for Japanese language
 - winit
+
+There is a (fake) rust crate version of [kaksi](https://crates.io/crates/kakasi) is VERY LIMITED (it does not have `-J`, `-H`, `-K`, or `-f`, and it assumes UTF-8 only), this one at least will run on both Linux and Windows though, so if all fails, perhaps it may be good to try this one instead.
 
 ## Tesseract versus Windows OCR
 
@@ -170,7 +172,7 @@ Lastly, the most attractive (ease of library usage, documentations, free/access,
 
 Somebody on reddit mentioned (replied to me) that Apple also has descent accuracies but you'd have to download the language seprately and it is proprietary (similar to Windows);  These are commonly due to the commercial operating system companies wanting to make sure the target country has language support.  For Windows for example, if you want Japanese support in which your installation was from non-Japanese installer version, you will have to have the desktop settings system download the Japanese language supprts from Microsoft (see for example [TryCreateFromUserProfileLanguages()](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr.ocrengine.trycreatefromuserprofilelanguages) method) in which if the target [Language](https://learn.microsoft.com/en-us/uwp/api/windows.globalization.language) is not installed, it will not be able to OCR successfully.  And as mentioned, unfortunately, it is propritary to the operating systems.  And in general, these are somewhat tied mainly IMHO (this is just an opinion) because it needs to support accessibilities for screen-readers (TTS) for vision-impared.  As for Android, you're supposed to install and use Google Lens, which once you start using it, no other competition (free or paid) will come close!
 
-I'm sure Linux Desktop has TTS accessibilities which does screen-reader, but I've never been able to successfully get [mecab](https://taku910.github.io/mecab/) or Orca (yes, I like Gnome) to work well in harmony.  There are some excellent web-based TTS which even will flavor the voice according to your choices, but that's actually non-OCR topic, mainly because these are post-OCR-processed applications (they expect actual TEXT, after image has been optically recognized and converted to text).  And lastly (outside this topic from OCR) most screen-readers for vision-impared do NOT OCR (analyze/text-recognize images), they usally only read texts (UTF-8, JIS, etc), which is a different topic (see mecab, and other libraries which will analyze neighboring texts and determine how to pronounce it (phonetically) - for my purpose, I use [kakasi](http://kakasi.namazu.org/index.html.ja) which does neighbor analysis based on dictionary/jisho (basically, jisho already have "words" of 2 or more sequential kanji in pronounciation via hiragana); but enough on non-OCR topic...
+I'm sure Linux Desktop has TTS accessibilities which does screen-reader, but I've never been able to successfully get [mecab](https://taku910.github.io/mecab/) or Orca (yes, I like Gnome) to work well in harmony.  There are some excellent web-based TTS which even will flavor the voice according to your choices, but that's actually non-OCR topic, mainly because these are post-OCR-processed applications (they expect actual TEXT, after image has been optically recognized and converted to text).  And lastly (outside this topic from OCR) most screen-readers for vision-impared do NOT OCR (analyze/text-recognize images), they usally only read texts (UTF-8, JIS, etc), which is a different topic (see mecab, and other libraries which will analyze neighboring texts and determine how to pronounce it (phonetically) - for my purpose, I use [kakasi](http://kakasi.namazu.org/index.html.ja) which does neighbor analysis based on dictionary/jisho (basically, jisho/dict already have "words" of 2 or more sequential kanji in pronounciation via hiragana); but enough on non-OCR topic...
 
 In the end, for now, I've given up on other platforms and concentrating strictly on Windows using Microsoft's Windows.Microsoft.Media.Ocr library, since I just want offline OCR (that's the key, "offline OCR").
 
@@ -288,7 +290,7 @@ First, some sample Debug output texts:
 - text: the raw text block captured by OcrEngine
 - lines: OcrEngine breaking it down into per column (notice that it's correctly ordered from top-to-bottom-right-to-left)
 - rects: rectangle coordinates grouped by line index
-- final line: kakasi result (to hiragana) - this version is still prototype, so using the limited kakasi that only can convert to either romaji or hiragana.
+- final line: kakasi result (to hiragana - I used the fake rust crate version) - this version is still prototype, so using the limited kakasi that only can convert to either romaji or hiragana.
 
 ![running demo](assets/demo.gif)
 
@@ -322,7 +324,7 @@ Going online also means few things:
 - Have other features like Rikaikun/chan and/or Yomitan to have it translate and dictionary/jisho lookup to native languages (not just English)
 - I've done my best to not hard-code the OCR modules, so that whatever languages are installed (i.e. for Windows Media OCR, it's based on Desktop Profile Settings, on Tesseract (Linux and Windows), that's commonly based on what you install via package managers and doing `tesseract --list-langs`) so that when it captures the image and passes down to `evaluate()` method (traits), it will just return text/string that the engine has detected; but due to my current goals are mainly for manga and graphics-novels (note that light novels are already in TEXT, hence you only need some browser-extensions), there may be places that makes hard assumptions - i.e. I'm passing the text to `kakasi` to convert kanji to hiragana without checking whether the text is in fact Japanese.
 - I'm not an U.I. expert, not do I have the keenness of these experts, hence my U.I. just lacks the quality, and will need revisiting when I have time
-- drop usage of [rust kakasi](https://crates.io/crates/kakasi) and just write my own, since the version right now on crates.io is just calling CLI version, and I really need the XML (or other) output that has box/rectangle coordinates to match the Windows Media OcrEngine output.
+- drop usage of (fake) [rust kakasi](https://crates.io/crates/kakasi) and use the real version
 
 ## Post mortem
 
@@ -348,7 +350,7 @@ Although I seem to sound like tesseract is unreliable, it's the reverse.  I am t
     りな っくす で す !
     ```
 
-Note that I'm using rust-cargo version of [kakasi](https://crates.io/crates/kakasi), hence the options is limited to `-k` - on real version, usually you want something like `-JH` like so:
+Note that I'm using rust-cargo version of kakasi, hence the options is limited to `-k` - on real version, usually you want something like `-JH` like so:
 
     ```bash
     # Linux (Debian) version:
@@ -417,3 +419,12 @@ Perhaps the M.L. will learn that text are commonly grouped via text-bubbles and 
 But in any cases, none of that needs to be of concern, because (again) the folks at manga109.org did all that hard work for us, and what A.I. needs to care about is, by looking at the entire page of images, it needs to just learn that at coorindates (X1, Y1) as upper left corner of the rectangle and (X2, Y2) as bottom right, there exists a text of "ABC".  It does not (and should not) care what "ABC" means, nor care whether it is vertical or horizontal.  All it knows is that if they encounter a rectangle with this pattern, it means what the annotation says.  And more and more samples you give it, gradually it learns that box-pattern-A has similar characters as box-pattern-B, and according to the annotation, that sub-pattern indicates the (character) image that looks like "X"; and then, it finds sub-pattern of character that looks like "Y", and then "Z"...  but then, it finds that at times, when sub-pattern character "X" is next to (left of) "Y", it differs from "X" is below "Y".  And it learns the pattern of horizontal and vertical...  It also learns that annotations indicates that it is to evaluate from right-to-left but also at most times, top-to-bottom, and so on...  If anybody has a [Jupyter Notebook](https://jupyter.org/) for this using [TensorFlow](https://www.tensorflow.org/), please share with me :smile:
 
 In any case, as for manga109.org, images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors for permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!  Even if they do not say to credit them, do credit them, the labor they put in is very significant!
+
+
+## Build/Compile Notes
+
+At the moment, because this project is just a prototype using Windows Media OCR, whereever I mention Linux (or Debian), you can most likely ignore me.  And as for Windows, I'm biased towards MinGW (actually, it's [MSYS](https://www.msys2.org/)) maianly because it will match [GitForWindows](https://gitforwindows.org/), as well as having the package manager [pacman](https://www.msys2.org/docs/updating/) to install desired packages.
+
+- MinGW: Do NOT use `clang64` build tools and libs, use the `mingw64` (this is also for external project kakasi), this is mainly because other crates uses (probably) mingw64.  You'll know when/if you get linker errors...  I personally think `ucrt64` is useless, so don't bother with that as well.
+- If you're on Linux, just install [kakasi](https://packages.debian.org/stable/kakasi) from your favorite distro, be kind to yourself...
+- 

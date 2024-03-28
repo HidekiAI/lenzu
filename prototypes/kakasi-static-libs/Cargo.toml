@@ -1,0 +1,13 @@
+[package]
+name = "kakasi-static-libs"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+bindgen = "0.69.4"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+
