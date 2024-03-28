@@ -10,12 +10,10 @@ mod ocr_winmedia;
 use crate::image_handling::OCRImage;
 //use crate::interpreter_traits::InterpreterTrait;
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult};
-use crate::ocr_traits::OcrTrait;
+use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 
 use image::DynamicImage; // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
 use imageproc::drawing::text_size;
-// NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
-use rusttype::{point, Font, PositionedGlyph, Scale, ScaledGlyph};
 
 use cursor_data::CursorData;
 // NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
