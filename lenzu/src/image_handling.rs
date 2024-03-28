@@ -1,8 +1,8 @@
+use ab_glyph::{Font, FontArc, PxScale, PxScaleFont, ScaleFont};
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
 use image::{imageops::overlay, DynamicImage, GrayImage, ImageBuffer, RgbImage, Rgba, *};
 use imageproc::drawing::{draw_text_mut, text_size};
-use rusttype::{Font, Scale};
 use rusty_tesseract::image::{GenericImage as _, GenericImageView as _};
 use std::{
     collections::HashMap,
@@ -197,21 +197,22 @@ impl From<image::DynamicImage> for OCRImage {
 //    }
 //}
 
-impl From<rusty_tesseract::image::DynamicImage> for OCRImage {
-    fn from(img: rusty_tesseract::image::DynamicImage) -> Self {
-        let mut buffer = Vec::with_capacity(img.as_bytes().len());
-        img.as_bytes()
-            .read_to_end(&mut buffer)
-            .expect("Error reading image bytes");
-        let img =
-            image::load_from_memory(buffer.as_slice()).expect("Error loading image from memory");
-        OCRImage {
-            dynamic_image: Some(img),
-            // initialize other fields as needed
-            ..OCRImage::new(None)
-        }
-    }
-}
+// as of current, rusty_tesseract version if DynamicImage is the same as image::DynamicImage
+//impl From<rusty_tesseract::image::DynamicImage> for OCRImage {
+//    fn from(img: rusty_tesseract::image::DynamicImage) -> Self {
+//        let mut buffer = Vec::with_capacity(img.as_bytes().len());
+//        img.as_bytes()
+//            .read_to_end(&mut buffer)
+//            .expect("Error reading image bytes");
+//        let img =
+//            image::load_from_memory(buffer.as_slice()).expect("Error loading image from memory");
+//        OCRImage {
+//            dynamic_image: Some(img),
+//            // initialize other fields as needed
+//            ..OCRImage::new(None)
+//        }
+//    }
+//}
 
 impl OCRImage {
     pub fn get_image_path(&self) -> &str {
@@ -407,9 +408,7 @@ impl OCRImage {
 
     pub fn get_image_bytes(&self) -> &[u8] {
         match &self.dynamic_image {
-            Some(img) => {
-                img.as_bytes()
-            }
+            Some(img) => img.as_bytes(),
             None => {
                 // return empty array
                 &[]
@@ -430,7 +429,7 @@ impl OCRImage {
             return background_image; // return back the original cloned (for optimization, make sure to pretest text length before calling here, so we won't even need to clone here)
         }
 
-        let scale = Scale::uniform(DEFAULT_FONT_SIZE);
+        let scale = PxScale::from(DEFAULT_FONT_SIZE);
         println!("overlay_text() - Scale: {:?}", scale);
 
         // first, we need to determine how wide the text is, and if it is wider than the image,
@@ -516,10 +515,10 @@ impl OCRImage {
         // render text on the text_image_canvas
         println!(
             "Width: {} (WinX:{}, pixels:{})\nHeight: {} (WinY:{}, pixels:{})\n{:?}\n\n",
-            text_width, 
+            text_width,
             background_image.width(),
             text_height_pixels,
-            text_height, 
+            text_height,
             background_image.height(),
             text_width_pixels,
             multi_lined_text,

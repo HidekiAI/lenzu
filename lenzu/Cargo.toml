@@ -17,15 +17,12 @@ rusty-tesseract = "1.1.9" # depends on thiserror and image
 anyhow = "1.0.80"
 reqwest = { version = "0.12.0", features = ["json", "gzip", "blocking"] }
 
-kakasi = "0.1.0" # depends on phf
-
+ab_glyph = "0.2.23" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
 
 winit = { version = "^0.29", features = ["mint", "wayland", "x11"] }
 
 futures = "0.3.30"                                                # commonly fails on 'futures-immpl'
 tokio = { version = "1.36.0", features = ["full", "time", "fs"] }
-rusttype = "0.9.3"
-ab_glyph = "0.2.23"
 
 # Until prototype is done, we'll allow Linux specific code
 [target.'cfg(linux)'.dependencies]

@@ -1,6 +1,5 @@
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult}; // so odd that unless I'd  import it in main.rs, this will not be recognized, but once it is recognized, you can comment it in main.rs
 use anyhow::{Error, Ok};
-use kakasi;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
@@ -40,33 +39,21 @@ impl InterpreterJa {
         //      さいきんにんきの\nデスクトップな\nリナックスです!
         //      $ kakasi -JH  -i utf8 -o utf8 -f <<< "最近人気の\nデスクトップな\nリナックスです!"
         //      最近[さいきん]人気[にんき]の\nデスクトップな\nリナックスです!
-        let mut kakasi_cmd = if cfg!(target_os = "windows") {
-            Command::new("..\\..\\kakasi\\bin\\kakasi.exe")
-                .arg("-JH")
-                .arg("-i")
-                .arg("utf8")
-                .arg("-o")
-                .arg("utf8")
-                .arg("-f")
-                .stdin(Stdio::piped()) // Set up stdin for input
-                .stdout(Stdio::piped()) // Set up stdout for capturing
-                .stderr(Stdio::piped()) // Set up stderr for capturing
-                .spawn()
-                .expect("Failed to start kakasi process")
-        } else {
+        // NOTE: No need to set env vars for DICTS if you pass it as the last parameters to the command
+        // Assumes that on both Linux and Windows, kakasi is in the PATH and the DICTS are in the default location
+        let mut kakasi_cmd = 
             Command::new("kakasi")
                 .arg("-JH")
+                .arg("-f")
                 .arg("-i")
                 .arg("utf8")
                 .arg("-o")
                 .arg("utf8")
-                .arg("-f")
                 .stdin(Stdio::piped()) // Set up stdin for input
                 .stdout(Stdio::piped()) // Set up stdout for capturing
                 .stderr(Stdio::piped()) // Set up stderr for capturing
                 .spawn()
-                .expect("Failed to start kakasi process")
-        };
+                .expect("Failed to start kakasi process");
 
         // Write your input data to the stdin stream
         if let Some(stdin) = kakasi_cmd.stdin.as_mut() {
