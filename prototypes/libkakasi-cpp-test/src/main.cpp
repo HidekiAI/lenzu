@@ -8,46 +8,46 @@
 
 // Include libkakasi header
 
-
-extern "C" {
+extern "C"
+{
 #include "libkakasi.h"
-
 }
 
-int main() {
+int main()
+{
 #ifdef USE_DLL
+#ifdef _WIN32
     // Load libkakasi dynamically (Windows-specific)
-    #ifdef _WIN32
     HMODULE hKakasiDLL = LoadLibrary("C:\\kakasi\\bin");
-    int (__cdecl *kakasi_getopt_argv)(int, char**) = (int (__cdecl *)(int, char**))GetProcAddress(hKakasiDLL, "kakasi_getopt_argv");
-    char* (__cdecl *kakasi_do)(const char*) = (char* (__cdecl *)(const char*))GetProcAddress(hKakasiDLL, "kakasi_do");
-    int (__cdecl *kakasi_free)(char *p) = (int (__cdecl *)(char *p))GetProcAddress(hKakasiDLL, "kakasi_free");
-    #endif
+    int(__cdecl * kakasi_getopt_argv)(int, char **) = (int(__cdecl *)(int, char **))GetProcAddress(hKakasiDLL, "kakasi_getopt_argv");
+    char *(__cdecl * kakasi_do)(const char *) = (char *(__cdecl *)(const char *))GetProcAddress(hKakasiDLL, "kakasi_do");
+    int(__cdecl * kakasi_free)(char *p) = (int(__cdecl *)(char *p))GetProcAddress(hKakasiDLL, "kakasi_free");
+#endif
 #endif
     // Set dictionary paths (platform-independent)
-    char* itaijidictpath = nullptr;
-    char* kanwadictpath = nullptr;
+    char *itaijidictpath = nullptr;
+    char *kanwadictpath = nullptr;
 
-    #ifdef _WIN32
+#ifdef _WIN32
     // Windows-specific paths
-    itaijidictpath = "C:\\kakasi\\share\\kakasi\\itaijidict";
-    kanwadictpath = "C:\\kakasi\\share\\kakasi\\kanwadict";
-    #else
+    itaijidictpath = "..\\..\\assets\\itaijidict";
+    kanwadictpath = "..\\..\\assets\\kanwadict";
+#else
     // Linux-specific paths
     itaijidictpath = "/usr/share/kakasi/itaijidict";
     kanwadictpath = "/usr/share/kakasi/kanwadict";
-    #endif
+#endif
 
     // Set environment variables
-    //putenv(("ITAIJIDICTPATH=" + std::string(itaijidictpath)).c_str());
-    //putenv(("KANWADICTPATH=" + std::string(kanwadictpath)).c_str());
+    // putenv(("ITAIJIDICTPATH=" + std::string(itaijidictpath)).c_str());
+    // putenv(("KANWADICTPATH=" + std::string(kanwadictpath)).c_str());
 
     // Command-line arguments for kakasi
-    char* argv[] = {"kakasi", "-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath};
+    char *argv[] = {"kakasi", "-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath};
     kakasi_getopt_argv(3, argv);
 
     // kakasi -JH -f -i utf-8 -o utf-8 path_to_dict1 path_to_dict2 <<< "最近人気の デスクトップな リナックスです!"
-    char* converted_string_buffer = kakasi_do("最近人気の デスクトップな リナックスです!");
+    char *converted_string_buffer = kakasi_do("最近人気の デスクトップな リナックスです!");
     printf("%s\n", converted_string_buffer);
 
     // Clean up
@@ -55,10 +55,9 @@ int main() {
 
     // Clean up and unload the library (Windows-specific)
 #ifdef USE_DLL
-    #ifdef _WIN32
+#ifdef _WIN32
     FreeLibrary(hKakasiDLL);
-    #endif
+#endif
 #endif
     return 0;
 }
-
