@@ -37,4 +37,4 @@ endif()
 set(CMAKE_EXE_LINKER_FLAGS "-v --verbose")
 
 # usage of `-l:libfoo.a` (basically, the ":") will bias search for static library over dll/so shared
-target_link_libraries(kakasi_cpp_test_exec PRIVATE :libkakasi.a)
+target_link_libraries(kakasi_cpp_test_exec PRIVATE :libkakasi.a iconv)
