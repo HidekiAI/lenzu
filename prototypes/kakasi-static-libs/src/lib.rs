@@ -6,7 +6,7 @@ mod bindings;
 // from a library (bindgen to libkakasi), the result should be the same.
 #[cfg(test)]
 mod tests {
-    use super::bindings::*;
+    use super::bindings::*; // all the extern "C" in here...
 
     #[test]
     fn test_kakasi() {
