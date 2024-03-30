@@ -1,5 +1,5 @@
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult}; // so odd that unless I'd  import it in main.rs, this will not be recognized, but once it is recognized, you can comment it in main.rs
-use anyhow::{Error, Ok};
+use anyhow::Error;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
@@ -18,11 +18,14 @@ impl InterpreterTrait for InterpreterJa {
     }
 
     fn convert(&self, text: &str) -> Result<InterpreterTraitResult, Error> {
-        let result = kakasi::convert(text);
-        let lines = vec![result.hiragana.split('\n').map(|s| s.to_string()).collect()];
-        let text = result.hiragana;
-        Ok(InterpreterTraitResult { text, lines })
-        //self.call_shell_kakasi(text)
+        let result = self.call_shell_kakasi(text);
+        match result {
+            Ok(conv_result) => {
+                println!("result:\n{}\n{:?}", conv_result.text, conv_result.lines);
+                Ok(conv_result)
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -31,7 +34,7 @@ impl InterpreterJa {
         InterpreterJa {}
     }
 
-    pub fn call_shell_kakasi(&self, text: &str) -> Result<InterpreterTraitResult, Error> {
+    pub fn call_shell_kakasi(&self, text: &str) -> Result<InterpreterTraitResult, anyhow::Error> {
         // Create a Command for the 'kakasi' shell command
         //      SET KANWADICTPATH=C:\kakasi\share\kakasi\kanwadict
         //      SET ITAIJIDICTPATH=C:\kakasi\share\kakasi\itaijidict
@@ -41,19 +44,18 @@ impl InterpreterJa {
         //      最近[さいきん]人気[にんき]の\nデスクトップな\nリナックスです!
         // NOTE: No need to set env vars for DICTS if you pass it as the last parameters to the command
         // Assumes that on both Linux and Windows, kakasi is in the PATH and the DICTS are in the default location
-        let mut kakasi_cmd = 
-            Command::new("kakasi")
-                .arg("-JH")
-                .arg("-f")
-                .arg("-i")
-                .arg("utf8")
-                .arg("-o")
-                .arg("utf8")
-                .stdin(Stdio::piped()) // Set up stdin for input
-                .stdout(Stdio::piped()) // Set up stdout for capturing
-                .stderr(Stdio::piped()) // Set up stderr for capturing
-                .spawn()
-                .expect("Failed to start kakasi process");
+        let mut kakasi_cmd = Command::new("kakasi")
+            .arg("-JH")
+            .arg("-f")
+            .arg("-i")
+            .arg("utf8")
+            .arg("-o")
+            .arg("utf8")
+            .stdin(Stdio::piped()) // Set up stdin for input
+            .stdout(Stdio::piped()) // Set up stdout for capturing
+            .stderr(Stdio::piped()) // Set up stderr for capturing
+            .spawn()
+            .expect("Failed to start kakasi process");
 
         // Write your input data to the stdin stream
         if let Some(stdin) = kakasi_cmd.stdin.as_mut() {
