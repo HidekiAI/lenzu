@@ -1,5 +1,8 @@
 #include <cstdio>
 #include <cstdlib>
+#include <iostream>
+#include <string>
+#include <vector>
 
 // Include Windows-specific headers only if compiling on Windows
 #ifdef _WIN32
@@ -25,33 +28,40 @@ int main()
 #endif
 #endif
     // Set dictionary paths (platform-independent)
-    char *itaijidictpath = nullptr;
-    char *kanwadictpath = nullptr;
-
 #ifdef _WIN32
     // Windows-specific paths
-    itaijidictpath = "..\\..\\assets\\itaijidict";
-    kanwadictpath = "..\\..\\assets\\kanwadict";
+    auto itaijidictpath = "..\\..\\assets\\itaijidict";
+    auto kanwadictpath = "..\\..\\assets\\kanwadict";
 #else
     // Linux-specific paths
-    itaijidictpath = "/usr/share/kakasi/itaijidict";
-    kanwadictpath = "/usr/share/kakasi/kanwadict";
+    auto itaijidictpath = "/usr/share/kakasi/itaijidict";
+    auto kanwadictpath = "/usr/share/kakasi/kanwadict";
 #endif
 
-    // Set environment variables
-    // putenv(("ITAIJIDICTPATH=" + std::string(itaijidictpath)).c_str());
-    // putenv(("KANWADICTPATH=" + std::string(kanwadictpath)).c_str());
-
-    // Command-line arguments for kakasi
-    char *argv[] = {"kakasi", "-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath};
-    kakasi_getopt_argv(3, argv);
+    // Command-line arguments for kakasi - kakasi_getopt_argv() will verify/check if dicts exist (if passed)
+    std::vector<std::string> argv = {"kakasi", "-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath};
+    // cannot do shared_ptr<char> or unique_ptr<char> as kakasi_getopt_argv() expects char ** (C-style array of char pointers)
+    char **argv_c = new char *[argv.size()];    // yes, I'm explicitly declaring type rather than auto here as a reminder that I've allocated memory...
+    for (int i = 0; i < argv.size(); i++)
+    {
+        std::cout << "argv[" << i << "]: " << argv[i] << std::endl;
+        argv_c[i] = new char[128];
+        strncpy_s(argv_c[i], 128, argv[i].c_str(), argv[i].length());
+    }
+    // NOTE: kakasi_getopt_argv() will verify/check if dicts exist (if passed)
+    kakasi_getopt_argv(argv.size(), argv_c);
 
     // kakasi -JH -f -i utf-8 -o utf-8 path_to_dict1 path_to_dict2 <<< "最近人気の デスクトップな リナックスです!"
-    char *converted_string_buffer = kakasi_do("最近人気の デスクトップな リナックスです!");
-    printf("%s\n", converted_string_buffer);
+    auto text_utf8 = std::string("最近人気の デスクトップな リナックスです!");
+    std::cout << "kakasi_do(" << text_utf8 << ") strlen(" << strlen(text_utf8.c_str()) << ") - length=" << text_utf8.length() << " bytes" << std::endl;
+    auto converted_string_buffer = kakasi_do((char *)text_utf8.c_str()); // c_str() will return a pointer to a null-terminated string (C code always expects null-terminators)
+    std::cout << "Result: '" << converted_string_buffer << "'" << std::endl;
 
     // Clean up
+    std::cout << "cleaning up string buffer/pool..." << std::endl;
     kakasi_free(converted_string_buffer);
+    kakasi_close_kanwadict();
+    delete[] argv_c; // probably should delete[] each element of argv_c as well but this is a simple example
 
     // Clean up and unload the library (Windows-specific)
 #ifdef USE_DLL
