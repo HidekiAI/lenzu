@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cstring>  /* for strlen */
 
 // Include Windows-specific headers only if compiling on Windows
 #ifdef _WIN32
@@ -13,6 +14,7 @@
 
 extern "C"
 {
+#include <string.h>     // strncpy
 #include "libkakasi.h"
 }
 
@@ -39,7 +41,6 @@ int main()
 #endif
 
     // Command-line arguments for kakasi - kakasi_getopt_argv() will verify/check if dicts exist (if passed)
-    //std::vector<std::string> argv = {"-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath}; // NOTE: kakasi accepts both "utf8" and "utf-8", but does not like "UTF-8"
     std::vector<std::string> argv = {"-JH", "-f", "-o", "utf-8", itaijidictpath, kanwadictpath}; // NOTE: currently, -i utf-8 causes kakasi_do() to hang IF at least one char is Japanese (actually, any \escaped hex as well).  If it was all ASCII, it won't crash with '-i utf8'
     // cannot do shared_ptr<char> or unique_ptr<char> as kakasi_getopt_argv() expects char ** (C-style array of char pointers)
     char **argv_c = new char *[argv.size()];    // yes, I'm explicitly declaring type rather than auto here as a reminder that I've allocated memory...
@@ -47,7 +48,13 @@ int main()
     {
         std::cout << "argv[" << i << "]: " << argv[i] << std::endl;
         argv_c[i] = new char[128];
+#ifdef _WIN32
+        // strncpy_s only exists on Windows, for Linux, have to use strncpy
         strncpy_s(argv_c[i], 128, argv[i].c_str(), argv[i].length());
+#else
+        strncpy(argv_c[i], argv[i].c_str(), 127);
+        argv_c[i][127] = '\0'; // Ensure null-termination
+#endif
     }
     // NOTE: kakasi_getopt_argv() will verify/check if dicts exist (if passed)
     kakasi_getopt_argv(argv.size(), argv_c);

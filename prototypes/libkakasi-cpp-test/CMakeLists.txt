@@ -41,6 +41,6 @@ else()
     message(FATAL_ERROR "Unsupported operating system: ${CMAKE_SYSTEM_NAME}")
 endif()
 
+target_link_libraries(kakasi_cpp_test_exec PRIVATE ${CMAKE_DL_LIBS})
 set(CMAKE_EXE_LINKER_FLAGS "-v --verbose")
-
 
