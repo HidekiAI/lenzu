@@ -39,7 +39,8 @@ int main()
 #endif
 
     // Command-line arguments for kakasi - kakasi_getopt_argv() will verify/check if dicts exist (if passed)
-    std::vector<std::string> argv = {"kakasi", "-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath};
+    //std::vector<std::string> argv = {"-JH", "-f", "-i", "utf-8", "-o", "utf-8", itaijidictpath, kanwadictpath}; // NOTE: kakasi accepts both "utf8" and "utf-8", but does not like "UTF-8"
+    std::vector<std::string> argv = {"-JH", "-f", "-o", "utf-8", itaijidictpath, kanwadictpath}; // NOTE: currently, -i utf-8 causes kakasi_do() to hang IF at least one char is Japanese (actually, any \escaped hex as well).  If it was all ASCII, it won't crash with '-i utf8'
     // cannot do shared_ptr<char> or unique_ptr<char> as kakasi_getopt_argv() expects char ** (C-style array of char pointers)
     char **argv_c = new char *[argv.size()];    // yes, I'm explicitly declaring type rather than auto here as a reminder that I've allocated memory...
     for (int i = 0; i < argv.size(); i++)
