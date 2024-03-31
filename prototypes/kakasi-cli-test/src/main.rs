@@ -1,21 +1,19 @@
 use anyhow::Error;
 use core::result::Result;
-use std::fmt::{self, Display, Formatter};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::{env, fs, path};
 
 fn main() {
     let result = call_shell_kakasi("最近人気の\nデスクトップな\nリナックスです!").unwrap();
     println!("\n\nResult:\nText:\n{}\n\nLines:\n{}\n", result.text, result.lines.join("\n"));
 }
 
-pub(crate) struct InterpreterTraitResult {
+struct InterpreterTraitResultMock {
     pub text: String,
     pub lines: Vec<String>,
 }
 
-pub fn call_shell_kakasi(text: &str) -> Result<InterpreterTraitResult, Error> {
+pub(crate) fn call_shell_kakasi(text: &str) -> Result<InterpreterTraitResultMock, Error> {
     println!("Running kakasi on text: '{}'", text);
     // Create a Command for the 'kakasi' shell command
     //      SET KANWADICTPATH=C:\kakasi\share\kakasi\kanwadict
@@ -53,11 +51,20 @@ pub fn call_shell_kakasi(text: &str) -> Result<InterpreterTraitResult, Error> {
     let exit_status: std::process::ExitStatus = kakasi_cmd
         .wait()
         .expect("Failed to wait for kakasi process");
+    match exit_status.success() {
+        true => {}
+        false => {
+            return Err(anyhow::anyhow!(
+                "Failed to convert text using kakasi: {}",
+                exit_status
+            ));
+        }
+    }
 
     println!("Process completed, reading stdout and stderr...");
     // Read stdout and stderr
-    let mut stdout_reader = BufReader::new(kakasi_cmd.stdout.expect("Failed to capture stdout"));
-    let mut stderr_reader = BufReader::new(kakasi_cmd.stderr.expect("Failed to capture stderr"));
+    let stdout_reader = BufReader::new(kakasi_cmd.stdout.expect("Failed to capture stdout"));
+    let stderr_reader = BufReader::new(kakasi_cmd.stderr.expect("Failed to capture stderr"));
 
     let stdout_lines = stdout_reader
         .lines()
@@ -74,7 +81,7 @@ pub fn call_shell_kakasi(text: &str) -> Result<InterpreterTraitResult, Error> {
         0 => {
             // no error
             let text = stdout_lines.join("\n");
-            Ok(InterpreterTraitResult {
+            Ok(InterpreterTraitResultMock {
                 text,
                 lines: stdout_lines,
             })
