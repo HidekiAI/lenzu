@@ -69,11 +69,20 @@ impl InterpreterJa {
         let exit_status: std::process::ExitStatus = kakasi_cmd
             .wait()
             .expect("Failed to wait for kakasi process");
+        match exit_status.success() {
+            true => {}
+            false => {
+                return Err(anyhow::anyhow!(
+                    "Failed to convert text using kakasi: {}",
+                    exit_status
+                ));
+            }
+        }
 
         // Read stdout and stderr
-        let mut stdout_reader =
+        let stdout_reader =
             BufReader::new(kakasi_cmd.stdout.expect("Failed to capture stdout"));
-        let mut stderr_reader =
+        let stderr_reader =
             BufReader::new(kakasi_cmd.stderr.expect("Failed to capture stderr"));
 
         let stdout_lines = stdout_reader

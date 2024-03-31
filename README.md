@@ -424,11 +424,10 @@ But in any cases, none of that needs to be of concern, because (again) the folks
 
 In any case, as for manga109.org, images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors for permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!  Even if they do not say to credit them, do credit them, the labor they put in is very significant!
 
-
 ## Build/Compile Notes
 
 At the moment, because this project is just a prototype using Windows Media OCR, whereever I mention Linux (or Debian), you can most likely ignore me.  And as for Windows, I'm biased towards MinGW (actually, it's [MSYS](https://www.msys2.org/)) maianly because it will match [GitForWindows](https://gitforwindows.org/), as well as having the package manager [pacman](https://www.msys2.org/docs/updating/) to install desired packages.
 
 - MinGW: Do NOT use `clang64` build tools and libs, use the `mingw64` (this is also for external project kakasi), this is mainly because other crates uses (probably) mingw64.  You'll know when/if you get linker errors...  I personally think `ucrt64` is useless, so don't bother with that as well.
 - If you're on Linux, just install [kakasi](https://packages.debian.org/stable/kakasi) from your favorite distro, be kind to yourself...
-- 
+-

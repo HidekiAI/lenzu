@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+//use std::collections::HashMap;
 
 // Based off of windows.Media.Ocr crates
 use anyhow::Error;
@@ -7,7 +7,7 @@ use image::{
 };
 //use futures::sink::Buffer;
 // We're using imageproc version of image so that it matches the rest...
-use imageproc::image::{codecs::png::PngEncoder, ColorType, ExtendedColorType, ImageEncoder};
+use imageproc::image::{codecs::png::PngEncoder, ImageEncoder};
 
 use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use tokio::time::{timeout, Duration};
@@ -153,6 +153,7 @@ impl OcrWinMedia {
 
     // NOTE: Paths passed needs to match the path separator of the OS, hence
     // if you pass in for example "media/foo.png" on Windows, it will fail!
+    #[allow(dead_code)]
     async fn evaluate_async_path(
         &self,
         png_paths: &str,
@@ -357,6 +358,7 @@ impl OcrWinMedia {
     // will consume a lot of memory.  I have tried many different methods, but this is the only one that works.
     // when it all comes down to it, it's because the stream is an async stream, and the only way to read from it is to
     // use LoadAsync() and ReadBuffer() combination
+    #[allow(dead_code)]
     async fn copy_stream_to_vec(in_memory_stream: &InMemoryRandomAccessStream) -> Vec<u8> {
         // first, let's make sure we reset the stream back to the head of the buffer
         in_memory_stream
@@ -464,6 +466,7 @@ impl OcrWinMedia {
         ret_buffer_vec
     }
 
+    #[allow(dead_code)]
     async fn dump_stream_to_png(in_memory_stream: &InMemoryRandomAccessStream, filename: &str) {
         println!("\n######################## Dumping to '{}'", filename);
         // first, check if stream has been closed, and if so, panic
@@ -797,8 +800,8 @@ impl OcrWinMedia {
             let rects: Vec<ocr_traits::OcrLine> = Self::to_ocr_lines(&result.Lines().unwrap());
 
             println!("evaluate_async():\n{}", str_block);
-            let x_min = 0;
-            let y_min = 0;
+            let _x_min = 0;
+            let _y_min = 0;
             let trait_result = OcrTraitResult {
                 text: str_block,
                 lines: lines.clone(),
@@ -818,6 +821,7 @@ impl OcrWinMedia {
 
     // NOTE: Paths passed needs to match the path separator of the OS, hence
     // if you pass in for example "media/foo.png" on Windows, it will fail!
+    #[allow(dead_code)]
     async fn test_main_async(&self, png_paths: &str) -> Result<()> {
         let mut arg_image_path = String::new();
         // for windows, replace all occurances of '/' with "\\"
@@ -857,9 +861,10 @@ impl OcrWinMedia {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn test_seek_multiple(&self, png_paths: &str) -> Result<OcrTraitResult> {
         let ret = futures::executor::block_on(
-            self.evaluate_async_path(png_paths.clone(), &self.language),
+            self.evaluate_async_path(png_paths, &self.language),
         );
         // now seek back to 0, and transform to memory stream
         let file_stream = futures::executor::block_on(self.get_filestream(png_paths)).unwrap();
