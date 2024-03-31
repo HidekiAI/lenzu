@@ -1,4 +1,3 @@
-extern crate winapi;
 mod cursor_data;
 mod image_handling;
 mod interpreter_ja;
@@ -7,47 +6,36 @@ mod ocr_gcloud;
 mod ocr_tesseract;
 mod ocr_traits;
 mod ocr_winmedia;
-use crate::image_handling::OCRImage;
-//use crate::interpreter_traits::InterpreterTrait;
-use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult};
-use crate::ocr_traits::OcrTrait; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
+
+//extern crate winapi;
+use crate::image_handling::*;
+use crate::interpreter_traits::*;
+use crate::ocr_traits::*; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
 
 use image::DynamicImage; // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
-use imageproc::drawing::text_size;
 
 use cursor_data::CursorData;
 // NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
-use imageproc::{
-    drawing::draw_text_mut,
-    image::{
-        self, imageops::overlay, load_from_memory, ColorType, GenericImageView, GrayAlphaImage,
-        ImageBuffer, Rgba,
-    },
-};
+use imageproc::image::{self, GenericImageView, ImageBuffer};
 
-use ab_glyph::FontRef;
-use rusty_tesseract::image::Luma;
-use winapi::um::winuser::InvalidateRect;
-use std::io::Read;
-use std::{cmp::max, ffi::CString, path::Path, ptr, thread::current};
+use std::{ffi::CString, ptr};
 use winapi::{
     shared::minwindef::BYTE,
     um::{
-        gl,
         wingdi::{
-            AlphaBlend, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
             GetDIBits, SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
         winuser::{
             CreateWindowExW, DefWindowProcW, DispatchMessageW, GetDC, GetMessageW, GetWindowLongW,
-            PostQuitMessage, RegisterClassW, ReleaseDC, ShowWindow, TranslateMessage,
-            CW_USEDEFAULT, GWL_EXSTYLE, MSG, SW_HIDE, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
-            WS_OVERLAPPEDWINDOW,
+            InvalidateRect, PostQuitMessage, RegisterClassW, ReleaseDC, ShowWindow,
+            TranslateMessage, CW_USEDEFAULT, GWL_EXSTYLE, MSG, SW_SHOW, VK_ESCAPE,
+            VK_SPACE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
         },
     },
 };
 
-const MAGNIFY_SCALE_FACTOR: u32 = 2;
+//const MAGNIFY_SCALE_FACTOR: u32 = 2;
 const TOGGLE_WINDOW_MOVE_KEY: std::ffi::c_int = VK_SPACE;
 const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
@@ -223,7 +211,7 @@ fn from_image_to_window(
 
         //EndPaint(hwnd, &repaint_area);
         InvalidateRect(application_window_handle, ptr::null_mut(), 0); // mark for refresh/update
-        // Clean up: Select the old bitmap back into the memory DC
+                                                                       // Clean up: Select the old bitmap back into the memory DC
         SelectObject(hdc_mem, hbitmap_old);
     }
 }
@@ -586,11 +574,9 @@ mod tests {
     use imageproc::{
         drawing::draw_text_mut,
         image::{
-            self, imageops::overlay, load_from_memory, ColorType, DynamicImage, GenericImageView,
-            GrayAlphaImage, ImageBuffer, Rgba,
+            self, GrayAlphaImage,
         },
     };
-    use rusttype::{point, Font, Scale, ScaledGlyph};
 
     #[test]
     fn test_text_over_image() {
@@ -612,7 +598,7 @@ mod tests {
     #[test]
     fn test_draw_text_mut() {
         // Create a new blank image
-        let mut ocr_image = OCRImage::from(GrayAlphaImage::new(1024, 768));
+        let ocr_image = OCRImage::from(GrayAlphaImage::new(1024, 768));
         //let mut img: ImageBuffer<image::LumaA<u8>, Vec<u8>> = GrayAlphaImage::new(1024, 768);
         //let img = ImageBuffer::from(ocr_image.get_image().to_luma8());
         let mut canvas = ocr_image.get_image().to_luma_alpha8();

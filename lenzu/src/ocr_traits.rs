@@ -1,9 +1,6 @@
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
-use std::{
-    collections::HashMap,
-    fmt::{self, Display, Formatter},
-};
+use std::fmt::{self, Display, Formatter};
 
 pub trait OcrTrait {
     // without 'Sized',  won't be able to Box<dyn OcrTrait>
@@ -48,9 +45,13 @@ impl OcrRect {
             y_max: y_min + height as i32,
         }
     }
+
+    #[allow(dead_code)]
     pub fn width(&self) -> u32 {
         (self.x_max - self.x_min) as u32 // TODO: how do we garaunteed that we will not have a negative width?
     }
+
+    #[allow(dead_code)]
     pub fn height(&self) -> u32 {
         (self.y_max - self.y_min) as u32 // TODO: make sure we do not have a negative height!
     }
@@ -71,6 +72,8 @@ impl OcrWord {
             rect,
         }
     }
+
+    #[allow(dead_code)]
     pub fn from(
         word: String,
         line_index: u16,
@@ -85,24 +88,38 @@ impl OcrWord {
             rect: OcrRect::from(x_min, y_min, width, height),
         }
     }
+
+    #[allow(dead_code)]
     pub fn width(&self) -> u32 {
         self.rect.width()
     }
+
+    #[allow(dead_code)]
     pub fn height(&self) -> u32 {
         self.rect.height()
     }
+
+    #[allow(dead_code)]
     pub fn x_min(&self) -> i32 {
         self.rect.x_min
     }
+
+    #[allow(dead_code)]
     pub fn y_min(&self) -> i32 {
         self.rect.y_min
     }
+
+    #[allow(dead_code)]
     pub fn rect(&self) -> OcrRect {
         self.rect
     }
+
+    #[allow(dead_code)]
     pub fn line_index(&self) -> u16 {
         self.line_index
     }
+
+    #[allow(dead_code)]
     pub fn word(&self) -> String {
         self.word.clone()
     }
@@ -117,30 +134,42 @@ impl OcrLine {
     pub fn new(words: Vec<OcrWord>) -> Self {
         OcrLine { line: words }
     }
+
+    #[allow(dead_code)]
     pub fn add_word(&mut self, word: OcrWord) {
         self.line.push(word);
     }
+
+    #[allow(dead_code)]
     pub fn words(&self) -> Vec<OcrWord> {
         self.line.clone()
     }
+
+    #[allow(dead_code)]
     pub fn width(&self) -> u32 {
         // get the largest/max width of the words in the line
         self.line
             .iter()
             .fold(0, |acc, word| std::cmp::max(acc, word.width()))
     }
+
+    #[allow(dead_code)]
     pub fn height(&self) -> u32 {
         // max height of the words in the line
         self.line
             .iter()
             .fold(0, |acc, word| std::cmp::max(acc, word.height()))
     }
+
+    #[allow(dead_code)]
     pub fn x_min(&self) -> i32 {
         // lowest/mimumum x_min of the words in the line
         self.line
             .iter()
             .fold(std::i32::MAX, |acc, word| std::cmp::min(acc, word.x_min()))
     }
+
+    #[allow(dead_code)]
     pub fn y_min(&self) -> i32 {
         self.line
             .iter()
@@ -169,6 +198,7 @@ impl Display for OcrTraitResult {
 }
 
 impl OcrTraitResult {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         // NOTE: There will be no default constructor because we want to make sure that we have the necessary data
         //panic!("OcrTraitResult::new() should not be called");

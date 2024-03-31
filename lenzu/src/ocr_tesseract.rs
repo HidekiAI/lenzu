@@ -10,6 +10,7 @@ pub struct OcrTesseract {
 }
 
 impl OcrTesseract {
+    #[allow(dead_code)]
     pub fn new_with_args(ocr_args: rusty_tesseract::Args) -> Self {
         OcrTesseract { ocr_args }
     }
@@ -127,8 +128,6 @@ impl OcrTrait for OcrTesseract {
         let total_time = start_ocr.elapsed().as_millis();
         println!("OCR Result ({} mSec): '{:?}'", total_time, ocr_result);
         let ocr_str = ocr_result.unwrap();
-        let x_min = 0;
-        let y_min = 0;
         let lines = vec![ocr_str.split("\n").collect()];
         let rect_lines: Vec<ocr_traits::OcrLine> = Self::to_ocr_lines(lines.clone());
         let result = OcrTraitResult {

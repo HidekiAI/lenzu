@@ -1,14 +1,10 @@
-use ab_glyph::{Font, FontArc, PxScale, PxScaleFont, ScaleFont};
+use ab_glyph::PxScale;
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
-use image::{imageops::overlay, DynamicImage, GrayImage, ImageBuffer, RgbImage, Rgba, *};
+use image::{imageops::overlay, DynamicImage, ImageBuffer, Rgba, *};
 use imageproc::drawing::{draw_text_mut, text_size};
-use rusty_tesseract::image::{GenericImage as _, GenericImageView as _};
-use std::{
-    collections::HashMap,
-    fmt::{self, Display, Formatter},
-    io::{Read, Seek},
-};
+//use rusty_tesseract::image::{GenericImage as _, GenericImageView as _};
+use std::fmt::{self, Display, Formatter};
 
 // The BOLD font is about 32x32 pixels
 const DEFAULT_FONT_SIZE: f32 = 32.0;
@@ -30,6 +26,7 @@ const FONT_DATA_BOLD: &[u8] = if cfg!(target_os = "windows") {
 pub struct OCRImage {
     image_path: String, // canonicalized path to the image (differs on format based on platform, use std::fs::canonicalize() to get it)
     dynamic_image: Option<DynamicImage>, // could be BMP, Png, Jpeg, etc.
+    #[allow(dead_code)]
     ttf_font: ab_glyph::FontArc, // use include_bytes!("path/to/font.ttf") to load font
     ttf_font_bold: ab_glyph::FontArc, // use include_bytes!("path/to/font.ttf") to load font
 }
@@ -215,15 +212,19 @@ impl From<image::DynamicImage> for OCRImage {
 //}
 
 impl OCRImage {
+    #[allow(dead_code)]
     pub fn get_image_path(&self) -> &str {
         &self.image_path
     }
+    #[allow(dead_code)]
     pub fn get_dynamic_image(&self) -> &DynamicImage {
         self.dynamic_image.as_ref().unwrap()
     }
+    #[allow(dead_code)]
     pub fn get_font(&self) -> &ab_glyph::FontArc {
         &self.ttf_font
     }
+    #[allow(dead_code)]
     pub fn get_font_bold(&self) -> &ab_glyph::FontArc {
         &self.ttf_font_bold
     }
@@ -253,12 +254,14 @@ impl OCRImage {
         }
     }
 
+    #[allow(dead_code)]
     pub fn load_image(&mut self, path: &str) -> Result<(), Error> {
         let img = image::open(path).expect(format!("Error loading image file '{}'", path).as_str());
         self.dynamic_image = Some(img);
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_png(&self) -> bool {
         match &self.dynamic_image {
             Some(img) => Self::is_valid_png(img.as_bytes()),
@@ -285,7 +288,8 @@ impl OCRImage {
         let has_png_iend =
             image.len() >= 12 && &image[image.len() - 12..] == b"IEND\xae\x42\x60\x82";
 
-        has_png_signature && image.len() > 8 || (guess == imageproc::image::ImageFormat::Png)
+        has_png_signature && has_png_iend && has_png_ihdr && image.len() > 8
+            || (guess == imageproc::image::ImageFormat::Png)
     }
 
     // because there seems to be mismatch on the types of images, we need to convert the image to the
@@ -368,6 +372,7 @@ impl OCRImage {
     }
 
     // convert from raw byte-array to DynamicImage
+    #[allow(dead_code)]
     pub fn from_raw_bytes(&mut self, raw_image: RawBitmapImage) -> DynamicImage {
         let x = OCRImage::from(raw_image);
         self.dynamic_image = x.dynamic_image;
@@ -375,6 +380,7 @@ impl OCRImage {
     }
 
     // convert from byte-array to DynamicImage of assumed type
+    #[allow(dead_code)]
     pub fn from_png_bytes(&mut self, image: RawPngImage) -> DynamicImage {
         let my_image = OCRImage::from(image);
         self.dynamic_image = my_image.dynamic_image;
@@ -382,6 +388,7 @@ impl OCRImage {
     }
 
     // saves the dynamic image to a file (not the font)
+    #[allow(dead_code)]
     pub fn save(&self, path: &str) {
         if let Some(img) = &self.dynamic_image {
             img.save(path)
@@ -402,10 +409,12 @@ impl OCRImage {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_possible_image(&self) -> Option<&DynamicImage> {
         self.dynamic_image.as_ref()
     }
 
+    #[allow(dead_code)]
     pub fn get_image_bytes(&self) -> &[u8] {
         match &self.dynamic_image {
             Some(img) => img.as_bytes(),
@@ -543,7 +552,7 @@ impl OCRImage {
                 &self.ttf_font_bold,
                 &line, // text to render (will come out as blank if the UTF8 is not supported by ttf)
             );
-            let (ts_width, ts_height) = text_size(scale.y, &self.ttf_font_bold, line); // Adjust y position for the next line
+            let (_ts_width, ts_height) = text_size(scale.y, &self.ttf_font_bold, line); // Adjust y position for the next line
             line_y += ts_height;
         }
 
