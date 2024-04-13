@@ -1,5 +1,6 @@
 pub mod cursor_data;
-pub mod interpreter_ja;
+pub mod interpreter_ja_kakasi;
+pub mod interpreter_ja_mecab;
 pub mod interpreter_traits;
 pub mod ocr_gcloud;
 pub mod ocr_tesseract;

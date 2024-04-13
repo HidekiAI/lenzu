@@ -1,6 +1,9 @@
 use winapi::{
     shared::windef::RECT,
-    um::winuser::{GetCursorPos, GetMonitorInfoW, GetWindowRect, MonitorFromPoint, PostQuitMessage, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+    um::winuser::{
+        GetCursorPos, GetMonitorInfoW, GetWindowRect, MonitorFromPoint, PostQuitMessage,
+        MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    },
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -99,14 +102,14 @@ impl CursorData {
         self.window_x = self.x - (self.window_width as i32 / 2) as i32;
         self.window_y = self.y - (self.window_height as i32 / 2) as i32;
     }
-    
+
     pub(crate) fn window_width(&self) -> u32 {
         self.window_width
     }
     pub(crate) fn window_height(&self) -> u32 {
         self.window_height
     }
-    
+
     pub(crate) fn window_x(&self) -> i32 {
         self.window_x
     }

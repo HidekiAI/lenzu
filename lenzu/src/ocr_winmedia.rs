@@ -774,12 +774,18 @@ impl OcrWinMedia {
         );
 
         if let Ok(result) = ocr_result {
-            let str_block: String = result.Text().unwrap().to_string();
+        let cleaned_text = result.Text().unwrap().to_string().replace(' ', "");
+            let str_block: String = cleaned_text.clone();
             let lines: Vec<String> = result
                 .Lines()
                 .unwrap()
                 .into_iter()
-                .map(|x| x.Text().unwrap().to_string())
+                .map(|x| 
+                    // NOTE: Because neighbor-evaluator/analyzer will incorreclty evaluate IF 
+                    // there are spaces between kanji characters, we need to remove spaces 
+                    // between kanji characters, note that there aren't any differences
+                    // US UTF-8 and JP UTF-8, they both are "0x0020"
+                    x.Text().unwrap().to_string().replace(' ', ""))
                 .collect::<Vec<_>>();
             // bounding rectangles are based off of "words" (OcrWord) which Lines are collections of Words...
             // Note that we deal with it in 2 phases, first is as-is (as a tuple), then we convert it to a hashmap
@@ -863,9 +869,7 @@ impl OcrWinMedia {
 
     #[allow(dead_code)]
     pub fn test_seek_multiple(&self, png_paths: &str) -> Result<OcrTraitResult> {
-        let ret = futures::executor::block_on(
-            self.evaluate_async_path(png_paths, &self.language),
-        );
+        let ret = futures::executor::block_on(self.evaluate_async_path(png_paths, &self.language));
         // now seek back to 0, and transform to memory stream
         let file_stream = futures::executor::block_on(self.get_filestream(png_paths)).unwrap();
         // NOTE: in_memory_stream here will not be async since it's not awaited
@@ -967,5 +971,19 @@ mod tests {
         };
         let ocr = OcrWinMedia::new();
         ocr.test_main_async(png_paths.as_str()).await.unwrap();
+    }
+
+    #[test]
+    fn test_spaced_kanji() {
+        let spaced= "最 近 人 気 の デ ス ク ト ッ フ な リ ナ ッ ク ス で す";
+        // first dump it as hex
+        let mut hex_str = String::new();
+        for c in spaced.chars() {
+            hex_str.push_str(&format!("{:04X} ", c as u32));
+        }
+        println!("Spaced Kanji: '{}' ({} chars)", spaced, spaced.len());
+        println!("Spaced Kanji (hex): '{}' ({} words)", hex_str, hex_str.len() / 5);    
+        let nospace = spaced.replace(" ", "");
+        println!("No Space: '{}' ({} chars)", nospace, nospace.len());
     }
 }
