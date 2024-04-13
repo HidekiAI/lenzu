@@ -14,7 +14,7 @@ pub trait InterpreterTrait {
 
     // interpretes/translates the text to locale native  language
     // i.e. Japanese to English, English to Japanese, etc
-    fn convert(&self, text: &str) -> Result<InterpreterTraitResult, anyhow::Error>;
+    fn convert(&self, lines: &Vec<String>) -> Result<InterpreterTraitResult, anyhow::Error>;
 }
 
 #[derive(Debug)]
