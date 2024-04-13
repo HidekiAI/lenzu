@@ -52,8 +52,11 @@ int main()
         // strncpy_s only exists on Windows, for Linux, have to use strncpy
         strncpy_s(argv_c[i], 128, argv[i].c_str(), argv[i].length());
 #else
+        // will get a warning about strncpy() being unsafe but it's fine for this example
+        //  'strncpy is dangerous, as if the source contains 'n' or more characters, it will not null terminate the destination.DevSkim Language'
+        // but unfortunately, strncpy_s() is Windows-only!
         strncpy(argv_c[i], argv[i].c_str(), 127);
-        argv_c[i][127] = '\0'; // Ensure null-termination
+        argv_c[i][127] = '\0'; // Ensure null-termination because "strncpy is dagenerous"...
 #endif
     }
     // NOTE: kakasi_getopt_argv() will verify/check if dicts exist (if passed)
