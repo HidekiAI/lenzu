@@ -1,8 +1,8 @@
 [workspace]
     resolver = "2"
     members = [
-        "lenzu", "prototypes/kakasi-cli-test", "prototypes/kakasi-static-libs",
+        "lenzu", "prototypes/kakasi-cli-test", "prototypes/kakasi-static-libs", "prototypes/mecab-test",
         "prototypes/windows-rs/ocr"
-    ]
+    , "prototypes/winit-test"]
 
 
