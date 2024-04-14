@@ -1,6 +1,6 @@
 use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult}; // so odd that unless I'd  import it in main.rs, this will not be recognized, but once it is recognized, you can comment it in main.rs
 use anyhow::Error;
-use encoding_rs::{Decoder, Encoding};
+
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Command, Stdio},

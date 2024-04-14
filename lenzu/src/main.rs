@@ -20,7 +20,7 @@ use winit::event::ElementState;
 use winit::event::KeyEvent;
 use winit::keyboard::PhysicalKey;
 // NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
-use core::num::NonZeroIsize;
+
 use imageproc::image::{self, GenericImageView, ImageBuffer};
 use std::{ffi::CString, ptr};
 use winapi::{
@@ -31,21 +31,19 @@ use winapi::{
             SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
         winuser::{
-            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetDC, GetMessageW,
-            GetWindowLongPtrW, GetWindowLongW, InvalidateRect, PostQuitMessage, RegisterClassW,
-            ReleaseDC, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_HINSTANCE, GWL_EXSTYLE,
-            MSG, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN, WS_OVERLAPPEDWINDOW,
+            DispatchMessageW, GetDC, GetMessageW, GetWindowLongW, InvalidateRect, PostQuitMessage,
+            ReleaseDC, ShowWindow, TranslateMessage, GWL_EXSTYLE,
+            MSG, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
         },
     },
 };
 use winit::{
-    dpi::{LogicalPosition, LogicalSize, Position},
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
+    event_loop::{ControlFlow, EventLoop},
     keyboard::PhysicalKey::Code,
-    keyboard::{KeyCode, NamedKey},
-    raw_window_handle::{self, HasWindowHandle, RawWindowHandle, Win32WindowHandle},
-    window::{self, Window, WindowBuilder},
+    keyboard::{KeyCode},
+    raw_window_handle::{HasWindowHandle, RawWindowHandle},
+    window::{Window, WindowBuilder},
 };
 
 //const MAGNIFY_SCALE_FACTOR: u32 = 2;
