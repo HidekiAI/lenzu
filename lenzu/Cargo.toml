@@ -26,6 +26,8 @@ futures = "0.3.30"                                                # commonly fai
 tokio = { version = "1.36.0", features = ["test-util", "time", "fs", "full"] }
 encoding_rs = { version = "0.8.34", features = ["fast-kanji-encode", "less-slow-kanji-encode"] }
 mecab = "0.1.6"
+gtk4 = "0.8.1"
+async-channel = "2.2.1"
 
 # Until prototype is done, we'll allow Linux specific code
 [target.'cfg(linux)'.dependencies]
