@@ -32,16 +32,16 @@ use winapi::{
         },
         winuser::{
             DispatchMessageW, GetDC, GetMessageW, GetWindowLongW, InvalidateRect, PostQuitMessage,
-            ReleaseDC, ShowWindow, TranslateMessage, GWL_EXSTYLE,
-            MSG, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
+            ReleaseDC, ShowWindow, TranslateMessage, GWL_EXSTYLE, MSG, SW_SHOW, VK_ESCAPE,
+            VK_SPACE, WM_KEYDOWN,
         },
     },
 };
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
+    keyboard::KeyCode,
     keyboard::PhysicalKey::Code,
-    keyboard::{KeyCode},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{Window, WindowBuilder},
 };
@@ -527,7 +527,7 @@ async fn main() {
 
     // now show the window
     window.set_visible(true);
-    sub_window.set_visible(true);
+    //sub_window.set_visible(true);
 
     //loop {
     let winit_run_result = //winit_event_loop.run(move |event, _, control_flow| {

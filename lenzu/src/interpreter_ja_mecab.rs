@@ -379,7 +379,7 @@ mod tests {
 
         // Test case 1
         let lines = vec![
-            //            "すもももももももものうち。".to_string(),
+            "すもももももももものうち。".to_string(),
             "最近人気のデスクトップなリナックスです!".to_string(),
         ];
         let result = interpreter.convert(&lines);
