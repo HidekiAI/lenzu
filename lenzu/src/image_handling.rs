@@ -536,13 +536,15 @@ impl OCRImage {
         // Draw each line
         let mut line_y: u32 = 0;
         for (index, line) in multi_lined_text.iter().enumerate() {
-            println!(
-                "Line {}: Y={} - '{}' ({} chars)",
-                index,
-                line_y,
-                line,
-                line.len()
-            );
+            if cfg!(debug_assertions) {
+                print!(
+                    "Line {}: Y={} - '{}' ({} chars); ",
+                    index,
+                    line_y,
+                    line,
+                    line.len()
+                );
+            }
             draw_text_mut(
                 &mut text_image_canvas,                // canvas surface
                 image::Rgba([0xff, 0x40, 0x40, 0xff]), // font color
@@ -554,6 +556,9 @@ impl OCRImage {
             );
             let (_ts_width, ts_height) = text_size(scale.y, &self.ttf_font_bold, line); // Adjust y position for the next line
             line_y += ts_height;
+        }
+        if cfg!(debug_assertions) {
+            println!("");
         }
 
         // overlay the two images.  Bottom (background) image is the original image, and the top (foreground) image is the text
