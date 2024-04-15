@@ -1,5 +1,7 @@
 mod dump_image;
 
+use std::sync::OnceLock;
+
 use crate::glib::clone;
 use dump_image::MyPaintableCanvas;
 use gtk4::{
@@ -10,6 +12,11 @@ use gtk4::{
     subclass::widget,
     Box, Button, Image, Orientation, Picture, Widget,
 };
+use tokio::runtime::Runtime;
+fn runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
+}
 
 fn main() -> glib::ExitCode {
     let application = gtk4::Application::builder()
@@ -46,16 +53,14 @@ fn build_ui(application: &gtk4::Application) {
         .margin_bottom(12)
         .margin_start(12)
         .margin_end(12)
+        .width_request(16 * 32)
+        .height_request(16)
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
-        let sender = sender_quit_signal.clone();
-
-        gio::spawn_blocking(move || {
-            sender
-                .send_blocking(true)
-                .expect("Signal channel is unopenend");
-        });
+        runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
+            sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
+        }));
         println!("Signal sent to quit...");
     });
     window.set_child(Some(&button_quit));

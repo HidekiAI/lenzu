@@ -14,16 +14,18 @@ imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image, make sure the
 # NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
 rusty-tesseract = "1.1.9" # depends on thiserror and image
 
+pkg-config = "0.3.30"
+
 anyhow = "1.0.80"
-reqwest = { version = "0.12.0", features = ["json", "gzip", "blocking"] }
+reqwest = { version = "0.12.0", features = ["json", "gzip", "blocking", "rustls-tls"] }
 
 ab_glyph = "0.2.23" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
 
-# winit: See https://github.com/rust-windowing/winit/blob/master/FEATURES.md for a list of features
+# TODO: Getting rid of winit and switch over to GTK4 so we can use cairo/pango for text rendering
 winit = { version = "0.29.15", features = ["mint", "wayland", "x11", "rwh_06"] }
 
 futures = "0.3.30"                                                # commonly fails on 'futures-immpl'
-tokio = { version = "1.36.0", features = ["test-util", "time", "fs", "full"] }
+tokio = { version = "1.37.0", features = ["test-util", "time", "fs", "full", "rt-multi-thread", "macros"] }
 encoding_rs = { version = "0.8.34", features = ["fast-kanji-encode", "less-slow-kanji-encode"] }
 mecab = "0.1.6"
 gtk4 = "0.8.1"
