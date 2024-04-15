@@ -11,4 +11,4 @@ crate-type = ["staticlib"]
 
 [dependencies]
 encoding_rs = { version = "0.8.34", features = ["fast-kanji-encode", "less-slow-kanji-encode"] }
-tokio = { version = "1.37.0", features = ["time", "test-util", "macros"] }
+tokio = { version = "1.37.0", features = ["test-util", "time", "fs", "full", "rt-multi-thread", "macros"] }
