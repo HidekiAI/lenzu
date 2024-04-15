@@ -3,46 +3,85 @@ mod dump_image;
 use std::sync::OnceLock;
 
 use crate::glib::clone;
-use dump_image::MyPaintableCanvas;
 use gtk4::{
     ffi::{gtk_list_store_append, GtkButton, GtkWidget},
     gdk_pixbuf::Pixbuf,
     gio, glib,
     prelude::*,
     subclass::widget,
-    Box, Button, Image, Orientation, Picture, Widget,
+    Box, Button, HeaderBar, Image, Orientation, Picture, Widget,
 };
 use tokio::runtime::Runtime;
+
+const APP_ID: &str = "tld.mydomain.lenzu.prototype.gtk_gdk_test";
+//const APP_ID_PATH: String  = format!("/{}/", APP_ID.to_string().replace(".", "/")); // "/tld/mydomain/lenzu/prototype/gtk_gdk_test/";
+const APP_ID_PATH: &str = "/tld/mydomain/lenzu/prototype/gtk_gdk_test/";
+
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
 }
 
 fn main() -> glib::ExitCode {
-    let application = gtk4::Application::builder()
-        .application_id("tld.mydomain.lenzu.prototype.gtk_gdk_test")
-        .build();
+    let application = gtk4::Application::builder().application_id(APP_ID).build();
     application.connect_activate(build_ui);
     application.run()
 }
 
 fn build_ui(application: &gtk4::Application) {
+    let image_path = "./assets/ubunchu01_02.png";
+    // let's verify that file actually exists using path
+    let path = std::path::Path::new(image_path);
+    if !path.exists() {
+        println!(
+            "File does not exist: {:?} (pwd: {})",
+            path,
+            std::env::current_dir().unwrap().display()
+        );
+        return;
+    }
+
     let window = gtk4::ApplicationWindow::new(application);
     window.set_title(Some("gtk_gdk_test"));
     window.set_default_size(1024, 768);
     window.set_visible(false);
+    let window_scrollable = gtk4::ScrolledWindow::new();
+    window_scrollable.set_visible(true);
+    window_scrollable.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
+    window.set_child(Some(&window_scrollable));
 
-    let image_path = "../assets/ubunchu01_02.png.png";
-    let paintable = MyPaintableCanvas::default();
+    // container to append multiple children
+    let parent_box = Box::new(Orientation::Vertical, 0);
+
+    // as Picture
     let picture = Picture::for_filename(image_path);
-
-    // setup for WidgetExt
+    let pic_paintable_dim = match picture.paintable() {
+        Some(paintable) => (paintable.intrinsic_width(), paintable.intrinsic_height()),
+        None => (0, 0),
+    };
+    println!(
+        "Loaded image '{}' with dimensions: {:?}",
+        image_path, pic_paintable_dim
+    );
     picture.set_halign(gtk4::Align::Center);
-    picture.set_size_request(1024, 768);
-    picture.set_paintable(Some(&paintable));
+    picture.set_size_request(pic_paintable_dim.0, pic_paintable_dim.1);
+    picture.set_visible(true);
+    parent_box.append(&picture);
 
-    // append to window
-    window.set_child(Some(&picture));
+    // as Image
+    let image = Image::from_file(image_path);
+    let img_paintable_dim = match image.paintable() {
+        Some(paintable) => (paintable.intrinsic_width(), paintable.intrinsic_height()),
+        None => (0, 0),
+    };
+    println!(
+        "Loaded image '{}' with dimensions: {:?}",
+        image_path, img_paintable_dim
+    );
+    image.set_halign(gtk4::Align::Center);
+    image.set_size_request(img_paintable_dim.0, img_paintable_dim.1);
+    image.set_visible(true);
+    parent_box.append(&image);
 
     let (sender_quit_signal, receiver_quit_signal) = async_channel::bounded(1);
 
@@ -53,8 +92,10 @@ fn build_ui(application: &gtk4::Application) {
         .margin_bottom(12)
         .margin_start(12)
         .margin_end(12)
-        .width_request(16 * 32)
+        .width_request(16 * 16)
         .height_request(16)
+        .halign(gtk4::Align::End) // anchor to bottom right
+        .valign(gtk4::Align::End)
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
@@ -63,7 +104,7 @@ fn build_ui(application: &gtk4::Application) {
         }));
         println!("Signal sent to quit...");
     });
-    window.set_child(Some(&button_quit));
+    parent_box.append(&button_quit);
     glib::spawn_future_local(clone!(@weak button_quit => async move {
         while let Ok(quit_signaled) = receiver_quit_signal.recv().await {
             if quit_signaled {
@@ -79,11 +120,14 @@ fn build_ui(application: &gtk4::Application) {
     //// let gtk4::Box hold strong ref to the button(s)
     //let my_box: Box = Box::builder().orientation(Orientation::Vertical).build();
     //my_box.append(button_quit);
-    //window.set_child(Some(&my_box));
+    //parent_box.append(Some(&my_box));
 
+    // all is attached to parent_box, now attach itself to window
+    //window.set_child(Some(&parent_box));
+    window_scrollable.set_child(Some(&parent_box));
     window.show();
     window.set_visible(true);
-    window.present();
+    window.present(); // mark (child scene-graph nodes) for refresh
 }
 
 //  static void
