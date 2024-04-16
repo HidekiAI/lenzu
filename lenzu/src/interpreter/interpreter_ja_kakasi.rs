@@ -1,4 +1,4 @@
-use crate::interpreter_traits::{InterpreterTrait, InterpreterTraitResult}; // so odd that unless I'd  import it in main.rs, this will not be recognized, but once it is recognized, you can comment it in main.rs
+use super::interpreter_traits::{InterpreterTrait, InterpreterTraitResult}; // so odd that unless I'd  import it in main.rs, this will not be recognized, but once it is recognized, you can comment it in main.rs
 use anyhow::Error;
 
 use std::{
@@ -37,7 +37,10 @@ impl InterpreterJaKakasi {
         InterpreterJaKakasi {}
     }
 
-    pub fn call_shell_kakasi(&self, lines: &Vec<String>) -> Result<InterpreterTraitResult, anyhow::Error> {
+    pub fn call_shell_kakasi(
+        &self,
+        lines: &Vec<String>,
+    ) -> Result<InterpreterTraitResult, anyhow::Error> {
         // TODO: parallelize this per line, but for now, we'll just join it...
         let text = lines.join("\n");
         // Create a Command for the 'kakasi' shell command

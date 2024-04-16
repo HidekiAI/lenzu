@@ -9,7 +9,7 @@ use image::{
 // We're using imageproc version of image so that it matches the rest...
 use imageproc::image::{codecs::png::PngEncoder, ImageEncoder};
 
-use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
+use super::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use tokio::time::{timeout, Duration};
 use windows::{
     core::*,
@@ -919,7 +919,7 @@ impl OcrWinMedia {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ocr_traits::OcrTrait;
+    use super::ocr_traits::OcrTrait;
 
     #[tokio::test]
     async fn test_seek_multiple() {
