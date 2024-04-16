@@ -5,21 +5,22 @@ use image::{imageops::overlay, DynamicImage, ImageBuffer, Rgba, *};
 use imageproc::drawing::{draw_text_mut, text_size};
 //use rusty_tesseract::image::{GenericImage as _, GenericImageView as _};
 use std::fmt::{self, Display, Formatter};
+use std::boxed::Box;
 
 // The BOLD font is about 32x32 pixels
 const DEFAULT_FONT_SIZE: f32 = 32.0;
 
-// fonts as constant (data pool)
+// Embedded resources: fonts as constant (data pool)
 const FONT_DATA: &[u8] = if cfg!(target_os = "windows") {
-    include_bytes!("..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Regular.ttf")
+    include_bytes!("..\\..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Regular.ttf")
 } else {
-    include_bytes!("../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Regular.ttf")
+    include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Regular.ttf")
 };
 
 const FONT_DATA_BOLD: &[u8] = if cfg!(target_os = "windows") {
-    include_bytes!("..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Bold.ttf")
+    include_bytes!("..\\..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Bold.ttf")
 } else {
-    include_bytes!("../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Bold.ttf")
+    include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Bold.ttf")
 };
 
 #[derive(Debug, Clone)]
