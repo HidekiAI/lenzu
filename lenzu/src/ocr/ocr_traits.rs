@@ -1,6 +1,7 @@
 use anyhow::Error; // the most easiest way to handle errors
 use core::result::Result;
 use std::fmt::{self, Display, Formatter};
+use std::boxed::Box;
 
 pub trait OcrTrait {
     // without 'Sized',  won't be able to Box<dyn OcrTrait>

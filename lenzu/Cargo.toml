@@ -1,28 +1,28 @@
 [package]
 name = "lenzu"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 build = "build.rs"
 
 [build-dependencies]
-libc = "0.2"
+libc = "0.2.153"
 
 # If you start getting link errors, try MAKE SURE you are calling `cargo build` on a REAL MinGW64 terminal
 [dependencies]
-image = "0.25.0"    # NOTE: rusty-tesseract (currently) expects image v0.24.9
+image = "0.25.1"    # NOTE: rusty-tesseract (currently) expects image v0.24.9
 imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image, make sure they match! (current imageproc v0.24.0 relies on image 0.25.0)
 # NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
-rusty-tesseract = "1.1.9" # depends on thiserror and image
+rusty-tesseract = "1.1.10" # depends on thiserror and image
 
 pkg-config = "0.3.30"
 
-anyhow = "1.0.80"
-reqwest = { version = "0.12.0", features = ["json", "gzip", "blocking", "rustls-tls"] }
+anyhow = "1.0.82"
+reqwest = { version = "0.12.3", features = ["json", "gzip", "blocking", "rustls-tls"] }
 
-ab_glyph = "0.2.23" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
+ab_glyph = "0.2.25" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
 
 # TODO: Getting rid of winit and switch over to GTK4 so we can use cairo/pango for text rendering
-winit = { version = "0.29.15", features = ["mint", "wayland", "x11", "rwh_06"] }
+#winit = { version = "0.29.15", features = ["mint", "wayland", "x11", "rwh_06"] }
 
 futures = "0.3.30"                                                # commonly fails on 'futures-immpl'
 tokio = { version = "1.37.0", features = ["test-util", "time", "fs", "full", "rt-multi-thread", "macros"] }
@@ -36,7 +36,7 @@ async-channel = "2.2.1"
 x11 = { version = "^2.21.0", features = ["xlib"] }
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.54.0"
+version = "0.56.0"
 features = [
     "Media_Ocr",
     "Graphics_Imaging",

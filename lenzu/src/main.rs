@@ -1,28 +1,29 @@
+mod capture;
+mod interpreter;
+mod ocr;
 mod cursor_data;
-mod image_handling;
-mod interpreter_ja_kakasi;
-mod interpreter_ja_mecab;
-mod interpreter_traits;
-mod ocr_gcloud;
-mod ocr_tesseract;
-mod ocr_traits;
-mod ocr_winmedia;
 
-//extern crate winapi;
-use crate::image_handling::*;
-use crate::interpreter_traits::*;
-use crate::ocr_traits::*; // NOTE: if not declared with 'use', won't be able to use Box<dyn crate::ocr_traits::OcrTrait>
-
-use image::DynamicImage; // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
-
+use crate::{glib::clone, interpreter::interpreter_traits::InterpreterTraitResult};
 use cursor_data::CursorData;
-use winit::event::ElementState;
-use winit::event::KeyEvent;
-use winit::keyboard::PhysicalKey;
-// NOTE: We want to use imageproc::image rather than image crate because we want to use imageproc::drawing::draw_text_mut()
-
+use gtk4::{
+    ffi::{gtk_list_store_append, GtkButton, GtkWidget},
+    gdk_pixbuf::Pixbuf,
+    gio, glib,
+    prelude::*,
+    subclass::widget,
+    ApplicationWindow, Button, HeaderBar, Image, Orientation, Picture, Widget,
+};
+// NOTE: Are we using imageproc::ImageBuffer or image::ImageBuffer?
+use image::{imageops::overlay, DynamicImage, Rgba, *};
 use imageproc::image::{self, GenericImageView, ImageBuffer};
+
+use ocr::{image_handling::OCRImage, ocr_tesseract::OcrTesseract, ocr_traits::OcrTrait, ocr_winmedia::OcrWinMedia};
+use interpreter::{interpreter_ja_mecab::InterpreterJaMecab, interpreter_traits::InterpreterTrait};
+
+use std::boxed::Box;
+use std::sync::OnceLock;
 use std::{ffi::CString, ptr};
+use tokio::runtime::Runtime;
 use winapi::{
     shared::minwindef::BYTE,
     um::{
@@ -37,16 +38,9 @@ use winapi::{
         },
     },
 };
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    keyboard::KeyCode,
-    keyboard::PhysicalKey::Code,
-    raw_window_handle::{HasWindowHandle, RawWindowHandle},
-    window::{Window, WindowBuilder},
-};
 
-//const MAGNIFY_SCALE_FACTOR: u32 = 2;
+const GTK_APP_ID: &str = "com.github.hidekiai.lenzu";
+const GTK_APP_PATH: &str = "/com/github/hidekiai/lenzu/";
 const TOGGLE_WINDOW_MOVE_KEY: std::ffi::c_int = VK_SPACE;
 const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
@@ -60,22 +54,22 @@ enum ToggleState {
 
 static mut TOGGLE_STATE: ToggleState = ToggleState::Free;
 
-fn create_ocr(args: &Vec<String>) -> Box<dyn crate::ocr_traits::OcrTrait> {
+fn create_ocr(args: &Vec<String>) -> std::boxed::Box<dyn OcrTrait> {
     let force_windows_ocr = cfg!(target_os = "windows");
     if force_windows_ocr {
         // even if tesseract is installed, if on Windows, use the most reliable OCR available instead if no arguments are passed
         if args.len() > 1 && args[1] != "--use-winmedia-ocr" {
-            return Box::new(ocr_tesseract::OcrTesseract::new()); //  if the first arg is not --use-winmedia-ocr, then use Tesseract
+            return std::boxed::Box::new(OcrTesseract::new()); //  if the first arg is not --use-winmedia-ocr, then use Tesseract
         }
         // just use default windows OCR
-        return Box::new(ocr_winmedia::OcrWinMedia::new());
+        return std::boxed::Box::new(OcrWinMedia::new());
     }
     // Not on Windows, so use Tesseract OCR
-    Box::new(ocr_tesseract::OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
+    std::boxed::Box::new(OcrTesseract::new()) // default to Tesseract (because even if it unreliable, at least it is cross-platform and can be used on Linux)
 }
 
-fn create_interpreter(_args: &Vec<String>) -> Box<dyn crate::interpreter_traits::InterpreterTrait> {
-    Box::new(interpreter_ja_mecab::InterpreterJaMecab::new())
+fn create_interpreter(_args: &Vec<String>) -> std::boxed::Box<dyn InterpreterTrait> {
+    std::boxed::Box::new(InterpreterJaMecab::new())
 }
 
 // NOTE: Make sure to call ShowWindow(hwnd, SW_IDE) prior to calling this method and ShowWindow(hwnd, SW_SHOW) after image is captured
@@ -222,18 +216,19 @@ fn from_image_to_window(
 
         //EndPaint(hwnd, &repaint_area);
         InvalidateRect(application_window_handle, ptr::null_mut(), 0); // mark for refresh/update
-                                                                       // Clean up: Select the old bitmap back into the memory DC
+
+        // Clean up: Select the old bitmap back into the memory DC
         SelectObject(hdc_mem, hbitmap_old);
     }
 }
 
 fn capture_and_ocr(
     hwnd: *mut winapi::shared::windef::HWND__,
-    ocr: &mut Box<dyn crate::ocr_traits::OcrTrait>,
+    ocr: &mut std::boxed::Box<dyn OcrTrait>,
     cursor_pos: CursorData,
     ocr_font: &mut OCRImage,
     _supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
-    interpreter: &mut Box<dyn crate::interpreter_traits::InterpreterTrait>,
+    interpreter: &mut std::boxed::Box<dyn InterpreterTrait>,
 ) {
     // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
     hide_window(hwnd);
@@ -394,347 +389,395 @@ fn capture_and_scale(hwnd: *mut winapi::shared::windef::HWND__, cursor_pos: Curs
     from_image_to_window(hwnd, screenshot);
 }
 
-//fn my_draw_text_mut(
-//    image: &mut image::RgbImage,
-//    color: Rgba<u8>,
-//    x: i32,
-//    y: i32,
-//    scale: Scale,
-//    font: &Font,
-//    text: &str,
-//) {
-//    let v_metrics = font.v_metrics(scale);
-//    let glyphs: Vec<PositionedGlyph> = font
-//        .layout(text, scale, point(x as f32, y as f32 + v_metrics.ascent))
-//        .collect();
-//
-//    for glyph in glyphs {
-//        if let Some(bb) = glyph.pixel_bounding_box() {
-//            glyph.draw(|gx, gy, gv| {
-//                let x = x + gx as i32;
-//                let y = y + gy as i32;
-//                let alpha = (gv * 255.0) as u8;
-//                image.put_pixel(
-//                    x as u32,
-//                    y as u32,
-//                    Rgba([color[0], color[1], color[2], alpha]),
-//                );
-//            });
-//        }
-//    }
-//}
+fn runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
+}
 
-#[tokio::main]
-async fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
+fn main() -> glib::ExitCode {
+    let application = gtk4::Application::builder()
+        .application_id(GTK_APP_ID)
+        .build();
+    application.connect_activate(build_ui);
+    application.run()
+}
 
-    let class_name = "Lenzu";
-    let window_name = "Lenzu-OCR";
-
+fn build_ui(application: &gtk4::Application) {
     // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
+    let args: &Vec<String> = &std::env::args().collect();
     let mut ocr = create_ocr(&args);
     let ocr_langugages = ocr.init();
     let mut interpreter = create_interpreter(&args);
-
     let mut ocr_font = OCRImage::new(None);
 
-    let winit_event_loop = EventLoop::new().expect("EventLoop::new() failed");
+    let app_window_gtk: ApplicationWindow = gtk4::ApplicationWindow::builder()
+        .application(application)
+        .title("Lenzu")
+        .default_width(DEFAULT_WINDOW_WIDTH)
+        .default_height(DEFAULT_WINDOW_HEIGHT)
+        .build();
+    let window_scrollable = gtk4::ScrolledWindow::builder().build();
+    window_scrollable.set_visible(true);
+    window_scrollable.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
+    app_window_gtk.set_child(Some(&window_scrollable));
 
-    // ControlFlow::Poll continuously runs the event loop, even if the OS hasn't
-    // dispatched any events. This is ideal for games and similar applications.
-    //winit_event_loop.set_control_flow(ControlFlow::Poll);
+    // container to append multiple children
+    let parent_box = gtk4::Box::new(Orientation::Vertical, 0);
 
-    // ControlFlow::Wait pauses the event loop if no events are available to process.
-    // This is ideal for non-game applications that only update in response to user
-    // input, and uses significantly less power/CPU time than ControlFlow::Poll.
-    winit_event_loop.set_control_flow(ControlFlow::Wait);
-
-    let _class_name_cstr = CString::new(class_name).expect("CString creation failed");
-    let _window_name_cstr = CString::new(window_name).expect("CString creation failed");
-
-    let main_builder = WindowBuilder::new().with_title(class_name);
-    let window: Window = main_builder.build(&winit_event_loop).unwrap();
-    let (hwnd, _possible_h_instance) = match window.window_handle().unwrap().as_raw() {
-        RawWindowHandle::Win32(handle) => {
-            let hwnd_isize: isize = handle.hwnd.get();
-            let possible_hinstance = match handle.hinstance {
-                Some(hinstance) => {
-                    let hinstance_isize: isize = hinstance.get();
-                    Some(hinstance_isize as winapi::shared::minwindef::HINSTANCE)
-                }
-                None => {
-                    // if hinstance is None, then we'll just use the current process handle
-                    None
-                }
-            };
-            (
-                hwnd_isize as winapi::shared::windef::HWND,
-                possible_hinstance,
-            )
-        }
-        _ => panic!("not running on Windows"),
+    // as Picture
+    let image_path = "recognized_image.png"; // if it exists, load last used image
+    let picture = Picture::for_filename(image_path);
+    let pic_paintable_dim = match picture.paintable() {
+        Some(paintable) => (paintable.intrinsic_width(), paintable.intrinsic_height()),
+        None => (1024, 768),
     };
-    let sub_builder = WindowBuilder::new().with_title(window_name);
-    let sub_window = sub_builder.build(&winit_event_loop).unwrap();
-    let (_sub_hwnd, _possible_sub_hinstance) = match sub_window.window_handle().unwrap().as_raw() {
-        RawWindowHandle::Win32(handle) => {
-            let hwnd_isize: isize = handle.hwnd.get();
-            let possible_hinstance = match handle.hinstance {
-                Some(hinstance) => {
-                    let hinstance_isize: isize = hinstance.get();
-                    Some(hinstance_isize as winapi::shared::minwindef::HINSTANCE)
-                }
-                None => {
-                    // if hinstance is None, then we'll just use the current process handle
-                    None
-                }
-            };
-            (
-                hwnd_isize as winapi::shared::windef::HWND,
-                possible_hinstance,
-            )
-        }
-        _ => panic!("not running on Windows"),
+    println!(
+        "Loaded image '{}' with dimensions: {:?}",
+        image_path, pic_paintable_dim
+    );
+    picture.set_halign(gtk4::Align::Center);
+    picture.set_size_request(pic_paintable_dim.0, pic_paintable_dim.1);
+    picture.set_visible(true);
+    parent_box.append(&picture);
+
+    // as Image
+    let image = Image::from_file(image_path);
+    let img_paintable_dim = match image.paintable() {
+        Some(paintable) => (paintable.intrinsic_width(), paintable.intrinsic_height()),
+        None => (0, 0),
     };
-    // start off with the window hidden in case garbage is displayed
-    window.set_visible(false);
-    sub_window.set_visible(false);
+    println!(
+        "Loaded image '{}' with dimensions: {:?}",
+        image_path, img_paintable_dim
+    );
+    image.set_halign(gtk4::Align::Center);
+    image.set_size_request(img_paintable_dim.0, img_paintable_dim.1);
+    image.set_visible(true);
+    //parent_box.append(&image);
 
-    if hwnd.is_null() {
-        // Instead of panic!(), we'll just close it cleanly with PostQuitMessage() and log to explain the cause/reasons
-        println!("Failed to create window.");
-        unsafe { PostQuitMessage(0) }; // Even if HWND was not created, can we post a quit message?
-        return;
-    }
+    let (sender_quit_signal, receiver_quit_signal) = async_channel::bounded(1);
 
-    window.set_visible(true);
-    unsafe {
-        ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
-    }
+    // Create a button with label and margins
+    let button_quit: Button = Button::builder()
+        .label("Quit")
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .width_request(16 * 16)
+        .height_request(16)
+        .halign(gtk4::Align::End) // anchor to bottom right
+        .valign(gtk4::Align::End)
+        .build();
+    button_quit.connect_clicked(move |_| {
+        println!("Signal quitting...");
+        runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
+            sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
+        }));
+        println!("Signal sent to quit...");
+    });
+    parent_box.append(&button_quit);
+    glib::spawn_future_local(clone!(@weak button_quit => async move {
+        while let Ok(quit_signaled) = receiver_quit_signal.recv().await {
+            if quit_signaled {
+                button_quit.set_label("Quitting...");
 
-    let mut cursor = CursorData::new();
-    let mut msg = MSG {
-        hwnd: ptr::null_mut(),
-        message: 0,
-        wParam: 0,
-        lParam: 0,
-        time: 0,
-        pt: winapi::shared::windef::POINT { x: 0, y: 0 },
-    };
-
-    // Handle events for both windows
-    // (Implement event handlers as needed)
-
-    // now show the window
-    window.set_visible(true);
-    //sub_window.set_visible(true);
-
-    //loop {
-    let winit_run_result = //winit_event_loop.run(move |event, _, control_flow| {
-        winit_event_loop.run(move |winit_event, winit_event_target| {
-            match winit_event_target.control_flow() {
-                ControlFlow::Poll => (),
-                ControlFlow::Wait => (),
-                ControlFlow::WaitUntil(_instant) => (),
-            }
-
-            match winit_event {
-                Event::NewEvents(_start_cause) => (),
-                Event::WindowEvent {
-                    event: window_event,
-                    window_id: _window_id,
-                } => {
-                    match window_event {
-                        WindowEvent::CloseRequested => {
-                            // Close the application when the main window is closed
-
-                            // if the main window is closed, then close the sub_window as well
-                            unsafe { PostQuitMessage(0) };
-
-                            // finally, break out of the loop
-                            winit_event_target.exit();  // exits winit::run() loop, same as loop{break}
-                        }
-                        WindowEvent::KeyboardInput {event: key_event, ..} => {
-                            println!("Key pressed: {:?}", key_event);
-                            match key_event {
-                                // Escape key:
-                                //  KeyEvent { physical_key: Code(Escape), logical_key: Named(Escape), text: None, location: Standard, state: Released, repeat: false, platform_specific: KeyEventExtra { text_with_all_modifers: None, key_without_modifiers: Named(Escape) } }
-                                KeyEvent {
-                                    state: ElementState::Released,
-                                    physical_key: PhysicalKey::Code(KeyCode::Escape),
-                                    ..
-                                } => {
-                                    println!("The escape key was pressed; stopping");
-                                    winit_event_target.exit();
-                                }
-                                _  /* KeyEvent */=> ()
-                            }
-                            match key_event.physical_key{
-                                Code(KeyCode::Escape) => {
-                                    // Check for the ESCAPE key press and exit the application
-                                    unsafe { PostQuitMessage(0) };
-                                }
-                                Code(KeyCode::Space) => {
-                                    // unsure why I need to use unsafe here, but compiler complains if I don't
-                                    unsafe {
-                                        TOGGLE_STATE = match TOGGLE_STATE {
-                                            ToggleState::Free => ToggleState::MoveWindow,
-                                            ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
-                                            ToggleState::Captured => ToggleState::Free,
-                                            ToggleState::Capture => {
-                                                // should never be in this state
-                                                assert!(false, "unexpected toggle_state");
-                                                ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
-                                            }
-                                        }
-                                    }
-                                }
-                                _ /* Code(KeyCode::*) */ => {
-                                    // do nothing
-                                }
-                            }
-                        }
-                        WindowEvent::RedrawRequested => {
-                            // Redraw the application.
-                            //
-                            // It's preferable for applications that do not render continuously to render in
-                            // this event rather than in AboutToWait, since rendering in here allows
-                            // the program to gracefully handle redraws requested by the OS.
-                        },
-                        _ /* WindowEvent::* */ => (),
-                    }
-
-                },
-                Event::DeviceEvent { device_id: _device_id, event: _device_event } => {
-                }
-                Event::UserEvent(_user_event) => {
-                    // UserEvent is a custom event that can be sent to the event loop from other threads.
-                }
-                Event::Suspended => {
-                    // The application has been suspended.
-                }
-                Event::Resumed => {
-                    // The application has been resumed.
-                }
-                Event::AboutToWait => {
-                    // Application update code.
-
-                    // Queue a RedrawRequested event.
-                    //
-                    // You only need to call this if you've determined that you need to redraw in
-                    // applications which do not always need to. Applications that redraw continuously
-                    // can render here instead.
-                    window.request_redraw();
-                }
-                Event::LoopExiting => {
-                    // The event loop is about to exit.
-                }
-                Event::MemoryWarning => {
-                    // The system is running low on available memory.
-                }
-            };  // match winit_event
-
-            match winit_event_target {
-                _ => (),
-            }
-
-            if unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) } == 0 {
+                // quit applications
+                std::process::exit(0); // for now, brute-force quit, in future will elegantly signal for exit...
                 //break;
-                winit_event_target.exit();  // exits winit::run() loop, same as loop{break}
             }
-            unsafe {
-                TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            cursor.update(hwnd);
-
-            // either left-click or keydown to toggle states
-            if msg.message == WM_KEYDOWN {
-                match msg.wParam as std::ffi::c_int {
-                    VK_ESCAPE => {
-                        // Check for the ESCAPE key press and exit the application
-                        unsafe { PostQuitMessage(0) };
-                    }
-                    TOGGLE_WINDOW_MOVE_KEY => {
-                        // unsure why I need to use unsafe here, but compiler complains if I don't
-                        unsafe {
-                            TOGGLE_STATE = match TOGGLE_STATE {
-                                ToggleState::Free => ToggleState::MoveWindow,
-                                ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
-                                ToggleState::Captured => ToggleState::Free,
-                                ToggleState::Capture => {
-                                    // should never be in this state
-                                    assert!(false, "unexpected toggle_state");
-                                    ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
-                                }
-                            }
-                        }
-                    }
-                    _ => (),
-                }
-            } else if msg.message == winapi::um::winuser::WM_LBUTTONUP {
-                // on left button click RELEASE (as in, it was pressed and now released)
-                // unsure why I need to use unsafe here, but compiler complains if I don't
-                unsafe {
-                    TOGGLE_STATE = match TOGGLE_STATE {
-                        ToggleState::Free => ToggleState::MoveWindow,
-                        ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
-                        ToggleState::Captured => ToggleState::Free,
-                        ToggleState::Capture => {
-                            // should never be in this state
-                            assert!(false, "unexpected toggle_state");
-                            ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
-                        }
-                    }
-                }
-            }
-
-            unsafe {
-                match TOGGLE_STATE {
-                    ToggleState::Free => capture_and_scale(hwnd, cursor),
-                    ToggleState::MoveWindow => {
-                        // move the window to the cursor position (a sticky window)
-                        winapi::um::winuser::SetWindowPos(
-                            hwnd,
-                            ptr::null_mut(),
-                            cursor.window_x(),
-                            cursor.window_y(),
-                            0, // width will be ignored because will use SWP_NOSIZE to retain current size
-                            0, // height ignored
-                            winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
-                        );
-                        //// invalidate the window so it can redraw the window onto the Desktop/monitor
-                        //InvalidateRect(hwnd, ptr::null_mut(), 0);
-                        capture_and_scale(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
-                    }
-                    ToggleState::Capture => {
-                        // capture the screen and magnify it
-                        let supported_languages = ocr_langugages.join("+");
-                        capture_and_ocr(
-                            hwnd,
-                            &mut ocr,
-                            cursor,
-                            &mut ocr_font,
-                            supported_languages.clone().as_str(),
-                            &mut interpreter,
-                        );
-                        // once it's blitted to that window, stay still..
-                        TOGGLE_STATE = ToggleState::Captured;
-                    }
-                    ToggleState::Captured => {
-                        // don't render/update/Invalidate the window, just stay still/frozen until the user toggles the window again
-                        ()
-                    }
-                }
-            }   // unsafe
-            //} // loop
-    }); // winit_event_loop.run()
-    match winit_run_result {
-        Ok(_) => println!("{} - Winit event loop exited cleanly", class_name),
-        Err(e) => {
-            println!("Error: {:?}", e);
         }
-    }
+    }));
+
+    // all is attached to parent_box, now attach itself to window
+    //app_window_gtk.set_child(Some(&parent_box));
+    window_scrollable.set_child(Some(&parent_box));
+    app_window_gtk.show();
+    app_window_gtk.set_visible(true);
+    app_window_gtk.present(); // mark (child scene-graph nodes) for refresh
+
+    //let main_builder = WindowBuilder::new().with_title(class_name);
+    //let window: Window = main_builder.build(&winit_event_loop).unwrap();
+    //let (hwnd, _possible_h_instance) = match window.window_handle().unwrap().as_raw() {
+    //    RawWindowHandle::Win32(handle) => {
+    //        let hwnd_isize: isize = handle.hwnd.get();
+    //        let possible_hinstance = match handle.hinstance {
+    //            Some(hinstance) => {
+    //                let hinstance_isize: isize = hinstance.get();
+    //                Some(hinstance_isize as winapi::shared::minwindef::HINSTANCE)
+    //            }
+    //            None => {
+    //                // if hinstance is None, then we'll just use the current process handle
+    //                None
+    //            }
+    //        };
+    //        (
+    //            hwnd_isize as winapi::shared::windef::HWND,
+    //            possible_hinstance,
+    //        )
+    //    }
+    //    _ => panic!("not running on Windows"),
+    //};
+    //let sub_builder = WindowBuilder::new().with_title(window_name);
+    //let sub_window = sub_builder.build(&winit_event_loop).unwrap();
+    //let (_sub_hwnd, _possible_sub_hinstance) = match sub_window.window_handle().unwrap().as_raw() {
+    //    RawWindowHandle::Win32(handle) => {
+    //        let hwnd_isize: isize = handle.hwnd.get();
+    //        let possible_hinstance = match handle.hinstance {
+    //            Some(hinstance) => {
+    //                let hinstance_isize: isize = hinstance.get();
+    //                Some(hinstance_isize as winapi::shared::minwindef::HINSTANCE)
+    //            }
+    //            None => {
+    //                // if hinstance is None, then we'll just use the current process handle
+    //                None
+    //            }
+    //        };
+    //        (
+    //            hwnd_isize as winapi::shared::windef::HWND,
+    //            possible_hinstance,
+    //        )
+    //    }
+    //    _ => panic!("not running on Windows"),
+    //};
+    //// start off with the window hidden in case garbage is displayed
+    //window.set_visible(false);
+    //sub_window.set_visible(false);
+
+    //if hwnd.is_null() {
+    //    // Instead of panic!(), we'll just close it cleanly with PostQuitMessage() and log to explain the cause/reasons
+    //    println!("Failed to create window.");
+    //    unsafe { PostQuitMessage(0) }; // Even if HWND was not created, can we post a quit message?
+    //    return;
+    //}
+
+    //window.set_visible(true);
+    //unsafe {
+    //    ShowWindow(hwnd, winapi::um::winuser::SW_SHOWDEFAULT);
+    //}
+
+    //let mut cursor = CursorData::new();
+    //let mut msg = MSG {
+    //    hwnd: ptr::null_mut(),
+    //    message: 0,
+    //    wParam: 0,
+    //    lParam: 0,
+    //    time: 0,
+    //    pt: winapi::shared::windef::POINT { x: 0, y: 0 },
+    //};
+
+    //// Handle events for both windows
+    //// (Implement event handlers as needed)
+
+    //// now show the window
+    //window.set_visible(true);
+    ////sub_window.set_visible(true);
+
+    //let winit_run_result = //winit_event_loop.run(move |event, _, control_flow| {
+    //    winit_event_loop.run(move |winit_event, winit_event_target| {
+    //        match winit_event_target.control_flow() {
+    //            ControlFlow::Poll => (),
+    //            ControlFlow::Wait => (),
+    //            ControlFlow::WaitUntil(_instant) => (),
+    //        }
+
+    //        match winit_event {
+    //            Event::NewEvents(_start_cause) => (),
+    //            Event::WindowEvent {
+    //                event: window_event,
+    //                window_id: _window_id,
+    //            } => {
+    //                match window_event {
+    //                    WindowEvent::CloseRequested => {
+    //                        // Close the application when the main window is closed
+
+    //                        // if the main window is closed, then close the sub_window as well
+    //                        unsafe { PostQuitMessage(0) };
+
+    //                        // finally, break out of the loop
+    //                        winit_event_target.exit();  // exits winit::run() loop, same as loop{break}
+    //                    }
+    //                    WindowEvent::KeyboardInput {event: key_event, ..} => {
+    //                        println!("Key pressed: {:?}", key_event);
+    //                        match key_event {
+    //                            // Escape key:
+    //                            //  KeyEvent { physical_key: Code(Escape), logical_key: Named(Escape), text: None, location: Standard, state: Released, repeat: false, platform_specific: KeyEventExtra { text_with_all_modifers: None, key_without_modifiers: Named(Escape) } }
+    //                            KeyEvent {
+    //                                state: ElementState::Released,
+    //                                physical_key: PhysicalKey::Code(KeyCode::Escape),
+    //                                ..
+    //                            } => {
+    //                                println!("The escape key was pressed; stopping");
+    //                                winit_event_target.exit();
+    //                            }
+    //                            _  /* KeyEvent */=> ()
+    //                        }
+    //                        match key_event.physical_key{
+    //                            Code(KeyCode::Escape) => {
+    //                                // Check for the ESCAPE key press and exit the application
+    //                                unsafe { PostQuitMessage(0) };
+    //                            }
+    //                            Code(KeyCode::Space) => {
+    //                                // unsure why I need to use unsafe here, but compiler complains if I don't
+    //                                unsafe {
+    //                                    TOGGLE_STATE = match TOGGLE_STATE {
+    //                                        ToggleState::Free => ToggleState::MoveWindow,
+    //                                        ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
+    //                                        ToggleState::Captured => ToggleState::Free,
+    //                                        ToggleState::Capture => {
+    //                                            // should never be in this state
+    //                                            assert!(false, "unexpected toggle_state");
+    //                                            ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
+    //                                        }
+    //                                    }
+    //                                }
+    //                            }
+    //                            _ /* Code(KeyCode::*) */ => {
+    //                                // do nothing
+    //                            }
+    //                        }
+    //                    }
+    //                    WindowEvent::RedrawRequested => {
+    //                        // Redraw the application.
+    //                        //
+    //                        // It's preferable for applications that do not render continuously to render in
+    //                        // this event rather than in AboutToWait, since rendering in here allows
+    //                        // the program to gracefully handle redraws requested by the OS.
+    //                    },
+    //                    _ /* WindowEvent::* */ => (),
+    //                }
+
+    //            },
+    //            Event::DeviceEvent { device_id: _device_id, event: _device_event } => {
+    //            }
+    //            Event::UserEvent(_user_event) => {
+    //                // UserEvent is a custom event that can be sent to the event loop from other threads.
+    //            }
+    //            Event::Suspended => {
+    //                // The application has been suspended.
+    //            }
+    //            Event::Resumed => {
+    //                // The application has been resumed.
+    //            }
+    //            Event::AboutToWait => {
+    //                // Application update code.
+
+    //                // Queue a RedrawRequested event.
+    //                //
+    //                // You only need to call this if you've determined that you need to redraw in
+    //                // applications which do not always need to. Applications that redraw continuously
+    //                // can render here instead.
+    //                window.request_redraw();
+    //            }
+    //            Event::LoopExiting => {
+    //                // The event loop is about to exit.
+    //            }
+    //            Event::MemoryWarning => {
+    //                // The system is running low on available memory.
+    //            }
+    //        };  // match winit_event
+
+    //        match winit_event_target {
+    //            _ => (),
+    //        }
+
+    //        if unsafe { GetMessageW(&mut msg, ptr::null_mut(), 0, 0) } == 0 {
+    //            //break;
+    //            winit_event_target.exit();  // exits winit::run() loop, same as loop{break}
+    //        }
+    //        unsafe {
+    //            TranslateMessage(&msg);
+    //            DispatchMessageW(&msg);
+    //        }
+    //        cursor.update(hwnd);
+
+    //        // either left-click or keydown to toggle states
+    //        if msg.message == WM_KEYDOWN {
+    //            match msg.wParam as std::ffi::c_int {
+    //                VK_ESCAPE => {
+    //                    // Check for the ESCAPE key press and exit the application
+    //                    unsafe { PostQuitMessage(0) };
+    //                }
+    //                TOGGLE_WINDOW_MOVE_KEY => {
+    //                    // unsure why I need to use unsafe here, but compiler complains if I don't
+    //                    unsafe {
+    //                        TOGGLE_STATE = match TOGGLE_STATE {
+    //                            ToggleState::Free => ToggleState::MoveWindow,
+    //                            ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
+    //                            ToggleState::Captured => ToggleState::Free,
+    //                            ToggleState::Capture => {
+    //                                // should never be in this state
+    //                                assert!(false, "unexpected toggle_state");
+    //                                ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
+    //                            }
+    //                        }
+    //                    }
+    //                }
+    //                _ => (),
+    //            }
+    //        } else if msg.message == winapi::um::winuser::WM_LBUTTONUP {
+    //            // on left button click RELEASE (as in, it was pressed and now released)
+    //            // unsure why I need to use unsafe here, but compiler complains if I don't
+    //            unsafe {
+    //                TOGGLE_STATE = match TOGGLE_STATE {
+    //                    ToggleState::Free => ToggleState::MoveWindow,
+    //                    ToggleState::MoveWindow => ToggleState::Capture, // note that interally, Capture will trnasform to Captured
+    //                    ToggleState::Captured => ToggleState::Free,
+    //                    ToggleState::Capture => {
+    //                        // should never be in this state
+    //                        assert!(false, "unexpected toggle_state");
+    //                        ToggleState::Captured // just return to NEXT expteded state in RELEASE mode...
+    //                    }
+    //                }
+    //            }
+    //        }
+
+    //        unsafe {
+    //            match TOGGLE_STATE {
+    //                ToggleState::Free => capture_and_scale(hwnd, cursor),
+    //                ToggleState::MoveWindow => {
+    //                    // move the window to the cursor position (a sticky window)
+    //                    winapi::um::winuser::SetWindowPos(
+    //                        hwnd,
+    //                        ptr::null_mut(),
+    //                        cursor.window_x(),
+    //                        cursor.window_y(),
+    //                        0, // width will be ignored because will use SWP_NOSIZE to retain current size
+    //                        0, // height ignored
+    //                        winapi::um::winuser::SWP_NOSIZE | winapi::um::winuser::SWP_NOZORDER,
+    //                    );
+    //                    //// invalidate the window so it can redraw the window onto the Desktop/monitor
+    //                    //InvalidateRect(hwnd, ptr::null_mut(), 0);
+    //                    capture_and_scale(hwnd, cursor); // show contents UNDERNEATH the window (will InvalidateRect() so that it'll also redraw the actual window onto the )
+    //                }
+    //                ToggleState::Capture => {
+    //                    // capture the screen and magnify it
+    //                    let supported_languages = ocr_langugages.join("+");
+    //                    capture_and_ocr(
+    //                        hwnd,
+    //                        &mut ocr,
+    //                        cursor,
+    //                        &mut ocr_font,
+    //                        supported_languages.clone().as_str(),
+    //                        &mut interpreter,
+    //                    );
+    //                    // once it's blitted to that window, stay still..
+    //                    TOGGLE_STATE = ToggleState::Captured;
+    //                }
+    //                ToggleState::Captured => {
+    //                    // don't render/update/Invalidate the window, just stay still/frozen until the user toggles the window again
+    //                    ()
+    //                }
+    //            }
+    //        }   // unsafe
+    //        //} // loop
+    //}); // winit_event_loop.run()
+    //match winit_run_result {
+    //    Ok(_) => println!("{} - Winit event loop exited cleanly", class_name),
+    //    Err(e) => {
+    //        println!("Error: {:?}", e);
+    //    }
+    //}
 }
 
 #[cfg(test)]
