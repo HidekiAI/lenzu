@@ -1,5 +1,5 @@
-use crate::image_handling::OCRImage;
-use crate::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
+use super::image_handling::OCRImage;
+use super::ocr_traits::{self, OcrRect, OcrTrait, OcrTraitResult};
 use anyhow::Error;
 use image::DynamicImage; // the "real" DynamicImage, not the one from imageproc or rusty_tesseract
 use rusty_tesseract::Args;
