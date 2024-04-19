@@ -1,6 +1,16 @@
+use std::ptr;
+
 use super::capture_traits::*;
-use gtk4::{gdk::Surface, prelude::*};
-use image::{ImageBuffer, RgbaImage};
+use gdk4_win32::Win32Surface;
+use gtk4::{
+    ffi::gtk_native_get_surface,
+    gdk::{Backend, Surface},
+    gio,
+    prelude::*,
+    Widget,
+};
+//use gtk4::gio::list_model::ListModelMutatedDuringIter;
+use image::{DynamicImage, GenericImageView, ImageBuffer, RgbaImage};
 use winapi::{
     shared::{
         minwindef::BYTE,
@@ -13,18 +23,15 @@ use winapi::{
             SelectObject, SetDIBits, BITMAPINFO, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
         },
         winuser::{
-            DispatchMessageW, EnumWindows, GetCursorPos, GetDC, GetMessageW, GetMonitorInfoW,
-            GetWindowLongW, GetWindowRect, GetWindowTextW, InvalidateRect, MonitorFromPoint,
-            PostQuitMessage, ReleaseDC, ShowWindow, TranslateMessage, GWL_EXSTYLE, MONITORINFO,
-            MONITOR_DEFAULTTONEAREST, MSG, SW_SHOW, VK_ESCAPE, VK_SPACE, WM_KEYDOWN,
+            EnumWindows, GetCursorPos, GetDC, GetMonitorInfoW, GetWindowLongW, GetWindowRect, GetWindowTextW, InvalidateRect, MonitorFromPoint, PostQuitMessage, ReleaseDC, ShowWindow, GWL_EXSTYLE, MONITORINFO, MONITOR_DEFAULTTONEAREST, SW_SHOW
         },
     },
 };
 
-struct CaptureWinApi {
-    cursor_data: CursorData,
-
-    hwnd: winapi::shared::windef::HWND,
+pub struct CaptureWinApi {
+    pub cursor_data: CursorData,
+    pub hwnd: winapi::shared::windef::HWND,
+    pub handle: HandleTypes,
 }
 
 impl CaptureTrait for CaptureWinApi {
@@ -35,124 +42,35 @@ impl CaptureTrait for CaptureWinApi {
         CaptureWinApi {
             cursor_data: CursorData::new(),
             hwnd: std::ptr::null_mut(), // use set_hwnd
+            handle: HandleTypes::Win32Handle(gdk4_win32::HWND::default()),
         }
     }
 
-    fn init(&self) -> bool {
-        todo!()
+    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool {
+        self.from_gtk4(app_window_gtk);
+        true
     }
 
     fn capture(
-        &self,
-        //ocr: &mut std::boxed::Box<dyn OcrTrait>,
-        cursor_pos: CursorData,
-        //ocr_font: &mut OCRImage,
-        //interpreter: &mut std::boxed::Box<dyn InterpreterTrait>,
+        &mut self,
+        possible_rect: Option<CaptureRect>,
     ) -> Result<image::DynamicImage, anyhow::Error> {
+        match possible_rect {
+            Some(rect) => self.cursor_data.window = rect,
+            None => (),
+        }
+
         // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
         self.hide_window();
 
         // now capture the screen
-        let screenshot = from_screen_to_image(cursor_pos);
+        let screenshot = self.capture_from_screen_to_image(self.cursor_data);
+        self.render(screenshot);
 
         // show the application window again
         self.show_window();
 
-        // the image we just captured, we'll need to now pass it down to OCR and get the text back
-        // We will (for now) assume it is either "jpn" or "jpn_vert" and we'll just pass it down
-        // to kakasi and convert all kanji to hiragana
-        // 1. convert to grayscale
-        // 2. pass it down to OCR
-        // 3. get the text back
-        // 4. draw the text onto the mem_dc_topmost
-        // 5. blend the topmost layer onto the primary image
-        // 6. scale/magnify
-        // 7. draw the magnified image onto the window
-        // convert DC to RGBA - probably can get away with 24-bit but for better byte alignment, will stay at 32-bit
-        let gray_scale_image = screenshot.grayscale(); // Convert the image to grayscale
-        let ocr_start_time = std::time::Instant::now();
-        let ocr_result = ocr.evaluate(&gray_scale_image);
-        let ocr_time = ocr_start_time.elapsed().as_millis();
-
-        // now run kakasi to convert the kanji to hiragana
-        // Translate Japanese text to hiragana
-        let start_interpreter = std::time::Instant::now();
-        let possible_result_tupled = match ocr_result {
-            Ok(recognized_result) => {
-                println!("OCR Result: '{:?}' {} mSec", recognized_result, ocr_time);
-
-                for line in recognized_result.lines.clone() {
-                    if line.contains(" ") {
-                        panic!("evaluate_async(): Detected space in line: {:?}", line);
-                    }
-                    // dump each char as bytes
-                    for c in line.chars() {
-                        print!("{:?} ", c as u8);
-                    }
-                    println!("");
-                }
-                let possible_translate_result = interpreter.convert(&recognized_result.lines);
-                match possible_translate_result {
-                    Ok(translate_result) => {
-                        println!(
-                            "Interpreter Result: '{:?}' {} mSec",
-                            translate_result,
-                            start_interpreter.elapsed().as_millis()
-                        );
-                        Some((recognized_result, translate_result))
-                    }
-                    Err(e) => {
-                        println!(
-                            "Error: {:?} - {} mSec",
-                            e,
-                            start_interpreter.elapsed().as_millis()
-                        );
-                        Some((recognized_result, InterpreterTraitResult::new()))
-                    }
-                }
-            }
-            Err(e) => {
-                println!("Error: {:?} - {} mSec", e, ocr_time);
-                None
-            }
-        };
-        match possible_result_tupled {
-            Some((recognized_result, translate_result)) => {
-                println!(
-                    "########################## Interpreter Result ({} mSec):\n'{}'\n'{}'\n",
-                    start_interpreter.elapsed().as_millis(),
-                    recognized_result,
-                    translate_result,
-                );
-
-                // And then, layer this PNG onto the original image (blend  png_buffer onto gray_scale_image)
-                // image width and height is based on max of the two
-                // now create a PNG with alpha channel and draw the text onto the image
-                let mut recognized_image = screenshot;
-                if !translate_result.text.is_empty() {
-                    ocr_font.set_image(recognized_image);
-                    recognized_image = ocr_font.overlay_text(translate_result.text.as_str(), 0, 0);
-                }
-
-                if cfg!(debug_assertions) {
-                    // save the image for debugging purposes
-                    println!("Saving debug image: recognized_image.png");
-                    recognized_image.save("recognized_image.png").unwrap();
-                }
-
-                // render translated text onto the window
-                self.from_image_to_window(recognized_image);
-            }
-            None => {
-                println!(
-                    "Interpreter Result ({} mSec): '{:?}'",
-                    start_interpreter.elapsed().as_millis(),
-                    possible_result_tupled
-                );
-                // render what we've captured originally instead
-                self.from_image_to_window(screenshot);
-            }
-        }
+        todo!("Not implemented yet")
     }
 
     fn update(&mut self) {
@@ -193,11 +111,11 @@ impl CaptureTrait for CaptureWinApi {
         }
         // note that we use rcWork rectangle, so that we can ignore the taskbar and toolbar
         // work area, unlike monitor area, is usually/should-be positive because it's the area that's not obscured by the taskbar and toolbar
-        self.cursor_data.monitor_x = monitor_info.rcWork.left; // can be negative, based on being placed LEFT of the PRIMARY monitor
-        self.cursor_data.monitor_y = monitor_info.rcWork.top;
-        self.cursor_data.monitor_width =
+        self.cursor_data.monitor.x = monitor_info.rcWork.left; // can be negative, based on being placed LEFT of the PRIMARY monitor
+        self.cursor_data.monitor.y = monitor_info.rcWork.top;
+        self.cursor_data.monitor.width =
             std::cmp::max(monitor_info.rcWork.right - monitor_info.rcWork.left, 1024) as u32;
-        self.cursor_data.monitor_height =
+        self.cursor_data.monitor.height =
             std::cmp::max(monitor_info.rcWork.bottom - monitor_info.rcWork.top, 768) as u32;
 
         // get current dimension of the windown on the monitor via via GetWindowRect() (GetWindowInfo() can do the same, but it provides more info that we care...)
@@ -209,169 +127,20 @@ impl CaptureTrait for CaptureWinApi {
         };
         // get the dimension of the application window
         unsafe {
-            GetWindowRect(self.self.hwnd, &mut window_rect);
+            GetWindowRect(self.hwnd, &mut window_rect);
         }
-        self.cursor_data.window_width = (window_rect.right - window_rect.left) as u32;
-        self.cursor_data.window_height = (window_rect.bottom - window_rect.top) as u32;
+        self.cursor_data.window.width = (window_rect.right - window_rect.left) as u32;
+        self.cursor_data.window.height = (window_rect.bottom - window_rect.top) as u32;
         // window position (upper left corner) is recalculated based off of cursor (x,y) and upper-left is offset by center of window to be where the mouse cursor will be
         // the tricky part of this is that the windows position coordinate can be negative (same as cursor position) so it's not possible to test for min()/max() for
         // edge of the monitor, and so we'll not do snap to monitor and allow windows to get beyond the edges of the monitors
-        self.cursor_data.window_x =
-            self.cursor_data.x - (self.cursor_data.window_width as i32 / 2) as i32;
-        self.cursor_data.window_y =
-            self.cursor_data.y - (self.cursor_data.window_height as i32 / 2) as i32;
-    }
-}
-
-impl CaptureWinApi {
-    fn set_hwnd(&mut self, hwnd: winapi::shared::windef::HWND) {
-        self.hwnd = hwnd;
-    }
-    // use this method so so that the application can remain agnostic to the platform
-    fn from_gtk4(&mut self, gtk_app_window: &gtk4::ApplicationWindow) {
-        if self.hwnd.is_null() {
-            // using gtk4 gdk_win32_window_get_handle to get the HWND seems to be the practice used by OpenGL users
-            let window_handle = unsafe {
-                //for X11:
-                //gdk_x11_drawable_get_xid(gtk_widget_get_window(gtk_app_window))
-                // for Win32:
-                GDK_SURFACE_HWND(gtk_widget_get_surface(gtk_app_window))
-            };
-
-            // but unsure if that option exist now?  We'll do it the traditinal WinAPI way...
-            // first, get the current PcoressId; in which we can tehn call EnumWindows() to get the HWND
-            let current_process = unsafe { GetCurrentProcess() };
-
-            // see: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms633498(v=vs.85)
-            // EnumWindowsProc callback function
-            extern "system" fn enum_windows_proc(
-                hwnd: winapi::shared::windef::HWND,
-                lparam: isize,
-            ) -> i32 {
-                let mut found_hwnd: winapi::shared::windef::HWND = std::ptr::null_mut();
-                let mut window_text: [u16; 256] = [0; 256];
-                unsafe {
-                    GetWindowTextW(hwnd, window_text.as_mut_ptr(), window_text.len() as i32);
-                    if window_text[0] != 0 {
-                        // if the window has a title, then we'll use that as the window to capture
-                        found_hwnd = hwnd;
-                    }
-                    if found_hwnd.is_null() {
-                        // if we didn't find a window with a title, then we'll just use the first window we find
-                        found_hwnd = hwnd;
-                    }
-                    *(lparam as *mut winapi::shared::windef::HWND) = found_hwnd;
-
-                    0 // continue enumeration
-                }
-            }
-
-            let mut hwnd: winapi::shared::windef::HWND = std::ptr::null_mut();
-            let have_hwnd = unsafe {
-                EnumWindows(
-                    Some(enum_windows_proc),
-                    &mut hwnd as *mut winapi::shared::windef::HWND as isize,
-                )
-            };
-            self.set_hwnd(hwnd);
-        }
-        let gdk_display = gtk_window.get_display();
-        let gdk_monitor = gdk_display.get_monitor_at_window(&gdk_window).unwrap();
-        let monitor_geometry = gdk_monitor.get_geometry();
-        let monitor_rect = gdk_monitor.get_workarea();
-        let window_rect = gdk_window.get_frame_extents();
-        self.cursor_data.monitor_x = monitor_rect.x;
-        self.cursor_data.monitor_y = monitor_rect.y;
-        self.cursor_data.monitor_width = monitor_rect.width;
-        self.cursor_data.monitor_height = monitor_rect.height;
-        self.cursor_data.window_width = window_rect.width;
-        self.cursor_data.window_height = window_rect.height;
-        self.cursor_data.window_x = window_rect.x;
-        self.cursor_data.window_y = window_rect.y;
+        self.cursor_data.window.x =
+            self.cursor_data.x - (self.cursor_data.window.width as i32 / 2) as i32;
+        self.cursor_data.window.y =
+            self.cursor_data.y - (self.cursor_data.window.height as i32 / 2) as i32;
     }
 
-    // NOTE: Make sure to call ShowWindow(hwnd, SW_IDE) prior to calling this method and ShowWindow(hwnd, SW_SHOW) after image is captured
-    // this is so that we do not get the image-echo effect (like a mirror reflecting a mirror) when we capture the screen
-    // will need to experiment, but it seems we do not need to invalidate since ShowWindow() will implicitly refresh window
-    fn from_screen_to_image(cursor_pos: CursorData) -> DynamicImage {
-        // first, get DC of the entire desktop (hence we do not need HWND passed here) via calling GetDC(NULL) - NULL means the entire desktop
-        let source_desktop_dc = unsafe { GetDC(ptr::null_mut()) };
-
-        // Create a compatible device context and bitmap
-        let destination_memory_dc = unsafe { CreateCompatibleDC(source_desktop_dc) };
-        let destination_bitmap = unsafe {
-            CreateCompatibleBitmap(
-                source_desktop_dc,
-                cursor_pos.window_width as i32,
-                cursor_pos.window_height as i32,
-            )
-        };
-
-        // select the bitmap into the memory device context
-        let previous_screen_for_restore_dc = unsafe {
-            SelectObject(
-                destination_memory_dc,
-                destination_bitmap as *mut winapi::ctypes::c_void,
-            )
-        };
-        let image: DynamicImage;
-        unsafe {
-            // BitBlt from the screen DC to the memory DC
-            BitBlt(
-                destination_memory_dc, // destination device context
-                0,                     // destination x
-                0,                     // destination y
-                cursor_pos.window_width as i32,
-                cursor_pos.window_height as i32,
-                source_desktop_dc,   // source device context
-                cursor_pos.window_x, // source x - note that coordinate can be negative value (e.g. cursor is on the left side of the PRIMARY monitor)
-                cursor_pos.window_y, // source y
-                SRCCOPY,
-            );
-
-            // Clean up: Select the OLD bitmap back into the memory DC
-            SelectObject(destination_memory_dc, previous_screen_for_restore_dc);
-
-            // At this point, destination_bitmap contains the captured image
-            // Create a BITMAPINFO structure to receive the bitmap data
-            let mut info: BITMAPINFO = std::mem::zeroed();
-            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFO>() as u32;
-            info.bmiHeader.biWidth = cursor_pos.window_width as i32;
-            info.bmiHeader.biHeight = -(cursor_pos.window_height as i32); // top-down bitmap
-            info.bmiHeader.biPlanes = 1;
-            info.bmiHeader.biBitCount = 32; // each pixel is a 32-bit RGB color
-            info.bmiHeader.biCompression = BI_RGB;
-
-            // Allocate a buffer to receive the bitmap data
-            let mut data: Vec<BYTE> =
-                vec![0; (cursor_pos.window_width * cursor_pos.window_height * 4) as usize];
-
-            // Get the bitmap data
-            GetDIBits(
-                destination_memory_dc,
-                destination_bitmap,
-                0,
-                cursor_pos.window_height,
-                data.as_mut_ptr() as *mut _,
-                &mut info,
-                DIB_RGB_COLORS,
-            );
-
-            // Convert the data to a DynamicImage
-            image =
-                ImageBuffer::from_fn(cursor_pos.window_width, cursor_pos.window_height, |x, y| {
-                    let i = ((y * cursor_pos.window_width + x) * 4) as usize;
-                    image::Rgba([data[i + 2], data[i + 1], data[i], 255])
-                })
-                .into(); // At this point, image is a DynamicImage containing the bitmap image
-
-            DeleteDC(destination_memory_dc);
-            ReleaseDC(ptr::null_mut(), source_desktop_dc);
-            DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
-        };
-        image
-    }
-    fn from_image_to_window(&self, image: DynamicImage) {
+    fn render(&mut self, image: DynamicImage) {
         unsafe {
             // just in case, show window
             ShowWindow(self.hwnd, SW_SHOW);
@@ -432,19 +201,266 @@ impl CaptureWinApi {
             SelectObject(hdc_mem, hbitmap_old);
         }
     }
+}
 
-    fn capture_and_scale(&self, cursor_pos: CursorData) {
-        // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
-        self.hide_window();
+impl CaptureWinApi {
+    pub fn set_hwnd(&mut self, hwnd: winapi::shared::windef::HWND) {
+        self.hwnd = hwnd;
+        self.handle = HandleTypes::Win32Handle(gdk4_win32::HWND(hwnd as isize));
+    }
 
-        // now capture the screen
-        let screenshot = self.from_screen_to_image(cursor_pos);
+    // On a splucations based on:
+    // * get_first_child(): https://docs.gtk.org/gtk4/method.Widget.get_first_child.html
+    // * get_next_sibling(): https://docs.gtk.org/gtk4/method.Widget.get_next_sibling.html
+    // You first get the first child of the parent, then iterate through the siblings
+    // and return list of Win32Surfaces
+    fn find_surfaces(&self, app_window_gtk: &gtk4::ApplicationWindow) -> Vec<Win32Surface> {
+        let mut surfaces: Vec<Win32Surface> = Vec::new();
+        // see if ApplicationWindow itself has a surface (doubtful but just in case)
+        if app_window_gtk.surface().is_some() {
+            let win32_surface_result = app_window_gtk.surface().unwrap().downcast::<Win32Surface>();
+            if win32_surface_result.is_ok() {
+                println!("Found Win32Surface in the application window");
+                surfaces.push(win32_surface_result.unwrap());
+            }
+        }
 
-        // show the application window again
-        self.show_window();
+        let first_child = app_window_gtk.first_child();
+        if first_child.is_none() {
+            println!("No children found in the application window");
+            panic!("GDK4 Surface will NOT be found if you call init() before the window is shown/realized/presented!");
+            return surfaces;
+        }
+        let mut child = first_child.unwrap();
+        loop {
+            let possible_native = child.native();
+            if possible_native.is_none() {
+                // see if next sibling has a native
+                let possible_widget = child.next_sibling();
+                if possible_widget.is_none() {
+                    break;
+                }
+                child = possible_widget.unwrap();
+                continue;
+            }
+            let possible_surface = possible_native.unwrap().surface();
+            if possible_surface.is_none() {
+                // see if next sibling has a surface
+                let possible_widget = child.next_sibling();
+                if possible_widget.is_none() {
+                    break;
+                }
+                child = possible_widget.unwrap();
+                continue;
+            }
+            let win32_surface_result = possible_surface.unwrap().downcast::<Win32Surface>();
+            if win32_surface_result.is_ok() {
+                println!("Found Win32Surface in a child widget");
+                surfaces.push(win32_surface_result.unwrap());
+            }
+            let possible_widget = child.next_sibling();
+            if possible_widget.is_none() {
+                break;
+            }
+            child = possible_widget.unwrap();
+        } // loop
+        surfaces
+    }
 
-        // now render what we've captured
-        self.from_image_to_window(screenshot);
+    // use this method so so that the application can remain agnostic to the platform
+    fn from_gtk4(&mut self, app_window_gtk: &gtk4::ApplicationWindow) {
+        // using gtk4 gdk_win32_window_get_handle to get the HWND seems to be the practice used by OpenGL users
+        // now that all the renderable widgets are appended to parent_box, we can inspect display and surface
+        let display: gtk4::gdk::Display = app_window_gtk.clone().upcast::<Widget>().display();
+        let backend: Backend = display.backend();
+
+        // using GtkNative, we can get the surface via gtk_native_get_surface(), but not all widgets have a native
+        // so we'll take the first native we can find that has a surface
+        let surfaces = self.find_surfaces(app_window_gtk);
+        if surfaces.is_empty() {
+            panic!("No Win32Surface found in the application window and its children");
+        }
+
+        // Try to find the first Win32Surface that has a valid HWND
+        let win_surfaces = surfaces
+            .iter()
+            .flat_map(|current_surface| {
+                match current_surface.handle() != gdk4_win32::HWND::default() {
+                    true => Some(current_surface),
+                    false => None,
+                }
+            })
+            .collect::<Vec<&Win32Surface>>();
+        let win_surface = win_surfaces[0];
+
+        // get GDK display monitor dimensions as well as the window dimensions
+        let monitor = match display.monitor_at_surface(win_surface) {
+            Some(monitor) => monitor,
+            None => panic!("Monitor is not available"),
+        };
+        if self.hwnd.is_null() {
+            // NOTE: Handles are mainly for the purpose of Windows and/or X11 specific desktop libraries
+            //       that needs the surface for rendering (ie. without handles, you cannot screen-capture)
+            let my_handle: HandleTypes = if cfg!(target_os = "windows") {
+                // Windows
+                if backend.is_win32() {
+                    let gdk_win32_hwnd: gdk4_win32::HWND = win_surface.handle(); // am I the only who thinks this was a bit too complicated to get the HWND?
+                    let win32_handle = gdk_win32_hwnd.0 as winapi::shared::windef::HWND;
+                    // for verification, let's locate the "Title" of the HWND window
+                    let mut title = [0u16; 1024];
+                    let title_len = unsafe {
+                        winapi::um::winuser::GetWindowTextW(
+                            win32_handle,
+                            title.as_mut_ptr(),
+                            title.len() as i32,
+                        )
+                    };
+                    // have to make sure to null-terminate AND trim all the nulls
+                    let title = String::from_utf16(&title[..title_len as usize])
+                        .unwrap()
+                        .trim_matches(char::from(0))
+                        .to_string();
+                    println!("HWND Title: {}", title);
+                    self.hwnd = win32_handle;
+                    HandleTypes::Win32Handle(gdk_win32_hwnd)
+                } else {
+                    panic!("Windows backend is not win32");
+                }
+            } else {
+                // Linux
+                todo!("Linux not supported yet");
+            };
+            self.handle = my_handle;
+
+            // but unsure if that option exist now?  We'll do it the traditinal WinAPI way...
+            // first, get the current PcoressId; in which we can tehn call EnumWindows() to get the HWND
+            let current_process = unsafe { GetCurrentProcess() };
+
+            // see: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms633498(v=vs.85)
+            // EnumWindowsProc callback function
+            extern "system" fn enum_windows_proc(
+                hwnd: winapi::shared::windef::HWND,
+                lparam: isize,
+            ) -> i32 {
+                let mut found_hwnd: winapi::shared::windef::HWND = std::ptr::null_mut();
+                let mut window_text: [u16; 256] = [0; 256];
+                unsafe {
+                    GetWindowTextW(hwnd, window_text.as_mut_ptr(), window_text.len() as i32);
+                    if window_text[0] != 0 {
+                        // if the window has a title, then we'll use that as the window to capture
+                        found_hwnd = hwnd;
+                    }
+                    if found_hwnd.is_null() {
+                        // if we didn't find a window with a title, then we'll just use the first window we find
+                        found_hwnd = hwnd;
+                    }
+                    *(lparam as *mut winapi::shared::windef::HWND) = found_hwnd;
+
+                    0 // continue enumeration
+                }
+            }
+
+            let mut hwnd: winapi::shared::windef::HWND = std::ptr::null_mut();
+            let have_hwnd = unsafe {
+                EnumWindows(
+                    Some(enum_windows_proc),
+                    &mut hwnd as *mut winapi::shared::windef::HWND as isize,
+                )
+            };
+            self.set_hwnd(hwnd);
+        } // if hwnd is NULL
+
+        let monitor_rect = monitor.geometry();
+        self.cursor_data.monitor.x = monitor_rect.x();
+        self.cursor_data.monitor.y = monitor_rect.y();
+        self.cursor_data.monitor.width = monitor_rect.width() as u32;
+        self.cursor_data.monitor.height = monitor_rect.height() as u32;
+        self.cursor_data.window.width = app_window_gtk.width() as u32;
+        self.cursor_data.window.height = app_window_gtk.height() as u32;
+        self.cursor_data.window.x = 0; //app_window_gtk.x();
+        self.cursor_data.window.y = 0; //app_window_gtk.y();
+    }
+
+    // NOTE: Make sure to call ShowWindow(hwnd, SW_IDE) prior to calling this method and ShowWindow(hwnd, SW_SHOW) after image is captured
+    // this is so that we do not get the image-echo effect (like a mirror reflecting a mirror) when we capture the screen
+    // will need to experiment, but it seems we do not need to invalidate since ShowWindow() will implicitly refresh window
+    pub fn capture_from_screen_to_image(&self, cursor_pos: CursorData) -> DynamicImage {
+        // first, get DC of the entire desktop (hence we do not need HWND passed here) via calling GetDC(NULL) - NULL means the entire desktop
+        let source_desktop_dc = unsafe { GetDC(ptr::null_mut()) };
+
+        // Create a compatible device context and bitmap
+        let destination_memory_dc = unsafe { CreateCompatibleDC(source_desktop_dc) };
+        let destination_bitmap = unsafe {
+            CreateCompatibleBitmap(
+                source_desktop_dc,
+                cursor_pos.window.width as i32,
+                cursor_pos.window.height as i32,
+            )
+        };
+
+        // select the bitmap into the memory device context
+        let previous_screen_for_restore_dc = unsafe {
+            SelectObject(
+                destination_memory_dc,
+                destination_bitmap as *mut winapi::ctypes::c_void,
+            )
+        };
+        let image: DynamicImage;
+        unsafe {
+            // BitBlt from the screen DC to the memory DC
+            BitBlt(
+                destination_memory_dc, // destination device context
+                0,                     // destination x
+                0,                     // destination y
+                cursor_pos.window.width as i32,
+                cursor_pos.window.height as i32,
+                source_desktop_dc,   // source device context
+                cursor_pos.window.x, // source x - note that coordinate can be negative value (e.g. cursor is on the left side of the PRIMARY monitor)
+                cursor_pos.window.y, // source y
+                SRCCOPY,
+            );
+
+            // Clean up: Select the OLD bitmap back into the memory DC
+            SelectObject(destination_memory_dc, previous_screen_for_restore_dc);
+
+            // At this point, destination_bitmap contains the captured image
+            // Create a BITMAPINFO structure to receive the bitmap data
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader.biSize = std::mem::size_of::<BITMAPINFO>() as u32;
+            info.bmiHeader.biWidth = cursor_pos.window.width as i32;
+            info.bmiHeader.biHeight = -(cursor_pos.window.height as i32); // top-down bitmap
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32; // each pixel is a 32-bit RGB color
+            info.bmiHeader.biCompression = BI_RGB;
+
+            // Allocate a buffer to receive the bitmap data
+            let mut data: Vec<BYTE> =
+                vec![0; (cursor_pos.window.width * cursor_pos.window.height * 4) as usize];
+
+            // Get the bitmap data
+            GetDIBits(
+                destination_memory_dc,
+                destination_bitmap,
+                0,
+                cursor_pos.window.height,
+                data.as_mut_ptr() as *mut _,
+                &mut info,
+                DIB_RGB_COLORS,
+            );
+
+            // Convert the data to a DynamicImage
+            image =
+                ImageBuffer::from_fn(cursor_pos.window.width, cursor_pos.window.height, |x, y| {
+                    let i = ((y * cursor_pos.window.width + x) * 4) as usize;
+                    image::Rgba([data[i + 2], data[i + 1], data[i], 255])
+                })
+                .into(); // At this point, image is a DynamicImage containing the bitmap image
+
+            DeleteDC(destination_memory_dc);
+            ReleaseDC(ptr::null_mut(), source_desktop_dc);
+            DeleteObject(destination_bitmap as *mut winapi::ctypes::c_void);
+        };
+        image
     }
 
     // In order to now get the mirror-effect, we have to hide the window, capture the screen, show the window, then render the captured screen
