@@ -3,8 +3,12 @@ mod interpreter;
 mod ocr;
 
 use crate::{glib::clone, interpreter::interpreter_traits::InterpreterTraitResult};
-use capture::capture_traits::CursorData;
-use capture::capture_winapi;
+use capture::{
+    capture_traits::{CaptureRect, CaptureTrait, HandleTypes},
+    capture_winapi::{self, CaptureWinApi},
+    capture_x11::CaptureX11,
+};
+
 use gdk4_win32::{
     ffi::{gdk_win32_surface_get_impl_hwnd, GdkWin32Surface},
     Win32Surface, HWND,
@@ -66,21 +70,24 @@ fn create_interpreter(_args: &Vec<String>) -> std::boxed::Box<dyn InterpreterTra
     std::boxed::Box::new(InterpreterJaMecab::new())
 }
 
+fn create_capture(args: &Vec<String>) -> std::boxed::Box<dyn CaptureTrait> {
+    if cfg!(target_os = "windows") {
+        std::boxed::Box::new(CaptureWinApi::new())
+    } else {
+        std::boxed::Box::new(CaptureX11::new())
+    }
+}
+
 fn capture_and_ocr(
     ocr: &mut std::boxed::Box<dyn OcrTrait>,
-    cursor_pos: CursorData,
+    capture: &mut std::boxed::Box<dyn CaptureTrait>,
     ocr_font: &mut OCRImage,
     _supported_lang: &str, // '+' separated list of supported languages(i.e. "jpn+jpn_ver+osd"), note that longer this list, longer it takes to OCR (ie. 10sec/lang so if there are 4 in this list, it can take 40 seconds!)
     interpreter: &mut std::boxed::Box<dyn InterpreterTrait>,
 ) {
-    // first, set transparancy of the window to 99% (i.e. almost invisible) using SetLayeredWindowAttributes()
-    hide_window(hwnd);
-
     // now capture the screen
-    let screenshot = from_screen_to_image(cursor_pos);
-
-    // show the application window again
-    show_window(hwnd);
+    let rect: Option<CaptureRect> = None; // TODO: pass in the rect
+    let screenshot = capture.capture(rect).unwrap();
 
     // the image we just captured, we'll need to now pass it down to OCR and get the text back
     // We will (for now) assume it is either "jpn" or "jpn_vert" and we'll just pass it down
@@ -165,7 +172,7 @@ fn capture_and_ocr(
             }
 
             // render translated text onto the window
-            from_image_to_window(hwnd, recognized_image);
+            capture.render(recognized_image);
         }
         None => {
             println!(
@@ -174,7 +181,7 @@ fn capture_and_ocr(
                 possible_result_tupled
             );
             // render what we've captured originally instead
-            from_image_to_window(hwnd, screenshot);
+            capture.render(screenshot);
         }
     }
 }
@@ -192,11 +199,6 @@ fn main() -> glib::ExitCode {
     application.run()
 }
 
-enum HandleTypes {
-    Win32Handle(gdk4_win32::HWND),
-    //Xwin( gdk4_wayland::HANDLE),
-}
-
 fn build_ui(application: &gtk4::Application) {
     // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
     let args: &Vec<String> = &std::env::args().collect();
@@ -204,6 +206,7 @@ fn build_ui(application: &gtk4::Application) {
     let ocr_langugages = ocr.init();
     let mut interpreter = create_interpreter(&args);
     let mut ocr_font = OCRImage::new(None);
+    let mut capture = create_capture(&args);
 
     let app_window_gtk: ApplicationWindow = gtk4::ApplicationWindow::builder()
         .application(application)
@@ -284,38 +287,14 @@ fn build_ui(application: &gtk4::Application) {
         }
     }));
 
-    // now that all the renderable widgets are appended to parent_box, we can inspect display and surface
-    let as_widget = app_window_gtk.clone().upcast::<Widget>();
-    let display: gtk4::gdk::Display = as_widget.display();
-    let backend: Backend = display.backend();
-    let possible_surface = app_window_gtk.surface();
-    // NOTE: Handles are mainly for the purpose of Windows and/or X11 specific desktop libraries
-    //       that needs the surface for rendering (ie. without handles, you cannot screen-capture)
-    let my_handle: HandleTypes = if cfg!(target_os = "windows") {
-        // Windows
-        if backend.is_win32() {
-            let mut win_surface: Win32Surface = match possible_surface {
-                Some(surface) => {
-                    let win_surface = surface.downcast::<Win32Surface>().unwrap();
-                    win_surface
-                }
-                None => panic!("Surface is not available"),
-            };
-            let win32_hwnd = win_surface.handle();  // am I the only who thinks this was a bit too complicated to get the HWND?
-            HandleTypes::Win32Handle(win32_hwnd)
-        } else {
-            panic!("Windows backend is not win32");
-        }
-    } else {
-        // Linux
-        todo!("Linux not supported yet");
-    };
-
     // all is attached to parent_box, now attach itself to window
     //app_window_gtk.set_child(Some(&parent_box));
     window_scrollable.set_child(Some(&parent_box));
     app_window_gtk.set_visible(true);
     app_window_gtk.present(); // mark (child scene-graph nodes) for refresh
+
+    // all is setup, now pass the window structure/model to Display
+    capture.init(&app_window_gtk);  // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND), it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
 }
 
 #[cfg(test)]
