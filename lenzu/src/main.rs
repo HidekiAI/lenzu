@@ -17,7 +17,11 @@ use gtk4::{
     ffi::{gtk_list_store_append, GtkButton, GtkWidget},
     gdk::{self, Backend, Display},
     gdk_pixbuf::Pixbuf,
-    gio, glib,
+    gio::{
+        self,
+        ffi::{g_application_bind_busy_property, g_application_quit},
+    },
+    glib,
     prelude::*,
     subclass::widget,
     ApplicationWindow, Button, HeaderBar, Image, Orientation, Picture, Widget,
@@ -186,7 +190,7 @@ fn capture_and_ocr(
     }
 }
 
-fn runtime() -> &'static Runtime {
+fn tokio_runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
 }
@@ -253,7 +257,10 @@ fn build_ui(application: &gtk4::Application) {
     image.set_visible(true);
     //parent_box.append(&image);
 
-    let (sender_quit_signal, receiver_quit_signal) = async_channel::bounded(1);
+    let (sender_quit_signal, receiver_quit_signal): (
+        async_channel::Sender<bool>,
+        async_channel::Receiver<bool>,
+    ) = async_channel::bounded(1);
 
     // Create a button with label and margins
     let button_quit: Button = Button::builder()
@@ -269,7 +276,7 @@ fn build_ui(application: &gtk4::Application) {
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
-        runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
+        tokio_runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
             sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
         }));
         println!("Signal sent to quit...");
@@ -294,7 +301,14 @@ fn build_ui(application: &gtk4::Application) {
     app_window_gtk.present(); // mark (child scene-graph nodes) for refresh
 
     // all is setup, now pass the window structure/model to Display
-    capture.init(&app_window_gtk);  // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND), it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
+    capture.init(&app_window_gtk); // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND), it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
+
+    // Create an action for quitting
+    let quit_action = gio::SimpleAction::new("quit", None);
+    quit_action.connect_activate(move |_, _| {
+        app_window_gtk.close();
+    });
+    application.add_action(&quit_action);
 }
 
 #[cfg(test)]
@@ -348,3 +362,714 @@ mod tests {
         img.save("test_draw_text_mut.png").unwrap();
     }
 }
+
+/*
+// short-cuts takes keypress of X and Ctrl-G
+#include <gtk/gtk.h>
+
+static GtkWidget *window = NULL;
+
+static gboolean
+shortcut_activated (GtkWidget *widget,
+                    GVariant  *unused,
+                    gpointer   row)
+{
+  g_print ("activated %s\n", gtk_label_get_label (row));
+  return TRUE;
+}
+
+static GtkShortcutTrigger *
+create_ctrl_g (void)
+{
+  return gtk_keyval_trigger_new (GDK_KEY_g, GDK_CONTROL_MASK);
+}
+
+static GtkShortcutTrigger *
+create_x (void)
+{
+  return gtk_keyval_trigger_new (GDK_KEY_x, 0);
+}
+
+struct {
+  const char *description;
+  GtkShortcutTrigger * (* create_trigger_func) (void);
+} shortcuts[] = {
+  { "Press Ctrl-G", create_ctrl_g },
+  { "Press X", create_x },
+};
+
+GtkWidget *
+do_shortcut_triggers (GtkWidget *do_widget)
+{
+  guint i;
+
+  if (!window)
+    {
+      GtkWidget *list;
+      GtkEventController *controller;
+
+      window = gtk_window_new ();
+      gtk_window_set_display (GTK_WINDOW (window),
+                              gtk_widget_get_display (do_widget));
+      gtk_window_set_title (GTK_WINDOW (window), "Shortcuts");
+      gtk_window_set_default_size (GTK_WINDOW (window), 200, -1);
+      gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+      g_object_add_weak_pointer (G_OBJECT (window), (gpointer *)&window);
+
+      list = gtk_list_box_new ();
+      gtk_widget_set_margin_top (list, 6);
+      gtk_widget_set_margin_bottom (list, 6);
+      gtk_widget_set_margin_start (list, 6);
+      gtk_widget_set_margin_end (list, 6);
+      gtk_window_set_child (GTK_WINDOW (window), list);
+
+      for (i = 0; i < G_N_ELEMENTS (shortcuts); i++)
+        {
+          GtkShortcut *shortcut;
+          GtkWidget *row;
+
+          row = gtk_label_new (shortcuts[i].description);
+          gtk_list_box_insert (GTK_LIST_BOX (list), row, -1);
+
+          controller = gtk_shortcut_controller_new ();
+          gtk_shortcut_controller_set_scope (GTK_SHORTCUT_CONTROLLER (controller), GTK_SHORTCUT_SCOPE_GLOBAL);
+          gtk_widget_add_controller (row, controller);
+
+          shortcut = gtk_shortcut_new (shortcuts[i].create_trigger_func(),
+                                       gtk_callback_action_new (shortcut_activated, row, NULL));
+          gtk_shortcut_controller_add_shortcut (GTK_SHORTCUT_CONTROLLER (controller), shortcut);
+        }
+    }
+
+  if (!gtk_widget_get_visible (window))
+    gtk_widget_set_visible (window, TRUE);
+  else
+    gtk_window_destroy (GTK_WINDOW (window));
+
+  return window;
+}
+
+
+*/
+
+/*
+// PAINT
+#include <glib/gi18n.h>
+#include <gtk/gtk.h>
+
+enum {
+  COLOR_SET,
+  N_SIGNALS
+};
+
+static guint area_signals[N_SIGNALS] = { 0, };
+
+typedef struct
+{
+  GtkWidget parent_instance;
+  cairo_surface_t *surface;
+  cairo_t *cr;
+  GdkRGBA draw_color;
+  GtkPadController *pad_controller;
+  double brush_size;
+  GtkGesture *gesture;
+} DrawingArea;
+
+typedef struct
+{
+  GtkWidgetClass parent_class;
+} DrawingAreaClass;
+
+static GtkPadActionEntry pad_actions[] = {
+  { GTK_PAD_ACTION_BUTTON, 1, -1, N_("Black"), "pad.black" },
+  { GTK_PAD_ACTION_BUTTON, 2, -1, N_("Pink"), "pad.pink" },
+  { GTK_PAD_ACTION_BUTTON, 3, -1, N_("Green"), "pad.green" },
+  { GTK_PAD_ACTION_BUTTON, 4, -1, N_("Red"), "pad.red" },
+  { GTK_PAD_ACTION_BUTTON, 5, -1, N_("Purple"), "pad.purple" },
+  { GTK_PAD_ACTION_BUTTON, 6, -1, N_("Orange"), "pad.orange" },
+  { GTK_PAD_ACTION_STRIP, -1, -1, N_("Brush size"), "pad.brush_size" },
+};
+
+static const char *pad_colors[] = {
+  "black",
+  "pink",
+  "green",
+  "red",
+  "purple",
+  "orange"
+};
+
+static GType drawing_area_get_type (void);
+G_DEFINE_TYPE (DrawingArea, drawing_area, GTK_TYPE_WIDGET)
+
+static void drawing_area_set_color (DrawingArea   *area,
+                                    const GdkRGBA *color);
+
+static void
+drawing_area_ensure_surface (DrawingArea *area,
+                             int          width,
+                             int          height)
+{
+  if (!area->surface ||
+      cairo_image_surface_get_width (area->surface) != width ||
+      cairo_image_surface_get_height (area->surface) != height)
+    {
+      cairo_surface_t *surface;
+
+      surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32,
+                                            width, height);
+      if (area->surface)
+        {
+          cairo_t *cr;
+
+          cr = cairo_create (surface);
+          cairo_set_source_surface (cr, area->surface, 0, 0);
+          cairo_paint (cr);
+
+          cairo_surface_destroy (area->surface);
+          cairo_destroy (area->cr);
+          cairo_destroy (cr);
+        }
+
+      area->surface = surface;
+      area->cr = cairo_create (surface);
+    }
+}
+
+static void
+drawing_area_size_allocate (GtkWidget *widget,
+                            int        width,
+                            int        height,
+                            int        baseline)
+{
+  DrawingArea *area = (DrawingArea *) widget;
+
+  drawing_area_ensure_surface (area, width, height);
+
+  GTK_WIDGET_CLASS (drawing_area_parent_class)->size_allocate (widget, width, height, baseline);
+}
+
+static void
+drawing_area_map (GtkWidget *widget)
+{
+  GTK_WIDGET_CLASS (drawing_area_parent_class)->map (widget);
+
+  drawing_area_ensure_surface ((DrawingArea *) widget,
+                               gtk_widget_get_width (widget),
+                               gtk_widget_get_height (widget));
+}
+
+static void
+drawing_area_unmap (GtkWidget *widget)
+{
+  DrawingArea *area = (DrawingArea *) widget;
+
+  g_clear_pointer (&area->cr, cairo_destroy);
+  g_clear_pointer (&area->surface, cairo_surface_destroy);
+
+  GTK_WIDGET_CLASS (drawing_area_parent_class)->unmap (widget);
+}
+
+static void
+drawing_area_snapshot (GtkWidget   *widget,
+                       GtkSnapshot *snapshot)
+{
+  DrawingArea *area = (DrawingArea *) widget;
+  int width, height;
+  cairo_t *cr;
+
+  width = gtk_widget_get_width (widget);
+  height = gtk_widget_get_height (widget);
+
+  cr = gtk_snapshot_append_cairo (snapshot, &GRAPHENE_RECT_INIT (0, 0, width, height));
+
+  cairo_set_source_rgb (cr, 1, 1, 1);
+  cairo_paint (cr);
+
+  cairo_set_source_surface (cr, area->surface, 0, 0);
+  cairo_paint (cr);
+
+  cairo_set_source_rgb (cr, 0.6, 0.6, 0.6);
+  cairo_rectangle (cr, 0, 0, width, height);
+  cairo_stroke (cr);
+
+  cairo_destroy (cr);
+}
+
+static void
+on_pad_button_activate (GSimpleAction *action,
+                        GVariant      *parameter,
+                        DrawingArea   *area)
+{
+  const char *color = g_object_get_data (G_OBJECT (action), "color");
+  GdkRGBA rgba;
+
+  gdk_rgba_parse (&rgba, color);
+  drawing_area_set_color (area, &rgba);
+}
+
+static void
+on_pad_knob_change (GSimpleAction *action,
+                    GVariant      *parameter,
+                    DrawingArea   *area)
+{
+  double value = g_variant_get_double (parameter);
+
+  area->brush_size = value;
+}
+
+static void
+drawing_area_unroot (GtkWidget *widget)
+{
+  DrawingArea *area = (DrawingArea *) widget;
+  GtkWidget *toplevel;
+
+  toplevel = GTK_WIDGET (gtk_widget_get_root (widget));
+
+  if (area->pad_controller)
+    {
+      gtk_widget_remove_controller (toplevel, GTK_EVENT_CONTROLLER (area->pad_controller));
+      area->pad_controller = NULL;
+    }
+
+  GTK_WIDGET_CLASS (drawing_area_parent_class)->unroot (widget);
+}
+
+static void
+drawing_area_root (GtkWidget *widget)
+{
+  DrawingArea *area = (DrawingArea *) widget;
+  GSimpleActionGroup *action_group;
+  GSimpleAction *action;
+  GtkWidget *toplevel;
+  int i;
+
+  GTK_WIDGET_CLASS (drawing_area_parent_class)->root (widget);
+
+  toplevel = GTK_WIDGET (gtk_widget_get_root (GTK_WIDGET (area)));
+
+  action_group = g_simple_action_group_new ();
+  area->pad_controller = gtk_pad_controller_new (G_ACTION_GROUP (action_group), NULL);
+
+  for (i = 0; i < G_N_ELEMENTS (pad_actions); i++)
+    {
+      if (pad_actions[i].type == GTK_PAD_ACTION_BUTTON)
+        {
+          action = g_simple_action_new (pad_actions[i].action_name, NULL);
+          g_object_set_data (G_OBJECT (action), "color",
+                             (gpointer) pad_colors[i]);
+          g_signal_connect (action, "activate",
+                            G_CALLBACK (on_pad_button_activate), area);
+        }
+      else
+        {
+          action = g_simple_action_new_stateful (pad_actions[i].action_name,
+                                                 G_VARIANT_TYPE_DOUBLE, NULL);
+          g_signal_connect (action, "activate",
+                            G_CALLBACK (on_pad_knob_change), area);
+        }
+
+      g_action_map_add_action (G_ACTION_MAP (action_group), G_ACTION (action));
+      g_object_unref (action);
+    }
+
+  gtk_pad_controller_set_action_entries (area->pad_controller, pad_actions,
+                                         G_N_ELEMENTS (pad_actions));
+
+  gtk_widget_add_controller (toplevel, GTK_EVENT_CONTROLLER (area->pad_controller));
+}
+
+static void
+drawing_area_class_init (DrawingAreaClass *klass)
+{
+  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+
+  widget_class->size_allocate = drawing_area_size_allocate;
+  widget_class->snapshot = drawing_area_snapshot;
+  widget_class->map = drawing_area_map;
+  widget_class->unmap = drawing_area_unmap;
+  widget_class->root = drawing_area_root;
+  widget_class->unroot = drawing_area_unroot;
+
+  area_signals[COLOR_SET] =
+    g_signal_new ("color-set",
+                  G_TYPE_FROM_CLASS (widget_class),
+                  G_SIGNAL_RUN_FIRST,
+                  0, NULL, NULL, NULL,
+                  G_TYPE_NONE, 1, GDK_TYPE_RGBA);
+}
+
+static void
+drawing_area_apply_stroke (DrawingArea   *area,
+                           GdkDeviceTool *tool,
+                           double         x,
+                           double         y,
+                           double         pressure)
+{
+  if (tool && gdk_device_tool_get_tool_type (tool) == GDK_DEVICE_TOOL_TYPE_ERASER)
+    {
+      cairo_set_line_width (area->cr, 10 * pressure * area->brush_size);
+      cairo_set_operator (area->cr, CAIRO_OPERATOR_DEST_OUT);
+    }
+  else
+    {
+      cairo_set_line_width (area->cr, 4 * pressure * area->brush_size);
+      cairo_set_operator (area->cr, CAIRO_OPERATOR_SATURATE);
+    }
+
+  cairo_set_source_rgba (area->cr, area->draw_color.red,
+                         area->draw_color.green, area->draw_color.blue,
+                         area->draw_color.alpha * pressure);
+
+  cairo_line_to (area->cr, x, y);
+  cairo_stroke (area->cr);
+  cairo_move_to (area->cr, x, y);
+}
+
+static void
+stylus_gesture_down (GtkGestureStylus *gesture,
+                     double            x,
+                     double            y,
+                     DrawingArea      *area)
+{
+  cairo_new_path (area->cr);
+}
+
+static void
+stylus_gesture_motion (GtkGestureStylus *gesture,
+                       double            x,
+                       double            y,
+                       DrawingArea      *area)
+{
+  GdkTimeCoord *backlog;
+  GdkDeviceTool *tool;
+  double pressure;
+  guint n_items;
+
+  tool = gtk_gesture_stylus_get_device_tool (gesture);
+
+  if (gtk_gesture_stylus_get_backlog (gesture, &backlog, &n_items))
+    {
+      guint i;
+
+      for (i = 0; i < n_items; i++)
+        {
+          drawing_area_apply_stroke (area, tool,
+                                     backlog[i].axes[GDK_AXIS_X],
+                                     backlog[i].axes[GDK_AXIS_Y],
+                                     backlog[i].flags & GDK_AXIS_FLAG_PRESSURE
+                                        ? backlog[i].axes[GDK_AXIS_PRESSURE]
+                                        : 1);
+        }
+
+      g_free (backlog);
+    }
+  else
+    {
+      if (!gtk_gesture_stylus_get_axis (gesture, GDK_AXIS_PRESSURE, &pressure))
+        pressure = 1;
+
+      drawing_area_apply_stroke (area, tool, x, y, pressure);
+    }
+
+  gtk_widget_queue_draw (GTK_WIDGET (area));
+}
+
+static void
+drawing_area_init (DrawingArea *area)
+{
+  GtkGesture *gesture;
+
+  gesture = gtk_gesture_stylus_new ();
+  g_signal_connect (gesture, "down",
+                    G_CALLBACK (stylus_gesture_down), area);
+  g_signal_connect (gesture, "motion",
+                    G_CALLBACK (stylus_gesture_motion), area);
+  gtk_widget_add_controller (GTK_WIDGET (area), GTK_EVENT_CONTROLLER (gesture));
+
+  area->draw_color = (GdkRGBA) { 0, 0, 0, 1 };
+  area->brush_size = 1;
+
+  area->gesture = gesture;
+}
+
+static GtkWidget *
+drawing_area_new (void)
+{
+  return g_object_new (drawing_area_get_type (), NULL);
+}
+
+static void
+drawing_area_set_color (DrawingArea   *area,
+                        const GdkRGBA *color)
+{
+  if (gdk_rgba_equal (&area->draw_color, color))
+    return;
+
+  area->draw_color = *color;
+  g_signal_emit (area, area_signals[COLOR_SET], 0, &area->draw_color);
+}
+
+static void
+color_button_color_set (GtkColorDialogButton *button,
+                        GParamSpec           *pspec,
+                        DrawingArea          *draw_area)
+{
+  const GdkRGBA *color;
+
+  color = gtk_color_dialog_button_get_rgba (button);
+  drawing_area_set_color (draw_area, color);
+}
+
+static void
+drawing_area_color_set (DrawingArea          *area,
+                        GdkRGBA              *color,
+                        GtkColorDialogButton *button)
+{
+  gtk_color_dialog_button_set_rgba (button, color);
+}
+
+static GtkGesture *
+drawing_area_get_gesture (DrawingArea *area)
+{
+  return area->gesture;
+}
+
+GtkWidget *
+do_paint (GtkWidget *toplevel)
+{
+  static GtkWidget *window = NULL;
+
+  if (!window)
+    {
+      GtkWidget *draw_area, *headerbar, *button;
+
+      window = gtk_window_new ();
+
+      draw_area = drawing_area_new ();
+      gtk_window_set_child (GTK_WINDOW (window), draw_area);
+
+      headerbar = gtk_header_bar_new ();
+
+      button = gtk_color_dialog_button_new (gtk_color_dialog_new ());
+      g_signal_connect (button, "notify::rgba",
+                        G_CALLBACK (color_button_color_set), draw_area);
+      g_signal_connect (draw_area, "color-set",
+                        G_CALLBACK (drawing_area_color_set), button);
+      gtk_color_dialog_button_set_rgba (GTK_COLOR_DIALOG_BUTTON (button),
+                                        &(GdkRGBA) { 0, 0, 0, 1 });
+
+      gtk_header_bar_pack_end (GTK_HEADER_BAR (headerbar), button);
+
+      button = gtk_check_button_new_with_label ("Stylus only");
+      g_object_bind_property (button, "active",
+                              drawing_area_get_gesture ((DrawingArea *)draw_area), "stylus-only",
+                              G_BINDING_SYNC_CREATE);
+      gtk_header_bar_pack_start (GTK_HEADER_BAR (headerbar), button);
+
+      gtk_window_set_titlebar (GTK_WINDOW (window), headerbar);
+      gtk_window_set_title (GTK_WINDOW (window), "Paint");
+      g_object_add_weak_pointer (G_OBJECT (window), (gpointer *)&window);
+    }
+
+  if (!gtk_widget_get_visible (window))
+    gtk_widget_set_visible (window, TRUE);
+  else
+    gtk_window_destroy (GTK_WINDOW (window));
+
+  return window;
+}
+
+*/
+
+/*
+// Dialogs
+#include <glib/gi18n.h>
+#include <gtk/gtk.h>
+
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+
+static GtkWidget *window = NULL;
+static GtkWidget *entry1 = NULL;
+static GtkWidget *entry2 = NULL;
+
+static void
+message_dialog_clicked (GtkButton *button,
+                        gpointer   user_data)
+{
+  GtkWidget *dialog;
+  static int i = 1;
+
+  dialog = gtk_message_dialog_new (GTK_WINDOW (window),
+                                   GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+                                   GTK_MESSAGE_INFO,
+                                   GTK_BUTTONS_OK_CANCEL,
+                                   "Test message");
+  gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
+                                            ngettext ("Has been shown once", "Has been shown %d times", i), i);
+  g_signal_connect (dialog, "response", G_CALLBACK (gtk_window_destroy), NULL);
+  gtk_window_present (GTK_WINDOW (dialog));
+  i++;
+}
+
+typedef struct {
+  GtkWidget *local_entry1;
+  GtkWidget *local_entry2;
+  GtkWidget *global_entry1;
+  GtkWidget *global_entry2;
+} ResponseData;
+
+static void
+on_dialog_response (GtkDialog *dialog,
+                    int        response,
+                    gpointer   user_data)
+{
+  ResponseData *data = user_data;
+
+  if (response == GTK_RESPONSE_OK)
+    {
+      gtk_editable_set_text (GTK_EDITABLE (data->global_entry1),
+                             gtk_editable_get_text (GTK_EDITABLE (data->local_entry1)));
+      gtk_editable_set_text (GTK_EDITABLE (data->global_entry2),
+                             gtk_editable_get_text (GTK_EDITABLE (data->local_entry2)));
+    }
+
+  gtk_window_destroy (GTK_WINDOW (dialog));
+}
+
+static void
+interactive_dialog_clicked (GtkButton *button,
+                            gpointer   user_data)
+{
+  GtkWidget *content_area;
+  GtkWidget *dialog;
+  GtkWidget *table;
+  GtkWidget *local_entry1;
+  GtkWidget *local_entry2;
+  GtkWidget *label;
+  ResponseData *data;
+
+  dialog = gtk_dialog_new_with_buttons ("Interactive Dialog",
+                                        GTK_WINDOW (window),
+                                        GTK_DIALOG_MODAL| GTK_DIALOG_DESTROY_WITH_PARENT|GTK_DIALOG_USE_HEADER_BAR,
+                                        _("_OK"), GTK_RESPONSE_OK,
+                                        _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                        NULL);
+
+  gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+
+  content_area = gtk_dialog_get_content_area (GTK_DIALOG (dialog));
+
+  table = gtk_grid_new ();
+  gtk_widget_set_hexpand (table, TRUE);
+  gtk_widget_set_vexpand (table, TRUE);
+  gtk_widget_set_halign (table, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (table, GTK_ALIGN_CENTER);
+  gtk_box_append (GTK_BOX (content_area), table);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 6);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 6);
+
+  label = gtk_label_new_with_mnemonic ("_Entry 1");
+  gtk_grid_attach (GTK_GRID (table), label, 0, 0, 1, 1);
+  local_entry1 = gtk_entry_new ();
+  gtk_editable_set_text (GTK_EDITABLE (local_entry1), gtk_editable_get_text (GTK_EDITABLE (entry1)));
+  gtk_grid_attach (GTK_GRID (table), local_entry1, 1, 0, 1, 1);
+  gtk_label_set_mnemonic_widget (GTK_LABEL (label), local_entry1);
+
+  label = gtk_label_new_with_mnemonic ("E_ntry 2");
+  gtk_grid_attach (GTK_GRID (table), label, 0, 1, 1, 1);
+
+  local_entry2 = gtk_entry_new ();
+  gtk_editable_set_text (GTK_EDITABLE (local_entry2), gtk_editable_get_text (GTK_EDITABLE (entry2)));
+  gtk_grid_attach (GTK_GRID (table), local_entry2, 1, 1, 1, 1);
+  gtk_label_set_mnemonic_widget (GTK_LABEL (label), local_entry2);
+
+  data = g_new (ResponseData, 1);
+  data->local_entry1 = local_entry1;
+  data->local_entry2 = local_entry2;
+  data->global_entry1 = entry1;
+  data->global_entry2 = entry2;
+
+  g_signal_connect_data (dialog, "response",
+                         G_CALLBACK (on_dialog_response),
+                         data, (GClosureNotify) g_free,
+                         0);
+
+  gtk_window_present (GTK_WINDOW (dialog));
+}
+
+GtkWidget *
+do_dialog (GtkWidget *do_widget)
+{
+  GtkWidget *vbox;
+  GtkWidget *vbox2;
+  GtkWidget *hbox;
+  GtkWidget *button;
+  GtkWidget *table;
+  GtkWidget *label;
+
+  if (!window)
+    {
+      window = gtk_window_new ();
+      gtk_window_set_display (GTK_WINDOW (window),
+                              gtk_widget_get_display (do_widget));
+      gtk_window_set_title (GTK_WINDOW (window), "Dialogs");
+      gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+      g_object_add_weak_pointer (G_OBJECT (window), (gpointer *)&window);
+
+      vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 8);
+      gtk_widget_set_margin_start (vbox, 8);
+      gtk_widget_set_margin_end (vbox, 8);
+      gtk_widget_set_margin_top (vbox, 8);
+      gtk_widget_set_margin_bottom (vbox, 8);
+      gtk_window_set_child (GTK_WINDOW (window), vbox);
+
+      /* Standard message dialog */
+      hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      gtk_box_append (GTK_BOX (vbox), hbox);
+      button = gtk_button_new_with_mnemonic ("_Message Dialog");
+      g_signal_connect (button, "clicked",
+                        G_CALLBACK (message_dialog_clicked), NULL);
+      gtk_box_append (GTK_BOX (hbox), button);
+
+      gtk_box_append (GTK_BOX (vbox), gtk_separator_new (GTK_ORIENTATION_HORIZONTAL));
+
+      /* Interactive dialog*/
+      hbox = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 8);
+      gtk_box_append (GTK_BOX (vbox), hbox);
+      vbox2 = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+
+      button = gtk_button_new_with_mnemonic ("_Interactive Dialog");
+      g_signal_connect (button, "clicked",
+                        G_CALLBACK (interactive_dialog_clicked), NULL);
+      gtk_box_append (GTK_BOX (hbox), vbox2);
+      gtk_box_append (GTK_BOX (vbox2), button);
+
+      table = gtk_grid_new ();
+      gtk_grid_set_row_spacing (GTK_GRID (table), 4);
+      gtk_grid_set_column_spacing (GTK_GRID (table), 4);
+      gtk_box_append (GTK_BOX (hbox), table);
+
+      label = gtk_label_new_with_mnemonic ("_Entry 1");
+      gtk_grid_attach (GTK_GRID (table), label, 0, 0, 1, 1);
+
+      entry1 = gtk_entry_new ();
+      gtk_grid_attach (GTK_GRID (table), entry1, 1, 0, 1, 1);
+      gtk_label_set_mnemonic_widget (GTK_LABEL (label), entry1);
+
+      label = gtk_label_new_with_mnemonic ("E_ntry 2");
+      gtk_grid_attach (GTK_GRID (table), label, 0, 1, 1, 1);
+
+      entry2 = gtk_entry_new ();
+      gtk_grid_attach (GTK_GRID (table), entry2, 1, 1, 1, 1);
+    }
+
+  if (!gtk_widget_get_visible (window))
+    gtk_widget_set_visible (window, TRUE);
+  else
+    gtk_window_destroy (GTK_WINDOW (window));
+
+  return window;
+}
+
+*/
