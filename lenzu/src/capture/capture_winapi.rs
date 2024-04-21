@@ -271,6 +271,9 @@ impl CaptureWinApi {
     fn from_gtk4(&mut self, app_window_gtk: &gtk4::ApplicationWindow) {
         // using gtk4 gdk_win32_window_get_handle to get the HWND seems to be the practice used by OpenGL users
         // now that all the renderable widgets are appended to parent_box, we can inspect display and surface
+        // NOTE: According to https://docs.gtk.org/gtk4/method.Widget.get_display.html
+        //       "This function can only be called after the widget has been added to a widget hierarchy with a GtkWindow at the top."
+        //       in other words, the widget must be realized/presented before we can get the display!
         let display: gtk4::gdk::Display = app_window_gtk.clone().upcast::<Widget>().display();
         let backend: Backend = display.backend();
 
