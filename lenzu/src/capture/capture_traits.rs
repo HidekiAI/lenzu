@@ -7,6 +7,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleTypes {
     Win32Handle(gdk4_win32::HWND),
     //Xwin( gdk4_wayland::HANDLE),
@@ -60,7 +61,7 @@ pub trait CaptureTrait {
     where
         Self: Sized;
 
-    // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND), 
+    // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND),
     // it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
     fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool;
     fn capture(
