@@ -94,11 +94,21 @@ fn build_ui(app: &gtk4::Application) {
         dialogbox_rc.clone().borrow_mut().set_modal(true);
         //dialogbox_rc.borrow().set_transient_for(Some(&parent_box));
 
-        let close_button = gtk4::Button::new();
-        close_button.set_label("Close");
+        let close_button = gtk4::Button::builder()
+            .label("Close Dialog")
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .width_request(16 * 16)
+            .height_request(16)
+            .halign(gtk4::Align::End) // anchor to bottom right
+            .valign(gtk4::Align::End)
+            .build();
         let sender_rc = dialog_close_signal_sender.clone(); // increment ref-count
         // It's OK to move sender signal into the closure since it's the only sender/producer
         let _signal_id = close_button.connect_clicked(move |_close_button_self| {
+            println!("Signal closing dialog...");
             // signal parent to close
             let _join_handle = tokio_runtime().spawn(clone!(@strong dialog_close_signal_sender => async move {
                 dialog_close_signal_sender.send(true).await.expect("Failed to send close signal");
@@ -110,6 +120,7 @@ fn build_ui(app: &gtk4::Application) {
         let _join_handle = glib::spawn_future_local(clone!(@weak close_button => async move {
             while let Ok(close_signaled) = dialog_close_signal_receiver.borrow().recv().await {
                 if close_signaled {
+                    println!("Closing dialog...");
                     dbox_cloned.clone().borrow_mut().close();
                 }
             }

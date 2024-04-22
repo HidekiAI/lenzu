@@ -9,12 +9,18 @@ use capture::{
     capture_x11::CaptureX11,
 };
 
+use gdk::Key;
 use gdk4_win32::{
     ffi::{gdk_win32_surface_get_impl_hwnd, GdkWin32Surface},
     Win32Surface, HWND,
 };
+use glib::translate::ToGlibPtr;
+// NOTE: make sure to 'cargo add' glib for graphene_point_t
 use gtk4::{
-    ffi::{gtk_list_store_append, GtkButton, GtkWidget},
+    ffi::{
+        gtk_list_store_append, gtk_widget_compute_transform, GtkButton, GtkEventController,
+        GtkEventControllerKeyClass, GtkWidget,
+    },
     gdk::{self, Backend, Display},
     gdk_pixbuf::Pixbuf,
     gio::{
@@ -22,7 +28,8 @@ use gtk4::{
         ffi::{g_application_bind_busy_property, g_application_quit},
     },
     glib,
-    prelude::*,
+    graphene::{self, ffi::graphene_point_t},
+    prelude::{WidgetExt, *},
     subclass::widget,
     ApplicationWindow, Button, HeaderBar, Image, Orientation, Picture, Widget,
 };
@@ -37,24 +44,52 @@ use ocr::{
     ocr_winmedia::OcrWinMedia,
 };
 
-use std::boxed::Box;
-use std::sync::OnceLock;
-use std::{ffi::CString, ptr};
+use once_cell::sync::Lazy;
+use std::{
+    boxed::Box,
+    cell::RefCell,
+    ffi::CString,
+    ptr,
+    rc::Rc,
+    sync::{Arc, OnceLock, RwLock},
+};
 use tokio::runtime::Runtime;
 
 const GTK_APP_ID: &str = "com.github.hidekiai.lenzu";
 const GTK_APP_PATH: &str = "/com/github/hidekiai/lenzu/";
 const DEFAULT_WINDOW_WIDTH: i32 = 1024;
 const DEFAULT_WINDOW_HEIGHT: i32 = 768;
+const DEFAULT_LENS_WINDOW_SIZE: i32 = 512; // squre (both width/height)
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ToggleState {
     Free,
     MoveWindow,
     Capture,
-    Captured, // past-tense
 }
 
-static mut TOGGLE_STATE: ToggleState = ToggleState::Free;
+//static mut TOGGLE_STATE: Rc<RefCell<ToggleState>> = Rc::new(RefCell::new(ToggleState::Free));
+//static TOGGLE_STATE: Lazy<Arc<RefCell<ToggleState>>> = Lazy::new(|| Arc::new(RefCell::new(ToggleState::Free))); // Error: Sync is not implemented
+static TOGGLE_STATE: Lazy<Arc<RwLock<ToggleState>>> =
+    Lazy::new(|| Arc::new(RwLock::new(ToggleState::Free)));
+fn update_toggle_state() {
+    let binding = TOGGLE_STATE.clone();
+    let mut toggle_state = binding.write().unwrap();
+    match *toggle_state {
+        ToggleState::Free => {
+            *toggle_state = ToggleState::MoveWindow;
+            println!("ToggleState: MoveWindow");
+        }
+        ToggleState::MoveWindow => {
+            *toggle_state = ToggleState::Capture;
+            println!("ToggleState: Capture");
+        }
+        ToggleState::Capture => {
+            *toggle_state = ToggleState::Free;
+            println!("ToggleState: Captured");
+        }
+    }
+}
 
 fn create_ocr(args: &Vec<String>) -> std::boxed::Box<dyn OcrTrait> {
     let force_windows_ocr = cfg!(target_os = "windows");
@@ -190,7 +225,7 @@ fn capture_and_ocr(
     }
 }
 
-fn tokio_runtime() -> &'static Runtime {
+fn quit_signal_sender_thread() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
 }
@@ -276,7 +311,7 @@ fn build_ui(application: &gtk4::Application) {
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
-        tokio_runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
+        quit_signal_sender_thread().spawn(clone!(@strong sender_quit_signal  =>async move {
             sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
         }));
         println!("Signal sent to quit...");
@@ -293,6 +328,120 @@ fn build_ui(application: &gtk4::Application) {
             }
         }
     }));
+
+    // create a sub-window for use as a lens - it's non-modal, floating, and barely visible
+    // lens does not need to have a renderer since the transparancies acts like what is
+    // under the window is what is being focused on
+    let lens_window = gtk4::Window::builder()
+        .application(application) // application stays alive as long as any of windows associated to it is alive
+        //.parent(Some(&app_window_gtk)) //  hopefully, this will make it so it becomes a sibling to main window
+        .destroy_with_parent(true)
+        .default_width(DEFAULT_LENS_WINDOW_SIZE)
+        .default_height(DEFAULT_LENS_WINDOW_SIZE)
+        .opacity(0.25) // barely can see it and see-through so that it is not in the way
+        .decorated(false) // no title bar
+        .modal(false) // non-modal because this window has no decorations and if it is modal, it will block the main window on closing or moving them
+        .visible(true)
+        .build();
+
+    // monitor for pointer move or hover events over lens_window; first connect "key_press_event" to Window
+    // Note that add_controller() method only exists for gtk_widget_add_controller(GtkEventController)
+    // and GtkShortcutManager.add_controller(Gtk.ShortcutController(base:GtkEventController))
+    // to register for GtkControllerEvent.  So first, cast what we are interested in to Widget
+    let app_win_widget: Widget = app_window_gtk.clone().upcast::<gtk4::Widget>();
+    let app_win_gtkwdiget: *mut GtkWidget = app_win_widget.to_glib_none().0;
+    let lens_as_widget: gtk4::Widget = lens_window.clone().upcast::<Widget>(); // Widget == WidgetExt
+    let lens_gtkwidget: *mut GtkWidget = lens_as_widget.to_glib_none().0;
+    // box trait WidgetExt (std::boxed::Box<dyn gtk4::prelude::WidgetExt>) for gtk4::Widgets?
+
+    // guint keycode = gdk_key_event_get_keycode(event);
+    // guint keyval = gdk_key_event_get_keyval(event);
+    // gboolean isModifier = gdk_key_event_is_modifier(event);
+    // gboolean matches = gdk_key_event_matches(event, GDK_KEY_C, GDK_CONTROL_MASK);
+    // if (matches) {
+    //     // Handle Ctrl-C shortcut
+    // }
+    // // We want to ignore irrelevant modifiers like ScrollLock
+    // #define ALL_ACCELS_MASK (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK)
+    // state = gdk_event_get_modifier_state (event);
+    // gdk_keymap_translate_keyboard_state (keymap,
+    //                                      gdk_key_event_get_keycode (event),
+    //                                      state,
+    //                                      gdk_key_event_get_group (event),
+    //                                      &keyval, NULL, NULL, &consumed);
+    // if (keyval == GDK_PLUS &&
+    //     (state & ~consumed & ALL_ACCELS_MASK) == GDK_CONTROL_MASK)
+    //   // Control was pressed
+
+    //register gtk_widget_add_controller(GtkEventController)
+    let event_controller_key: gtk4::EventControllerKey =
+        gtk4::EventControllerKey::builder().build();
+    // before we transfer owneship, setup signal/event handler
+    event_controller_key.connect_key_released(
+        |event_controller_key, keyval, keycode_raw, state| {
+            // space key hit: Key released: control=EventControllerKey { inner: TypedObjectRef { inner: 0x27a62d99440, type: GtkEventControllerKey } } keyval=Key(32) keycode=32 state=Modi
+            println!(
+                "Key released: control={:?} keyval={:?} keycode={:?} state={:?}",
+                event_controller_key, keyval, keycode_raw, state
+            );
+            match keyval {
+                Key::Escape => {
+                    // quit
+                    println!("> connect_key_released(Key::Escape) - Quitting...");
+                    std::process::exit(0); // for now, brute-force quit, in future will elegantly signal for exit...
+                }
+                Key::space => {
+                    println!("> connect_key_released(Key::Space) - ToggleState...");
+                    // toggle between free, move window, and capture
+                    update_toggle_state();
+                }
+                _ => {
+                    println!("> connect_key_released() - Unhandled keyval: {:?}", keyval);
+                }
+            }
+        },
+    );
+    app_win_widget.add_controller(gtk4::EventController::from(event_controller_key)); // transfer ownership to Widget once callback is in place...
+
+    // Event for mouse pointer movement (we only care if it is in ToggleState::MoveWindow)
+    let event_controller_motion: gtk4::EventControllerMotion =
+        gtk4::EventControllerMotion::builder().build();
+    event_controller_motion.connect_motion(|event_controller_motion, x: f64, y: f64| {
+        println!(
+            "Mouse moved: {:?} x={}, y={}",
+            event_controller_motion, x, y
+        );
+        let toggle_state_rc = TOGGLE_STATE.clone();
+        let toggle_state = toggle_state_rc.read().unwrap();
+        if *toggle_state == ToggleState::MoveWindow {
+            // set center of lens window to mouse cursor
+            let x32 = x as f32;
+            let y32 = y as f32;
+            let current_point: graphene_point_t = graphene_point_t { x: x32, y: y32 };
+        }
+    });
+    app_win_widget.add_controller(gtk4::EventController::from(event_controller_motion)); // transfer ownership to Widget once callback is in place...
+
+    // let the lens window set it's coordinate/position based on the mouse cursor
+    //lens_window.connect_move_focus(focus_lens_window);
+    let gesture_single = gtk4::GestureSingle::from(gtk4::GestureClick::new()); // handling mouse events and single-touch gestures
+
+    //GtkWidget *somewidget; // Your GtkWidget instance
+    //gint wx, wy; gtk_widget_translate_coordinates(somewidget, gtk_widget_get_toplevel(somewidget), 0, 0, &wx, &wy); // Now wx and wy contain the absolute position of somewidget
+    let current_point: graphene_point_t = graphene_point_t {
+        x: DEFAULT_LENS_WINDOW_SIZE as f32 / 2.0,
+        y: DEFAULT_LENS_WINDOW_SIZE as f32 / 2.0,
+    };
+    let mut out_point: graphene_point_t = graphene_point_t { x: 0.0, y: 0.0 };
+    let _compute_success = unsafe {
+        gtk4::ffi::gtk_widget_compute_point(
+            app_win_gtkwdiget,
+            lens_gtkwidget,
+            &current_point,
+            &mut out_point,
+        )
+    };
+    println!("Lens window position: ({}, {})", out_point.x, out_point.y);
 
     // all is attached to parent_box, now attach itself to window
     //app_window_gtk.set_child(Some(&parent_box));
@@ -1073,3 +1222,21 @@ do_dialog (GtkWidget *do_widget)
 }
 
 */
+
+/*
+// Gtk4 (Vala): Get the mouse position relative to widget
+private void listbox_name_button_clicked(Gtk.Button sender)
+{
+    var device_pointer= this.get_display().get_default_seat().get_pointer();
+    GLib.return_if_fail(null != device_pointer);
+
+    Gdk.ModifierType mask = 0;
+    double x = 0, y = 0, x_new = 0, y_new = 0;
+    GLib.return_if_fail(this.root.get_surface().get_device_position(device_pointer, out x, out y, out mask));
+    GLib.return_if_fail(this.root.translate_coordinates(sender.parent, x, y, out x_new, out y_new));
+
+    Gdk.Rectangle rect = { (int)x_new, (int)y_new, 0, 0, };
+    this.order_context_menu.set_pointing_to(rect);
+    this.order_context_menu.popup();
+}
+ */
