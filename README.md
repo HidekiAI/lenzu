@@ -430,8 +430,8 @@ In any case, as for manga109.org, images and text that you will be training on C
 
 Another postmortem, mainly to match the similar results of [Tesseract](#tesseract) compared to [EashOCR](https://github.com/JaidedAI/EasyOCR), just screenshot should probably help explain:
 
-  ![assets\Screenshot_EasyOCR_Demo_01-of-02.png](assets\Screenshot_EasyOCR_Demo_01-of-02.png)
-  ![assets\Screenshot_EasyOCR_Demo_02-of-02.png](assets\Screenshot_EasyOCR_Demo_02-of-02.png)
+  ![Screenshot_EasyOCR_Demo_01-of-02.png](assets/Screenshot_EasyOCR_Demo_01-of-02.png)
+  ![Screenshot_EasyOCR_Demo_02-of-02.png](assets/Screenshot_EasyOCR_Demo_02-of-02.png)
 
 Again, I want to say that these people (100+ contributors) are awesome and I'm thankful for this projects, it even has the allow "changeable" modules (see their diagram at the bottom) where you can write your own instead of complain about the quality of the recognition.o
 
@@ -442,7 +442,7 @@ Again, I want to say that these people (100+ contributors) are awesome and I'm t
 
 Since I've included my comments on EasyOCR, here's how wonderful (more so, accurate) Google OCR is.  The procedure is so simple, you just copy your image file(s) to your Google Drive.  You then right-click (from desktop browser) the image and just open it in Google Doc (no plugins needed).  Here's what it transformed (from image/pixels to text):
 
-  ![assets\Screenshot_GoogleDoc.png](assets\Screenshot_GoogleDoc.png)
+  ![Screenshot_GoogleDoc.png](assets/Screenshot_GoogleDoc.png)
 
   Note that I had to reduce the fontsize down so that I can fit into the screenshot, but what's important here is that the OCR accuracies for the vertical Japanese text has been correctly recognized!  Not only that, but hand-written, horizontal, and English.
 
