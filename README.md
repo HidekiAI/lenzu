@@ -337,7 +337,9 @@ Going online also means few things:
 
 ### Tesseract
 
-Although I seem to sound like tesseract is unreliable, it's the reverse.  I am the one that is making tesseract unreliable.  For example, my current implementation is based on collections of manga panels.  Indeed, Windows OCR does superior job in comparison, but if I was to separate each block of texts (i.e. using OpenCV) and then pass it down to tesseract, it can do quite well as-is.  For example, look at this:
+Although I seem to sound like tesseract is unreliable, it's the reverse.  I am the one that is making tesseract unreliable.  I want to emphasasize that I am not disappointed of Tesseract, in fact, people should be disappointed of how I used it.    I'm also thankful of such free and open sourced library, and knowing how difficult it is to OCR Japanese (hint: Google/Bing for papers on  Japanese OCR, you'll find almost none!  See also my next section on [EasyOCR](#easyocr) as well).
+
+In any case, I'm using it wrongly, for example, my current implementation is based on collections of manga panels.  Indeed, Windows OCR does superior job in comparison, but if I was to separate each block of texts (i.e. using OpenCV) and then pass it down to tesseract, it can do quite well as-is.  For example, look at this:
 
 ![Ubunchu Manga - partitioned](assets/ubunchu01_02_panel01_section_02.png)
 
@@ -423,6 +425,28 @@ Perhaps the M.L. will learn that text are commonly grouped via text-bubbles and 
 But in any cases, none of that needs to be of concern, because (again) the folks at manga109.org did all that hard work for us, and what A.I. needs to care about is, by looking at the entire page of images, it needs to just learn that at coorindates (X1, Y1) as upper left corner of the rectangle and (X2, Y2) as bottom right, there exists a text of "ABC".  It does not (and should not) care what "ABC" means, nor care whether it is vertical or horizontal.  All it knows is that if they encounter a rectangle with this pattern, it means what the annotation says.  And more and more samples you give it, gradually it learns that box-pattern-A has similar characters as box-pattern-B, and according to the annotation, that sub-pattern indicates the (character) image that looks like "X"; and then, it finds sub-pattern of character that looks like "Y", and then "Z"...  but then, it finds that at times, when sub-pattern character "X" is next to (left of) "Y", it differs from "X" is below "Y".  And it learns the pattern of horizontal and vertical...  It also learns that annotations indicates that it is to evaluate from right-to-left but also at most times, top-to-bottom, and so on...  If anybody has a [Jupyter Notebook](https://jupyter.org/) for this using [TensorFlow](https://www.tensorflow.org/), please share with me :smile:
 
 In any case, as for manga109.org, images and text that you will be training on CAN BE USED for commercialized purpose if desired for they have done the (thankful) request to each authors for permissions.  Of course, because they have done all the heavy work for you, it will be your responsibilities to follow their license policies, credits, etc!  Even if they do not say to credit them, do credit them, the labor they put in is very significant!
+
+### EasyOCR
+
+Another postmortem, mainly to match the similar results of [Tesseract](#tesseract) compared to [EashOCR](https://github.com/JaidedAI/EasyOCR), just screenshot should probably help explain:
+
+  ![assets\Screenshot_EasyOCR_Demo_01-of-02.png](assets\Screenshot_EasyOCR_Demo_01-of-02.png)
+  ![assets\Screenshot_EasyOCR_Demo_02-of-02.png](assets\Screenshot_EasyOCR_Demo_02-of-02.png)
+
+Again, I want to say that these people (100+ contributors) are awesome and I'm thankful for this projects, it even has the allow "changeable" modules (see their diagram at the bottom) where you can write your own instead of complain about the quality of the recognition.o
+
+- [Custom recognition models](https://github.com/JaidedAI/EasyOCR/blob/master/custom_model.md)
+- [CRAFT-train](https://github.com/JaidedAI/EasyOCR/blob/master/trainer/craft/README.md)
+
+### Google Doc
+
+Since I've included my comments on EasyOCR, here's how wonderful (more so, accurate) Google OCR is.  The procedure is so simple, you just copy your image file(s) to your Google Drive.  You then right-click (from desktop browser) the image and just open it in Google Doc (no plugins needed).  Here's what it transformed (from image/pixels to text):
+
+  ![assets\Screenshot_GoogleDoc.png](assets\Screenshot_GoogleDoc.png)
+
+  Note that I had to reduce the fontsize down so that I can fit into the screenshot, but what's important here is that the OCR accuracies for the vertical Japanese text has been correctly recognized!  Not only that, but hand-written, horizontal, and English.
+
+As mentioned more than once here, if your application could handle online *AND* your application is either on Android or iOS, use [Google ML Kit v2](https://developers.google.com/ml-kit/vision/text-recognition/v2) (v2 handles Japanese); or figure out a way to oauth2 and use [Google Vision for OCR](https://cloud.google.com/vision/docs/ocr) if it's not targetting handhelds.
 
 ## Build/Compile Notes
 
