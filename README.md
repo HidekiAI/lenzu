@@ -407,7 +407,6 @@ While I'm at it, might as well mention the recognition comparison on clustered i
     user    0m0.751s
     sys     0m0.182s
     ```
-A
 
 - Oddly, though tesseract (somehow) knows the textbox is top-to-bottom-right-to-left, it's recognizing Orientation==0 (horizontal left-to-right) for both cases
 - From what I understood, TextlineOrder (think of it as rowset order) should be 1 (top-to-bottom), but oddly 2 (bottom-to-top).
@@ -447,6 +446,50 @@ Since I've included my comments on EasyOCR, here's how wonderful (more so, accur
   Note that I had to reduce the fontsize down so that I can fit into the screenshot, but what's important here is that the OCR accuracies for the vertical Japanese text has been correctly recognized!  Not only that, but hand-written, horizontal, and English.
 
 As mentioned more than once here, if your application could handle online *AND* your application is either on Android or iOS, use [Google ML Kit v2](https://developers.google.com/ml-kit/vision/text-recognition/v2) (v2 handles Japanese); or figure out a way to oauth2 and use [Google Vision for OCR](https://cloud.google.com/vision/docs/ocr) if it's not targetting handhelds.
+
+### manga-ocr
+
+As mentioned on other sections, there is already an OCR project data-model trained with Manga109s in which the developer trained and utlizied the HuggingFace image-to-text Transformer.
+
+Following is my sample output using one (first test) that is focused on just the text, and one (2nd test) that is of the entire page:
+
+```text
+(base) hidekiai@hidekiai-lt:~/projects/lenzu/assets$ python3 /dev/shm/test.py
+2024-05-29 13:04:20.162 | INFO     | manga_ocr.ocr:__init__:13 - Loading OCR model from kha-white/manga-ocr-base
+preprocessor_config.json: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 228/228 [00:00<00:00, 2.19MB/s]
+/home/hidekiai/.local/lib/python3.11/site-packages/transformers/models/vit/feature_extraction_vit.py:28: FutureWarning: The class ViTFeatureExtractor is deprecated and will be removed in version 5 of Transformers. Please use ViTImageProcessor instead.
+  warnings.warn(
+tokenizer_config.json: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 486/486 [00:00<00:00, 4.06MB/s]
+vocab.txt: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24.1k/24.1k [00:00<00:00, 16.9MB/s]
+special_tokens_map.json: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 112/112 [00:00<00:00, 1.01MB/s]
+config.json: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 77.5k/77.5k [00:00<00:00, 3.69MB/s]
+pytorch_model.bin: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 444M/444M [00:49<00:00, 8.97MB/s]
+2024-05-29 13:05:16.401 | INFO     | manga_ocr.ocr:__init__:19 - Using CUDA
+2024-05-29 13:05:19.289 | INFO     | manga_ocr.ocr:__init__:32 - OCR ready
+Text: 最近人気のデスクトップなリナックスです！
+
+...
+(base) hidekiai@hidekiai-lt:~/projects/lenzu/assets$ cat /dev/shm/test.py ; time python3 /dev/shm/test.py
+import PIL.Image
+
+from manga_ocr import MangaOcr
+
+mocr = MangaOcr()
+text = mocr('/home/hidekiai/projects/lenzu/assets/ubunchu01_02.png')
+print(f"Text: {text}")
+2024-05-29 13:12:12.296 | INFO     | manga_ocr.ocr:__init__:13 - Loading OCR model from kha-white/manga-ocr-base
+/home/hidekiai/.local/lib/python3.11/site-packages/transformers/models/vit/feature_extraction_vit.py:28: FutureWarning: The class ViTFeatureExtractor is deprecated and will be removed in version 5 of Transformers. Please use ViTImageProcessor instead.
+  warnings.warn(
+2024-05-29 13:12:16.165 | INFO     | manga_ocr.ocr:__init__:19 - Using CUDA
+2024-05-29 13:12:17.931 | INFO     | manga_ocr.ocr:__init__:32 - OCR ready
+Text: ．．．
+
+real    0m9.618s  <- it took ~10s just to tell me it has predicted the text to be"..."
+user    0m5.750s
+sys     0m0.780s
+```
+
+As you can see, the first test accurately was able to transform the image to text, but for the later it just transformed as `...` (maybe I'm not doing this right?  I don't know whether Python was trying to indicate to me that it's a slice of array of strings?)  I dunno...  All in all, IMHO it works great on focused vertical texts, but it doesn't seem to be able to detect multiple text-boxes.  I have a separate project I've been poking at off-and-on to use YOLO to train to detect multiple text-boxes on single page, and then translate it, so maybe I'll consider using that trained data (of YOLO .pt model) and then pass it on to manga-ocr, but then again, I'd rather do all that in Rust...
 
 ## Build/Compile Notes
 
