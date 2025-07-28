@@ -294,6 +294,8 @@ First, some sample Debug output texts:
 
 ![running demo](assets/demo.gif)
 
+Please note that the UIX is horrible, and in the future (when I have time), I want to replace it with https://github.com/HidekiAI/web-magnifying-glass project...
+
 And here's the version using kakasi with furigana (I'm using the MinGW version of kakasi.exe which I've hand-compiled from my other repos):
 
 ![kakasi furigana](assets/ubunchu01_02.furigana.png)
