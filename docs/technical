@@ -1,0 +1,85 @@
+# Technical Design Document
+
+## 1. Why Offline OCR?
+This section explains the rationale for implementing offline OCR in the application, emphasizing performance, privacy, and reliability for Japanese text recognition, particularly for manga and graphic novels. Offline OCR eliminates network latency, ensures user privacy by not transmitting images to external services, and provides consistent performance regardless of internet connectivity.
+
+With the shift to Linux as the primary platform, offline OCR becomes even more critical due to the fragmented nature of Linux desktop environments and the importance of user data sovereignty in open-source ecosystems.
+
+## 2. Libraries
+This section outlines the key libraries used in the project:
+- **kakasi**: Used for Japanese text conversion from kanji to hiragana after OCR processing.
+- **tesseract**: Tesseract OCR engine for Linux and fallback scenarios; requires traineddata including `jpn_vert.traineddata`.
+- **windows-rs**: Enables integration with Windows Media OCR via `Media_Ocr` and `Globalization` features (Windows-only).
+- **leptonica**: Underlying library for Tesseract; required for building on Windows.
+- **winit**: Used for window creation and management (being replaced by GTK4/gdk4).
+- **Optional Online OCR**: For users who prefer online services, we plan to integrate Google Cloud Vision and/or Azure Computer Vision via OAuth2 (offline remains the default for privacy and performance).
+
+## 3. Text Detection and Recognition Pipeline
+This section outlines the modern approach to Japanese text extraction in manga, which separates text detection from recognition for improved accuracy and performance.
+
+### Text Detection (First Stage)
+- **EAST (Efficient and Accurate Scene Text Detector)**: Lightweight CNN for arbitrary-shaped text detection (speech bubbles, curved text)
+- **CRAFT (Character Region Awareness for Text Detection)**: Detects character-level regions for precise text boundary detection
+- **DBNet (Differentiable Binarization)**: State-of-the-art text detection with adaptive binarization
+
+### Text Recognition (Second Stage)
+- **Tesseract**: Open-source OCR engine with limitations in vertical Japanese text recognition and performance; requires careful preprocessing and training for manga text.
+- **Windows Media OCR**: Microsoft's proprietary OCR engine with high accuracy for Japanese text; Windows-only but preferred for offline desktop applications.
+- **Manga-OCR**: Deep learning-based OCR using HuggingFace models; offers high accuracy but complex setup and dependencies.
+- **Google Cloud Vision**: State-of-the-art online OCR service with high accuracy; requires OAuth2 authentication and has usage costs.
+
+### Pipeline Benefits
+1. **Performance**: Detection reduces processing area by 80-90%, making recognition much faster
+2. **Accuracy**: Detection models trained on manga data handle speech bubbles and onomatopoeia better
+3. **Flexibility**: Different recognition engines can be swapped based on platform/preference
+4. **Scalability**: Detection can run on CPU while recognition can leverage GPU if available
+
+## 4. Comparative Analysis
+This section presents the comparative analysis of OCR solutions including performance benchmarks and accuracy assessments:
+- **Performance Benchmarks**: Windows Media OCR processes images in ~2 seconds; Tesseract takes ~34 seconds on Linux with default settings and ~5 seconds with optimized Page Segmentation Mode (PSM 5); Manga-OCR processes in ~32 seconds but has complex installation.
+- **Accuracy Assessments**: Windows Media OCR demonstrated the highest accuracy for manga text; Tesseract performed adequately with preprocessing; Manga-OCR showed strong results but was finicky to install.
+- **Sample Outputs**: Examples of OCR results from different methods including raw text, line breakdown, and kakasi conversion outputs.
+
+## 5. windows-rs Integration
+Information on the integration of Windows Media OCR via the windows-rs crate:
+- **Setup**: Enable `Media_Ocr` and `Globalization` features in Cargo.toml.
+- **Data Flow**: Uses `InMemoryRandomAccessStream` for passing image data to OCR engine.
+- **Debugging Challenges**: Issues with stream detachment and resource management required careful handling.
+
+## 6. Sample Outputs and Results
+Examples of OCR results from different methods including text recognition accuracy and processing times:
+- **Debug Text Representation**: Detailed breakdown of recognized text with line and word coordinates.
+- **Visual Results**: Demo GIF showing real-time OCR processing and furigana conversion.
+- **Comparative Results**: Side-by-side comparisons of different OCR engines on the same test images.
+
+## 7. Other Considerations
+Discussion of various considerations for the design:
+- **Offline-First Design**: Rationale for prioritizing offline functionality for performance and privacy.
+- **Privacy Concerns**: Implications of using online OCR services and data handling.
+- **Multi-monitor Support**: Plans for better support across multiple displays.
+- **Image Preprocessing**: Potential integration of OpenCV for image filtering and enhancement.
+- **Future Training**: Plans to train Tesseract with manga109s dataset for improved accuracy.
+- **Translation Integration**: Potential integration with dictionary services for translation.
+
+## 8. TODO
+A list of pending tasks and future enhancements:
+- Train manga-109s dataset for Tesseract to improve Linux OCR accuracy.
+- Implement better multi-monitor desktop support.
+- Add online OCR fallback option via OAuth2 (Google Cloud Vision).
+- Develop image preprocessing pipeline (grayscale, denoise, contrast adjustment).
+- Integrate dictionary lookup for enhanced translation capabilities.
+- Replace the fake kakasi crate with the official version.
+
+## 9. Post Mortem
+Reflections on the development process including challenges faced and lessons learned:
+- Debugging Windows Media OCR integration revealed issues with stream management.
+- Tesseract training data mismatch required careful consideration of font compatibility.
+- Microsoft documentation quality issues required extensive experimentation.
+- Importance of offline functionality for user trust and performance.
+
+## 10. Build/Compile Notes
+Notes on building and compiling the project including dependencies and platform-specific instructions:
+- **Windows (MinGW64)**: Use `mingw64` toolchain; install packages via pacman; enable `Media_Ocr` feature.
+- **Linux (Debian)**: Install `kakasi`, `tesseract-ocr`, and `leptonica` via apt; use cargo build commands.
+- **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.
+
