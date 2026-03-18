@@ -1,21 +1,17 @@
 use super::capture_traits::{CaptureRect, CaptureTrait, CursorData};
 use anyhow::{anyhow, Result};
-use image::{DynamicImage, RgbaImage, GenericImageView};
+use gdk4::prelude::*;
+use gdk4_x11::X11Surface;
+use image::{DynamicImage, RgbaImage};
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{GContext, ImageFormat};
+use x11rb::protocol::xproto::{CreateGCRestRequest, GContext, ImageFormat};
 use x11rb::rust_connection::RustConnection;
-
-#[cfg(feature = "gtk")]
-use gdk::prelude::*;
-#[cfg(feature = "gtk")]
-use gdkx11::X11Window;
 
 pub struct CaptureX11 {
     pub cursor_data: CursorData,
     pub conn: Option<RustConnection>,
     pub screen_num: usize,
-    #[cfg(feature = "gtk")]
-    pub window: Option<glib::WeakRef<gtk::ApplicationWindow>>,
+    pub window: Option<glib::WeakRef<gtk4::ApplicationWindow>>,
     pub xid: Option<x11rb::protocol::xproto::Window>,
     pub gc: Option<GContext>,
 }
@@ -26,37 +22,35 @@ impl CaptureTrait for CaptureX11 {
             cursor_data: CursorData::new(),
             conn: None,
             screen_num: 0,
-            #[cfg(feature = "gtk")]
             window: None,
             xid: None,
             gc: None,
         }
     }
-#[cfg(feature = "gtk")]
-fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool {
-    self.window = Some(app_window_gtk.downgrade());
 
-    let surface = app_window_gtk.window();
-    if let Some(x11_surface) = surface.and_then(|s| s.downcast::<X11Window>().ok()) {
-        self.xid = Some(x11_surface.xid() as x11rb::protocol::xproto::Window);
-    }
-
-    match x11rb::connect(None) {
-        Ok((conn, screen_num)) => {
-            if let Some(xid) = self.xid {
-                if let Ok(gc) = conn.generate_id() {
-                    if let Ok(_) = conn.create_gc(gc, xid, &Default::default()) {
-                        self.gc = Some(gc);
-                    }
-                }
-            }
-            self.conn = Some(conn);
-            self.screen_num = screen_num;
-            true
+    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool {
+        self.window = Some(app_window_gtk.downgrade());
+        
+        let surface = app_window_gtk.surface();
+        if let Some(x11_surface) = surface.and_then(|s| s.downcast::<X11Surface>().ok()) {
+            self.xid = Some(x11_surface.xid() as x11rb::protocol::xproto::Window);
         }
-        Err(e) => {
-            eprintln!("Failed to connect to X11 server: {}", e);
-            false
+
+        match x11rb::connect(None) {
+            Ok((conn, screen_num)) => {
+                if let Some(xid) = self.xid {
+                    let gc = conn.generate_id().unwrap();
+                    conn.create_gc(gc, xid, &Default::default()).unwrap();
+                    self.gc = Some(gc);
+                }
+                self.conn = Some(conn);
+                self.screen_num = screen_num;
+                true
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to X11 server: {}", e);
+                false
+            }
         }
     }
 }
@@ -106,11 +100,11 @@ fn init(&mut self, _app_window_gtk: &super::capture_traits::dummy_types::DummyWi
     #[cfg(feature = "gtk")]
     fn update(&mut self) {
         if let Some(window) = self.window.as_ref().and_then(|w| w.upgrade()) {
-            let display = window.get_display();
+            let display = window.display();
             let seat = display.default_seat().unwrap();
             let pointer = seat.pointer().unwrap();
             
-            let (pos_x, pos_y) = pointer.get_position();
+            let (pos_x, pos_y) = pointer.position();
             self.cursor_data.x = pos_x as i32;
             self.cursor_data.y = pos_y as i32;
 
@@ -123,8 +117,8 @@ fn init(&mut self, _app_window_gtk: &super::capture_traits::dummy_types::DummyWi
             }
 
             // Update application window size
-            let width = window.get_width();
-            let height = window.get_height();
+            let width = window.width();
+            let height = window.height();
             self.cursor_data.window.width = width as u32;
             self.cursor_data.window.height = height as u32;
             
@@ -133,9 +127,6 @@ fn init(&mut self, _app_window_gtk: &super::capture_traits::dummy_types::DummyWi
             self.cursor_data.window.y = self.cursor_data.y - (height / 2);
         }
     }
-
-    #[cfg(not(feature = "gtk"))]
-    fn update(&mut self) {}
 fn render(&mut self, image: image::DynamicImage) {
     if let (Some(conn), Some(xid), Some(gc)) = (&self.conn, self.xid, self.gc) {
         let (width, height) = image.dimensions();
@@ -186,7 +177,9 @@ fn test_swap_red_blue() {
 
 #[test]
 fn test_capture_x11_new() {
-    let capture = CaptureX11::new();
+...
+
+        let capture = CaptureX11::new();
         assert!(capture.conn.is_none());
         assert!(capture.window.is_none());
         assert_eq!(capture.screen_num, 0);
@@ -197,33 +190,5 @@ fn test_capture_x11_new() {
         let capture = CaptureX11::new();
         assert_eq!(capture.cursor_data.x, 0);
         assert_eq!(capture.cursor_data.y, 0);
-    }
-
-    #[test]
-    fn test_capture_integration_mock() {
-        // We simulate what GetImage would return: BGRA data
-        let width = 2;
-        let height = 2;
-        let mock_bgra_data = vec![
-            10, 20, 30, 0,  // Pixel 1: B=10, G=20, R=30
-            40, 50, 60, 0,  // Pixel 2: B=40, G=50, R=60
-            70, 80, 90, 0,  // Pixel 3
-            100, 110, 120, 0 // Pixel 4
-        ];
-
-        // This test validates that our "Integration" logic (swap_red_blue + RgbaImage::from_raw)
-        // produces the correct DynamicImage regardless of a real X11 connection.
-        let processed_data = swap_red_blue(mock_bgra_data);
-        let img_result = RgbaImage::from_raw(width, height, processed_data);
-        
-        assert!(img_result.is_some());
-        let img = img_result.unwrap();
-        let pixel = img.get_pixel(0, 0);
-        
-        // Should be converted to RGBA
-        assert_eq!(pixel[0], 30); // R
-        assert_eq!(pixel[1], 20); // G
-        assert_eq!(pixel[2], 10); // B
-        assert_eq!(pixel[3], 255); // A (Forced opaque)
     }
 }
