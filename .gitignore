@@ -34,3 +34,6 @@ tags
 .local/
 
 build*/
+
+.gemini/
+gha-creds-*.json
