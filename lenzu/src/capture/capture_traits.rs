@@ -71,3 +71,25 @@ pub trait CaptureTrait {
     fn update(&mut self);
     fn render(&mut self, image: DynamicImage);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capture_rect_new() {
+        let rect = CaptureRect::new();
+        assert_eq!(rect.x, 0);
+        assert_eq!(rect.y, 0);
+        assert_eq!(rect.width, 1024);
+        assert_eq!(rect.height, 768);
+    }
+
+    #[test]
+    fn test_cursor_data_new() {
+        let data = CursorData::new();
+        assert_eq!(data.x, 0);
+        assert_eq!(data.y, 0);
+        assert_eq!(data.monitor.width, 1024);
+    }
+}
