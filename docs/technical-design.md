@@ -116,10 +116,10 @@ This section outlines the modern approach to Japanese text extraction in manga, 
 
 ### Text Recognition (Second Stage)
 
-- **Tesseract**: Open-source OCR engine with limitations in vertical Japanese text recognition and performance; requires careful preprocessing and training for manga text.
-- **Windows Media OCR**: Microsoft's proprietary OCR engine with high accuracy for Japanese text; Windows-only but preferred for offline desktop applications.
-- **Manga-OCR**: Deep learning-based OCR using HuggingFace models; offers high accuracy but complex setup and dependencies.
-- **Google Cloud Vision**: State-of-the-art online OCR service with high accuracy; requires OAuth2 authentication and has usage costs.
+- **PaddleOCR (ONNX)**: Modern OCR engine optimized for Japanese (both horizontal and vertical); highly recommended for its accuracy in "wild" scenarios like manga. Can run efficiently on CPU via ONNX Runtime.
+- **Manga-OCR**: A specialized Vision Transformer-based model specifically for manga. Considered the "gold standard" for accuracy, though it requires more resources (PyTorch/ONNX).
+- **Tesseract (Fallback)**: Open-source OCR engine with significant limitations in vertical Japanese text and layout analysis. It will be used ONLY as a lightweight recognition-only fallback for clean text regions.
+- **Windows Media OCR (Legacy)**: High accuracy for Japanese text, but Windows-only. Deprecated in favor of cross-platform ONNX-based engines.
 
 ### Pipeline Benefits
 
@@ -155,10 +155,15 @@ Key findings from analyzing xfce4-screenshooter's X11 implementation:
 
 ### Phase I (Baseline Implementation)
 
-- **Whole-screen Capture**: Capture entire desktop across all monitors simultaneously
-- **Multi-monitor Support**: Unified capture of all connected displays (X11/Wayland)
-- **Simplified UI**: No lens/magnification UI required in initial phase
-- **Performance Target**:1s capture latency for 1080p@60fps across 2-3 monitors
+- **Whole-screen Capture**: Capture entire desktop across all monitors simultaneously using `x11rb`.
+- **Multi-monitor Support**:
+  - Uses `gdk4::Monitor::workarea()` to determine individual monitor boundaries.
+  - X11 implementation captures from the Root Window using `GetImage` (ZPixmap format), handling unified coordinate spaces (negative offsets for monitors relative to primary).
+- **Pixel Conversion**:
+  - Implements BGRA to RGBA conversion for compatibility with the `image` crate.
+  - Ensures 32-bit alignment for high-performance memory operations.
+- **Performance Target**: <100ms capture latency for 1080p regions on X11.
+- **Reference Implementation**: Inspired by `xfce4-screenshooter` focus management and X11 capture logic, ported to safe Rust via `x11rb`.
 
 ### Phase II (Enhanced Implementation)
 

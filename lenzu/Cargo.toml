@@ -45,6 +45,9 @@ encoding_rs = { version = "0.8.34", features = [
 mecab = "0.1.6"
 async-channel = "2.2.1"
 
+ort = "2.0.0-rc.12"
+ndarray = "0.15.6"
+
 # based on gtk version:
 #   $ pkg-config --modversion gtk4
 #   4.14.2
@@ -72,6 +75,10 @@ features = ["x11", "xlib", "egl"]
 [target.'cfg(linux)'.dependencies.x11]
 version = "^2.21.0"
 features = ["xlib"]
+
+[target.'cfg(linux)'.dependencies.x11rb]
+version = "0.13.0"
+features = ["all-extensions"]
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.56.0"
