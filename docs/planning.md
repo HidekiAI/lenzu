@@ -13,16 +13,18 @@ Make **Linux the primary platform** with a robust, performant OCR lens that work
 ## Goals
 
 ### Short-term (Next 2-4 Weeks)
-1. **Linux Capture Pipeline**
-   - Complete Wayland support via gdk4-wayland
-   - Optimize X11 capture for multi-monitor setups
-   - Implement screen region capture with compositor integration
+1. **Modern Detection Pipeline (Phase II)**
+   - Implement **Text Detection** as a standalone stage using **YOLOv8-tiny** or **DBNet** via ONNX Runtime.
+   - Extract text-rectangles from full-screen/lens captures before passing to recognition.
+   - Optimize detection for manga speech bubbles and vertical text layouts.
 
-2. **OCR Performance**
-   - Benchmark Tesseract PSM modes for manga text
-   - Implement image preprocessing (grayscale, denoise, contrast)
-   - Explore `tesseract` crate alternatives or CLI optimization
-   - Investigate `kannada` or other lightweight OCR engines as fallback
+2. **Linux Capture Pipeline**
+   - Complete Wayland support via gdk4-wayland (portal integration).
+   - Optimize X11 capture (already implemented via x11rb).
+
+3. **Recognition Engine Pivot**
+   - Evaluate **PaddleOCR (ONNX)** or **Manga-OCR** as the primary recognition engine for extracted regions.
+   - Keep Tesseract only as a lightweight fallback for clean, horizontal text.
 
 3. **UI/UX Improvements**
    - Replace winit with pure GTK4 (remove winit dependency)
