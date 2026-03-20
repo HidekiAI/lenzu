@@ -8,68 +8,43 @@ build = "build.rs"
 libc = "0.2.153"
 
 # If you start getting link errors, try MAKE SURE you are calling `cargo build` on a REAL MinGW64 terminal
+[features]
+default = ["gtk", "onnx"]
+gtk = ["gtk4", "gdk4", "glib"]
+onnx = ["ort", "ndarray"]
+
 [dependencies]
-image = "0.25.1"     # NOTE: rusty-tesseract (currently) expects image v0.24.9
-imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image, make sure they match! (current imageproc v0.24.0 relies on image 0.25.0)
-# NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
-rusty-tesseract = "1.1.10" # depends on thiserror and image
-
+image = "0.25.1"
+imageproc = "0.24.0"
+rusty-tesseract = "1.1.10"
 pkg-config = "0.3.30"
-
 anyhow = "1.0.82"
-reqwest = { version = "0.12.3", features = [
-    "json",
-    "gzip",
-    "blocking",
-    "rustls-tls",
-] }
-
-ab_glyph = "0.2.25" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
-
-# TODO: Getting rid of winit and switch over to GTK4 so we can use cairo/pango for text rendering
-#winit = { version = "0.29.15", features = ["mint", "wayland", "x11", "rwh_06"] }
-
-futures = "0.3.30" # commonly fails on 'futures-impl'
-tokio = { version = "1.37.0", features = [
-    "test-util",
-    "time",
-    "fs",
-    "full",
-    "rt-multi-thread",
-    "macros",
-] }
-encoding_rs = { version = "0.8.34", features = [
-    "fast-kanji-encode",
-    "less-slow-kanji-encode",
-] }
+reqwest = { version = "0.12.3", features = ["json", "gzip", "blocking", "rustls-tls"] }
+ab_glyph = "0.2.25"
+futures = "0.3.30"
+tokio = { version = "1.37.0", features = ["test-util", "time", "fs", "full", "rt-multi-thread", "macros"] }
+encoding_rs = { version = "0.8.34", features = ["fast-kanji-encode", "less-slow-kanji-encode"] }
 mecab = "0.1.6"
 async-channel = "2.2.1"
 
-ort = "2.0.0-rc.12"
-ndarray = "0.15.6"
+ort = { version = "2.0.0-rc.12", optional = true }
+ndarray = { version = "0.15.6", optional = true }
 
-# based on gtk version:
-#   $ pkg-config --modversion gtk4
-#   4.14.2
-gtk4 = { version = "0.8.1", features = ["v4_14"] }
-gdk4 = { version = "0.8.1", features = ["v4_14"] }
-glib = { version = "0.19.4", features = ["gio", "gio_ffi"] }    # hopefully, glib/gobject binding contains grpahene-sys as well
+gtk4 = { version = "0.8.1", features = ["v4_14"], optional = true }
+gdk4 = { version = "0.8.1", features = ["v4_14"], optional = true }
+glib = { version = "0.19.4", features = ["gio", "gio_ffi"], optional = true }
 once_cell = "1.19.0"
 zerocopy = { version = "0.7.32", features = ["alloc", "byteorder"] }
-#graphene-sys = "0.19.0" # graphene is part of glib gtk-rs-core
-#gdk-win32 = { git = "https://github.com/gtk-rs/gtk4-rs.git", package = "gdk4-win32" }
-
-[target.'cfg(windows)'.dependencies.gdk4-win32]
-version = "0.8.1"
-features = ["win32", "windows", "egl"]
 
 [target.'cfg(linux)'.dependencies.gdk4-wayland]
 version = "0.8.1"
 features = ["wayland-backend", "wayland-client", "egl"]
+optional = true
 
 [target.'cfg(linux)'.dependencies.gdk4-x11]
 version = "0.8.1"
 features = ["x11", "xlib", "egl"]
+optional = true
 
 # Until prototype is done, we'll allow Linux specific code
 [target.'cfg(linux)'.dependencies.x11]
