@@ -9,13 +9,17 @@ use capture::{
     capture_x11::CaptureX11,
 };
 
+#[cfg(feature = "gtk")]
 use gdk::Key;
+#[cfg(all(feature = "gtk", target_os = "windows"))]
 use gdk4_win32::{
     ffi::{gdk_win32_surface_get_impl_hwnd, GdkWin32Surface},
     Win32Surface, HWND,
 };
+#[cfg(feature = "gtk")]
 use glib::translate::ToGlibPtr;
 // NOTE: make sure to 'cargo add' glib for graphene_point_t
+#[cfg(feature = "gtk")]
 use gtk4::{
     ffi::{
         gtk_list_store_append, gtk_widget_compute_transform, GtkButton, GtkEventController,
