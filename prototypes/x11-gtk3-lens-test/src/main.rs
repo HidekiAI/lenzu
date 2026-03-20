@@ -1,202 +1,168 @@
-use cairo::{RectangleInt, Region};
 use gdk::prelude::*;
 use gtk::prelude::*;
-
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
-#[derive(Clone)]
-struct Detection {
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    label: String,
-    is_clicked: bool,
-}
-
 struct AppState {
     pixels: Option<gdk_pixbuf::Pixbuf>,
-    zoom: f64,
-    detections: Vec<Detection>,
-    is_frozen: bool,
+    info_text: String,
+    crosshair_color: String,
+    last_capture: Instant,
 }
+
+const LENS_SIZE: i32 = 256;
 
 fn main() {
     gtk::init().expect("Failed to initialize GTK.");
 
     let state = Rc::new(RefCell::new(AppState {
         pixels: None,
-        zoom: 2.0,
-        detections: vec![Detection {
-            x: 0.45,
-            y: 0.45,
-            w: 0.1,
-            h: 0.1,
-            label: "COPY ME".to_string(),
-            is_clicked: false,
-        }],
-        is_frozen: false,
+        info_text: "Hold L+R Click to Capture".to_string(),
+        crosshair_color: "#FFFFFF".to_string(),
+        last_capture: Instant::now() - Duration::from_secs(1),
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_default_size(1024, 1024);
+    window.set_default_size(LENS_SIZE, LENS_SIZE + 60);
     window.set_decorated(false);
-    window.set_app_paintable(true);
     window.set_keep_above(true);
-
-    if let Some(screen) = GtkWindowExt::screen(&window) {
-        if let Some(visual) = screen.rgba_visual() {
-            window.set_visual(Some(&visual));
-        }
-    }
-
-    // --- CLICK HANDLING ---
-    let state_click = state.clone();
-    window.add_events(gdk::EventMask::BUTTON_PRESS_MASK);
-    window.connect_button_press_event(move |win, event| {
-        let mut s = state_click.borrow_mut();
-        if s.is_frozen {
-            let (click_x, click_y) = event.position();
-            let size = 1024.0;
-            let zoom_push = (size * (s.zoom - 1.0)) / 2.0;
-            let norm_x = (click_x + zoom_push) / (size * s.zoom);
-            let norm_y = (click_y + zoom_push) / (size * s.zoom);
-
-            for det in s.detections.iter_mut() {
-                if norm_x >= det.x
-                    && norm_x <= (det.x + det.w)
-                    && norm_y >= det.y
-                    && norm_y <= (det.y + det.h)
-                {
-                    let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
-                    clipboard.set_text(&det.label);
-                    det.is_clicked = true;
-                }
-            }
-            win.queue_draw();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
+    window.set_app_paintable(true);
+    window.set_skip_taskbar_hint(true);
 
     // --- DRAWING ---
     let state_draw = state.clone();
     window.connect_draw(move |_, cr| {
         let s = state_draw.borrow();
-        let size = 1024.0;
+        let size = LENS_SIZE as f64;
         let center = size / 2.0;
-        let radius = center - 20.0;
+
+        cr.set_source_rgb(0.0, 0.0, 0.0);
+        cr.paint().ok();
 
         if let Some(ref pb) = s.pixels {
-            cr.arc(center, center, radius, 0.0, 2.0 * std::f64::consts::PI);
-            cr.clip();
-
-            cr.save().expect("Save failed");
-            cr.scale(s.zoom, s.zoom);
-            let offset = (size / 2.0) * (1.0 - 1.0 / s.zoom);
-            cr.set_source_pixbuf(pb, offset, offset);
-            cr.paint().expect("Paint failed");
-            cr.restore().expect("Restore failed");
-
-            for det in &s.detections {
-                cr.set_source_rgba(if det.is_clicked { 1.0 } else { 0.0 }, 1.0, 0.0, 0.8);
-                let zoom_push = (size * (s.zoom - 1.0)) / 2.0;
-                let bx = (det.x * size * s.zoom) - zoom_push;
-                let by = (det.y * size * s.zoom) - zoom_push;
-                cr.set_line_width(3.0);
-                cr.rectangle(bx, by, det.w * size * s.zoom, det.h * size * s.zoom);
-                cr.stroke().ok();
-            }
-
-            cr.reset_clip();
-            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
-            cr.set_line_width(6.0);
-            cr.arc(center, center, radius, 0.0, 2.0 * std::f64::consts::PI);
-            cr.stroke().ok();
+            cr.set_source_pixbuf(pb, 0.0, 0.0);
+            cr.paint().ok();
         }
+
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.set_line_width(1.0);
+        cr.arc(center, center, center - 2.0, 0.0, 6.28);
+        cr.stroke().ok();
+
+        cr.set_source_rgb(1.0, 0.0, 0.0);
+        cr.move_to(center, center - 15.0);
+        cr.line_to(center, center + 15.0);
+        cr.move_to(center - 15.0, center);
+        cr.line_to(center + 15.0, center);
+        cr.stroke().ok();
+
+        cr.set_source_rgb(0.1, 0.1, 0.1);
+        cr.rectangle(0.0, size, size, 60.0);
+        cr.fill().ok();
+
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.set_font_size(14.0);
+        cr.move_to(10.0, size + 25.0);
+        cr.show_text(&s.info_text).ok();
+        cr.move_to(10.0, size + 45.0);
+        cr.show_text(&format!("HEX: {}", s.crosshair_color)).ok();
+
         glib::Propagation::Proceed
     });
 
-    // --- KEYBOARD ---
-    let state_key = state.clone();
-    let window_key = window.clone();
-    window.connect_key_press_event(move |_, event| {
-        let mut s = state_key.borrow_mut();
-        match event.keyval() {
-            gdk::keys::constants::space => {
-                s.is_frozen = !s.is_frozen;
-                set_click_through(&window_key, !s.is_frozen);
-            }
-            gdk::keys::constants::Escape => gtk::main_quit(),
-            _ => {}
-        }
-        window_key.queue_draw();
-        glib::Propagation::Stop
-    });
+    // --- MAIN POLLING LOOP ---
+    let window_poll = window.clone();
+    let state_poll = state.clone();
 
-    // --- CAPTURE LOOP ---
-    let window_loop = window.clone();
-    let state_loop = state.clone();
-    glib::timeout_add_local(Duration::from_millis(33), move || {
-        let mut s = state_loop.borrow_mut();
-        if !s.is_frozen {
-            let display = gdk::Display::default().expect("No display");
-            let seat = display.default_seat().expect("No seat");
-            if let Some(device) = seat.pointer() {
-                let (_, x, y) = device.position();
-                window_loop.move_(x - 512, y - 512);
-                window_loop.hide();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        let display = gdk::Display::default().unwrap();
+        let seat = display.default_seat().unwrap();
+        let device = seat.pointer().unwrap();
+
+        // 1. Get the Root Window for global coordinates
+        let screen = gdk::Screen::default().unwrap();
+        let root_win = screen.root_window().unwrap();
+
+        // 2. Query global position and modifier state (Buttons)
+        // device_position returns (Option<Window>, x, y, ModifierType)
+        let (_, x, y, modifier) = root_win.device_position(&device);
+
+        // 3. Move lens
+        window_poll.move_(x - (LENS_SIZE / 2), y - (LENS_SIZE / 2));
+
+        // 4. TRIGGER: Left (BUTTON1) + Right (BUTTON3)
+        let is_left = modifier.contains(gdk::ModifierType::BUTTON1_MASK);
+        let is_right = modifier.contains(gdk::ModifierType::BUTTON3_MASK);
+
+        if is_left && is_right {
+            let mut s = state_poll.borrow_mut();
+            if s.last_capture.elapsed() > Duration::from_millis(800) {
+                s.last_capture = Instant::now();
+
+                window_poll.hide();
                 display.flush();
-                if let Ok(mut raw_data) = capture_x11(x - 512, y - 512, 1024, 1024) {
-                    window_loop.show();
-                    for chunk in raw_data.chunks_exact_mut(4) {
+                display.sync();
+                std::thread::sleep(Duration::from_millis(150));
+
+                if let Ok(mut raw) = capture_x11_raw(
+                    x - (LENS_SIZE / 2),
+                    y - (LENS_SIZE / 2),
+                    LENS_SIZE as u32,
+                    LENS_SIZE as u32,
+                ) {
+                    for chunk in raw.chunks_exact_mut(4) {
                         chunk.swap(0, 2);
                     }
+
+                    let center_idx = ((LENS_SIZE / 2) * LENS_SIZE + (LENS_SIZE / 2)) as usize * 4;
+                    if center_idx + 3 < raw.len() {
+                        let r = raw[center_idx];
+                        let g = raw[center_idx + 1];
+                        let b = raw[center_idx + 2];
+                        s.crosshair_color = format!("#{:02X}{:02X}{:02X}", r, g, b);
+                        s.info_text = format!("Captured: RGB({}, {}, {})", r, g, b);
+                    }
+
                     let pixbuf = gdk_pixbuf::Pixbuf::from_mut_slice(
-                        raw_data,
+                        raw,
                         gdk_pixbuf::Colorspace::Rgb,
                         true,
                         8,
-                        1024,
-                        1024,
-                        1024 * 4,
+                        LENS_SIZE,
+                        LENS_SIZE,
+                        LENS_SIZE * 4,
                     );
                     s.pixels = Some(pixbuf);
-                    window_loop.queue_draw();
-                } else {
-                    window_loop.show();
                 }
+                window_poll.show();
             }
         }
+
         glib::ControlFlow::Continue
     });
 
+    window.connect_key_press_event(move |_, event| {
+        if event.keyval() == gdk::keys::constants::Escape {
+            gtk::main_quit();
+        }
+        glib::Propagation::Stop
+    });
+
     window.show_all();
-    set_click_through(&window, true);
+
+    if let Some(gdk_win) = window.window() {
+        let region = cairo::Region::create();
+        gdk_win.input_shape_combine_region(&region, 0, 0);
+    }
+
     gtk::main();
 }
 
-fn set_click_through(window: &gtk::Window, enable: bool) {
-    if let Some(gdk_win) = window.window() {
-        if enable {
-            let region = Region::create();
-            gdk_win.input_shape_combine_region(&region, 0, 0);
-        } else {
-            // FIX: Using RectangleInt::new constructor
-            let rect = RectangleInt::new(0, 0, 1024, 1024);
-            let region = Region::create_rectangle(&rect);
-            gdk_win.input_shape_combine_region(&region, 0, 0);
-        }
-    }
-}
-
-fn capture_x11(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn capture_x11_raw(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let (conn, screen_num) = RustConnection::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
     let reply = conn
