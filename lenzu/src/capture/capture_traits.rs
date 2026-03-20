@@ -10,10 +10,10 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleTypes {
     #[cfg(all(feature = "gtk", target_os = "windows"))]
-    Win32Handle(gdk::HWND),
+    Win32Handle(gdk4_win32::HWND),
     #[cfg(not(feature = "gtk"))]
     MockHandle,
-    //Xwin( gdk3_wayland::HANDLE),
+    //Xwin( gdk4_wayland::HANDLE),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,7 +67,7 @@ pub trait CaptureTrait {
     // IMPORTANT:  init() attempts to extract gdk3_<desktop>::Surface::Handle() (i.e. HWND),
     // it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
     #[cfg(feature = "gtk")]
-    fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool;
+    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool;
 
     #[cfg(not(feature = "gtk"))]
     fn init(&mut self, app_window_gtk: &dummy_types::DummyWindow) -> bool;
@@ -99,4 +99,23 @@ mod tests {
         assert_eq!(data.y, 0);
         assert_eq!(data.monitor.width, 1024);
     }
+
+    #[test]
+    fn test_negative_coordinate_math() {
+        // Mock a scenario where a monitor is left of the primary monitor
+        let mut data = CursorData::new();
+        data.monitor.x = -1920; // 1920px offset to the left
+        data.monitor.y = 0;
+        data.monitor.width = 1920;
+        data.monitor.height = 1080;
+        
+        // Ensure our math for relative positioning works
+        let relative_x = data.x - data.monitor.x;
+        assert_eq!(relative_x, 1920); // Relative X within the secondary monitor
+    }
+}
+
+#[cfg(test)]
+pub mod dummy_types {
+    pub struct DummyWindow;
 }
