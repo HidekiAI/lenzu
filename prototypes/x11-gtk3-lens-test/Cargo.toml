@@ -14,8 +14,10 @@ x11rb = "0.13"
 
 # AI and Math (CRITICAL: These versions must match)
 # We use ndarray 0.15 because ort 2.0-rc.9 is built against it
-ort = { version = "2.0.0-rc.9", features = ["ndarray"] }
+ort = { version = "2.0.0-rc.12", features = ["ndarray", "half"] }
 ndarray = "0.15"
+half = { version = "2.4", features = ["num-traits"] }
 
 # Image processing (optional but helpful for AI)
 image = "0.24"
+
