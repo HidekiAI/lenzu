@@ -1,7 +1,10 @@
+use cairo::{RectangleInt, Region};
 use gdk::prelude::*;
 use gtk::prelude::*;
+
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
@@ -13,7 +16,7 @@ struct Detection {
     w: f64,
     h: f64,
     label: String,
-    is_clicked: bool, // NEW: For visual feedback
+    is_clicked: bool,
 }
 
 struct AppState {
@@ -45,25 +48,21 @@ fn main() {
     window.set_decorated(false);
     window.set_app_paintable(true);
     window.set_keep_above(true);
-    window.set_skip_taskbar_hint(true);
 
-    if let Some(visual) = window.screen().unwrap().rgba_visual() {
-        window.set_visual(Some(&visual));
+    if let Some(screen) = GtkWindowExt::screen(&window) {
+        if let Some(visual) = screen.rgba_visual() {
+            window.set_visual(Some(&visual));
+        }
     }
 
-    set_click_through(&window, true);
-
-    // --- CLIPBOARD & CLICK DETECTION ---
+    // --- CLICK HANDLING ---
     let state_click = state.clone();
-    let window_click = window.clone();
     window.add_events(gdk::EventMask::BUTTON_PRESS_MASK);
-    window.connect_button_press_event(move |_, event| {
+    window.connect_button_press_event(move |win, event| {
         let mut s = state_click.borrow_mut();
         if s.is_frozen {
             let (click_x, click_y) = event.position();
             let size = 1024.0;
-
-            // Reverse Math to find if we hit a box
             let zoom_push = (size * (s.zoom - 1.0)) / 2.0;
             let norm_x = (click_x + zoom_push) / (size * s.zoom);
             let norm_y = (click_y + zoom_push) / (size * s.zoom);
@@ -74,21 +73,19 @@ fn main() {
                     && norm_y >= det.y
                     && norm_y <= (det.y + det.h)
                 {
-                    // 1. Copy to Clipboard
                     let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
                     clipboard.set_text(&det.label);
-
-                    // 2. Visual Feedback
                     det.is_clicked = true;
-                    println!("Copied to Clipboard: {}", det.label);
                 }
             }
-            window_click.queue_draw();
+            win.queue_draw();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
         }
-        Inhibit(false)
     });
 
-    // --- DRAWING LOGIC ---
+    // --- DRAWING ---
     let state_draw = state.clone();
     window.connect_draw(move |_, cr| {
         let s = state_draw.borrow();
@@ -107,37 +104,26 @@ fn main() {
             cr.paint().expect("Paint failed");
             cr.restore().expect("Restore failed");
 
-            // Draw Detections
             for det in &s.detections {
-                // Change color if clicked (visual feedback)
-                if det.is_clicked {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.9); // White flash
-                } else {
-                    cr.set_source_rgba(0.0, 1.0, 0.0, 0.8); // Normal Green
-                }
-
+                cr.set_source_rgba(if det.is_clicked { 1.0 } else { 0.0 }, 1.0, 0.0, 0.8);
                 let zoom_push = (size * (s.zoom - 1.0)) / 2.0;
                 let bx = (det.x * size * s.zoom) - zoom_push;
                 let by = (det.y * size * s.zoom) - zoom_push;
                 cr.set_line_width(3.0);
                 cr.rectangle(bx, by, det.w * size * s.zoom, det.h * size * s.zoom);
                 cr.stroke().ok();
-
-                cr.move_to(bx, by - 5.0);
-                cr.set_font_size(14.0);
-                cr.show_text(&det.label).ok();
             }
 
             cr.reset_clip();
             cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
             cr.set_line_width(6.0);
             cr.arc(center, center, radius, 0.0, 2.0 * std::f64::consts::PI);
-            cr.stroke().expect("Border failed");
+            cr.stroke().ok();
         }
-        Inhibit(false)
+        glib::Propagation::Proceed
     });
 
-    // --- KEYBOARD & TIMEOUT (Same as before) ---
+    // --- KEYBOARD ---
     let state_key = state.clone();
     let window_key = window.clone();
     window.connect_key_press_event(move |_, event| {
@@ -145,66 +131,67 @@ fn main() {
         match event.keyval() {
             gdk::keys::constants::space => {
                 s.is_frozen = !s.is_frozen;
-                // Reset click feedback on unfreeze
-                for det in s.detections.iter_mut() {
-                    det.is_clicked = false;
-                }
                 set_click_through(&window_key, !s.is_frozen);
             }
-            gdk::keys::constants::plus | gdk::keys::constants::equal => {
-                s.zoom = (s.zoom + 0.5).min(5.0)
-            }
-            gdk::keys::constants::minus => s.zoom = (s.zoom - 0.5).max(1.0),
             gdk::keys::constants::Escape => gtk::main_quit(),
             _ => {}
         }
         window_key.queue_draw();
-        Inhibit(false)
+        glib::Propagation::Stop
     });
 
+    // --- CAPTURE LOOP ---
     let window_loop = window.clone();
     let state_loop = state.clone();
-    glib::timeout_add_local(33, move || {
-        if !state_loop.borrow().is_frozen {
-            let display = gdk::Display::default().unwrap();
-            let (_, x, y) = display.default_seat().unwrap().pointer().position();
-            window_loop.move_(x - 512, y - 512);
-            window_loop.hide();
-            display.flush();
-            if let Ok(mut raw_data) = capture_x11(x - 512, y - 512, 1024, 1024) {
-                window_loop.show();
-                for chunk in raw_data.chunks_exact_mut(4) {
-                    chunk.swap(0, 2);
+    glib::timeout_add_local(Duration::from_millis(33), move || {
+        let mut s = state_loop.borrow_mut();
+        if !s.is_frozen {
+            let display = gdk::Display::default().expect("No display");
+            let seat = display.default_seat().expect("No seat");
+            if let Some(device) = seat.pointer() {
+                let (_, x, y) = device.position();
+                window_loop.move_(x - 512, y - 512);
+                window_loop.hide();
+                display.flush();
+                if let Ok(mut raw_data) = capture_x11(x - 512, y - 512, 1024, 1024) {
+                    window_loop.show();
+                    for chunk in raw_data.chunks_exact_mut(4) {
+                        chunk.swap(0, 2);
+                    }
+                    let pixbuf = gdk_pixbuf::Pixbuf::from_mut_slice(
+                        raw_data,
+                        gdk_pixbuf::Colorspace::Rgb,
+                        true,
+                        8,
+                        1024,
+                        1024,
+                        1024 * 4,
+                    );
+                    s.pixels = Some(pixbuf);
+                    window_loop.queue_draw();
+                } else {
+                    window_loop.show();
                 }
-                let pixbuf = gdk_pixbuf::Pixbuf::from_mut_slice(
-                    raw_data,
-                    gdk_pixbuf::Colorspace::Rgb,
-                    true,
-                    8,
-                    1024,
-                    1024,
-                    1024 * 4,
-                );
-                state_loop.borrow_mut().pixels = Some(pixbuf);
-                window_loop.queue_draw();
-            } else {
-                window_loop.show();
             }
         }
         glib::ControlFlow::Continue
     });
 
     window.show_all();
+    set_click_through(&window, true);
     gtk::main();
 }
 
 fn set_click_through(window: &gtk::Window, enable: bool) {
     if let Some(gdk_win) = window.window() {
         if enable {
-            let region = cairo::Region::create();
+            let region = Region::create();
             gdk_win.input_shape_combine_region(&region, 0, 0);
         } else {
-            gdk_win.input_shape_combine_mask(None, 0, 0);
+            // FIX: Using RectangleInt::new constructor
+            let rect = RectangleInt::new(0, 0, 1024, 1024);
+            let region = Region::create_rectangle(&rect);
+            gdk_win.input_shape_combine_region(&region, 0, 0);
         }
     }
 }
