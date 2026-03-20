@@ -10,8 +10,7 @@ URL_1="https://webnn.github.io/webnn-samples/object_detection/models/yolov8n.onn
 URL_2="https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.onnx"
 
 echo "--- 1. Validating System Libraries ---"
-#sudo apt update 
-sudo apt install -y libgtk-3-dev libgdk-pixbuf-2.0-dev libcairo2-dev libpango1.0-dev libxcb-shape0-dev libxcb-xfixes0-dev pkg-config wget curl
+sudo apt update && sudo apt install -y libgtk-3-dev libgdk-pixbuf-2.0-dev libcairo2-dev libpango1.0-dev libxcb-shape0-dev libxcb-xfixes0-dev pkg-config wget curl
 
 echo "--- 2. Validating AI Model ---"
 
