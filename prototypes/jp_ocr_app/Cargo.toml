@@ -1,0 +1,19 @@
+[package]
+name = "jp_ocr_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Updated to the latest stable version
+ocr-rs = "2.1" 
+anyhow = "1.0"
+image = "0.25"
+
+[build-dependencies]
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
+zip = "0.6"
+anyhow = "1.0"
+tempfile = "3.10"
+
+[dev-dependencies]
+strsim = "0.11"
