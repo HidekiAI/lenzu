@@ -4,28 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# GTK 3.24 is the stable target for Xfce-style apps
-gtk = { version = "0.18", features = ["v3_24"] }
-
-# GDK handles the windowing, mouse, and pixels
+# GUI and System
+gtk = "0.18"
 gdk = "0.18"
-
-# GdkPixbuf is required to turn raw X11 bytes into a GTK image
-gdk-pixbuf = "0.18"
-
-# Cairo handles the circular clipping and zoom math
-# 'use_glib' is critical for integrating with the GTK main loop
-cairo-rs = { version = "0.18", features = ["use_glib"] }
-
-# Glib provides the timeout_add and channel logic
 glib = "0.18"
+cairo-rs = "0.18"
+gdk-pixbuf = "0.18"
+x11rb = "0.13"
 
-# x11rb handles the raw screen capture
-# "all-extensions" ensures we can handle multi-monitor and transparency
-x11rb = { version = "0.13", features = ["all-extensions"] }
+# AI and Math (CRITICAL: These versions must match)
+# We use ndarray 0.15 because ort 2.0-rc.9 is built against it
+ort = { version = "2.0.0-rc.9", features = ["ndarray"] }
+ndarray = "0.15"
 
-# Instant handles the 'debounce' timing for your OCR experiments
-instant = "0.1"
-
-# Image crate is useful for future YOLO/OCR pre-processing
-image = "0.25"
+# Image processing (optional but helpful for AI)
+image = "0.24"
