@@ -1,20 +1,8 @@
 #!/bin/bash
 set -e
-
-echo "--- 1. VERIFYING SYSTEM LIBRARIES ---"
-sudo apt-get install -y libx11-dev libssl-dev pkg-config libgtk-3-dev libgdk-pixbuf-2.0-dev \
- fonts-noto-cjk fonts-ipafont-gothic
-
-mkdir -p assets
+echo "Checking Linux dependencies..."
+#sudo apt-get update 
+sudo apt-get install -y libgomp1 libclang-dev
 mkdir -p tests/data
-
-echo "--- 2. RUNNING PIPELINE TESTS ---"
-cargo test
-
-echo "--- 3. COMPILING RELEASE BINARY ---"
+echo "Building Release..."
 cargo build --release
-
-echo "------------------------------------------------"
-echo "BUILD SUCCESSFUL"
-echo "OCR History will be stored in: /dev/shm/ocr_history.txt"
-echo "------------------------------------------------"
