@@ -17,6 +17,7 @@ use x11rb::rust_connection::RustConnection;
 
 // --- CONFIGURATION ---
 const LENS_SIZE: i32 = 400;
+const UI_PANEL_HEIGHT: i32 = 130;
 const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 const DEBUG_IMAGE_PATH: &str = "/dev/shm/debug_lens.png";
 
@@ -45,7 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_default_size(LENS_SIZE, LENS_SIZE + 130);
+    // Window is Lens + UI Panel height
+    window.set_default_size(LENS_SIZE, LENS_SIZE + UI_PANEL_HEIGHT);
     window.set_decorated(false);
     window.set_keep_above(true);
     window.set_app_paintable(true);
@@ -56,7 +58,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Close on Escape key
     window.connect_key_press_event(|_, event| {
         if event.keyval() == gdk::keys::constants::Escape {
             gtk::main_quit();
@@ -68,45 +69,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
 
-        // Background
-        cr.set_source_rgb(0.01, 0.01, 0.02);
+        // 1. Clear with transparency
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        cr.set_operator(cairo::Operator::Source);
         cr.paint().ok();
+        cr.set_operator(cairo::Operator::Over);
 
+        // 2. Draw Captured Pixels
         if let Some(ref pb) = s.pixels {
             cr.set_source_pixbuf(pb, 0.0, 0.0);
             cr.paint().ok();
+        } else {
+            cr.set_source_rgba(0.1, 0.1, 0.15, 0.4);
+            cr.rectangle(0.0, 0.0, LENS_SIZE as f64, LENS_SIZE as f64);
+            cr.fill().ok();
         }
 
-        // Dark Panel
-        cr.set_source_rgba(0.02, 0.02, 0.08, 0.95);
-        cr.rectangle(0.0, LENS_SIZE as f64, LENS_SIZE as f64, 130.0);
+        // 3. THE BORDER (Cyan)
+        cr.set_source_rgb(0.0, 1.0, 0.8);
+        cr.set_line_width(2.0);
+        cr.rectangle(1.0, 1.0, (LENS_SIZE - 2) as f64, (LENS_SIZE - 2) as f64);
+        cr.stroke().ok();
+
+        // Dark Inner Contrast
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
+        cr.set_line_width(1.0);
+        cr.rectangle(2.0, 2.0, (LENS_SIZE - 4) as f64, (LENS_SIZE - 4) as f64);
+        cr.stroke().ok();
+
+        // 4. UI Panel
+        cr.set_source_rgba(0.01, 0.01, 0.05, 0.8);
+        cr.rectangle(
+            0.0,
+            LENS_SIZE as f64,
+            LENS_SIZE as f64,
+            UI_PANEL_HEIGHT as f64,
+        );
         cr.fill().ok();
 
-        // Pango Rendering for Japanese
+        // 5. Render Text
         let context = win.pango_context();
         let layout = pango::Layout::new(&context);
 
-        // Render Status
         cr.set_source_rgb(0.0, 1.0, 0.8);
         layout.set_text(&s.status);
-        cr.move_to(10.0, (LENS_SIZE + 10) as f64);
+        cr.move_to(12.0, (LENS_SIZE + 10) as f64);
         pangocairo::show_layout(cr, &layout);
 
-        // Render OCR Result with CJK support
         cr.set_source_rgb(1.0, 1.0, 1.0);
         let font_desc = pango::FontDescription::from_string("Sans Bold 13");
         layout.set_font_description(Some(&font_desc));
 
         let text_to_draw = if s.ocr_result.is_empty() {
-            "No data...".to_string()
+            "Target Japanese text with the crosshair...".to_string()
         } else {
             s.ocr_result.clone()
         };
 
         layout.set_text(&text_to_draw);
-        layout.set_width(pango::units_from_double((LENS_SIZE - 20) as f64));
+        layout.set_width(pango::units_from_double((LENS_SIZE - 24) as f64));
         layout.set_ellipsize(pango::EllipsizeMode::End);
-        cr.move_to(10.0, (LENS_SIZE + 40) as f64);
+        cr.move_to(12.0, (LENS_SIZE + 40) as f64);
         pangocairo::show_layout(cr, &layout);
 
         glib::Propagation::Proceed
@@ -119,11 +142,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let display = gdk::Display::default().unwrap();
         let seat = display.default_seat().unwrap();
         let device = seat.pointer().unwrap();
-        let screen = gdk::Screen::default().unwrap();
-        let root_win = screen.root_window().unwrap();
+        let root_win = gdk::Screen::default().unwrap().root_window().unwrap();
         let (_, x, y, modifier) = root_win.device_position(&device);
 
-        window_poll.move_(x - (LENS_SIZE / 2), y - ((LENS_SIZE + 130) / 2));
+        // Center the LENS area (top 400x400) on the cursor
+        // This means the Cursor is at LENS_SIZE/2, LENS_SIZE/2 relative to the window
+        let win_x = x - (LENS_SIZE / 2);
+        let win_y = y - (LENS_SIZE / 2);
+        window_poll.move_(win_x, win_y);
 
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
@@ -140,19 +166,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                let cap_x = (x - (LENS_SIZE / 2)).max(0);
-                let cap_y = (y - (LENS_SIZE / 2)).max(0);
+                // FIXED MATH:
+                // We capture exactly what is inside the green border.
+                // Since the window's top-left is at (win_x, win_y),
+                // and the green border starts at (0,0) of the window:
+                let cap_x = win_x.max(0);
+                let cap_y = win_y.max(0);
 
                 if let Ok(raw) = capture_x11(cap_x, cap_y, LENS_SIZE as u32, LENS_SIZE as u32) {
                     save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
                     let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
-                    s.status = "THINKING...".to_string();
+                    s.status = "ANALYZING...".to_string();
                     window_poll.queue_draw();
 
                     match call_api(&s.api_key, &b64) {
                         Ok(text) => {
                             s.ocr_result = text.clone();
-                            s.status = "SUCCESS".to_string();
+                            s.status = "COPIED TO CLIPBOARD".to_string();
                             let _ = s.clipboard.set_text(text.clone());
                             if let Ok(mut f) = OpenOptions::new()
                                 .create(true)
@@ -244,7 +274,7 @@ fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> 
         .json(&json!({
             "model": "google/gemini-2.0-flash-001",
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": "OCR the Japanese text. Return only the transcription, line by line."},
+                {"type": "text", "text": "OCR ONLY the Japanese text. Return ONLY the transcribed text, line by line."},
                 {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
             ]}]
         })).send()?;
