@@ -28,6 +28,9 @@ struct AppState {
     last_capture: Instant,
     clipboard: Clipboard,
     api_key: String,
+    is_loading: bool,
+    spinner_angle: f64,
+    flash_alpha: f64, // New: for the camera flash effect
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,10 +46,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_capture: Instant::now() - Duration::from_secs(2),
         clipboard: Clipboard::new().expect("Failed to init clipboard"),
         api_key,
+        is_loading: false,
+        spinner_angle: 0.0,
+        flash_alpha: 0.0,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    // Window is Lens + UI Panel height
     window.set_default_size(LENS_SIZE, LENS_SIZE + UI_PANEL_HEIGHT);
     window.set_decorated(false);
     window.set_keep_above(true);
@@ -65,40 +70,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed
     });
 
+    let (tx, rx) = glib::MainContext::channel(glib::Priority::default());
+
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
 
-        // 1. Clear with transparency
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);
         cr.paint().ok();
         cr.set_operator(cairo::Operator::Over);
 
-        // 2. Draw Captured Pixels
         if let Some(ref pb) = s.pixels {
             cr.set_source_pixbuf(pb, 0.0, 0.0);
             cr.paint().ok();
-        } else {
-            cr.set_source_rgba(0.1, 0.1, 0.15, 0.4);
+        }
+
+        // --- CAMERA FLASH EFFECT ---
+        if s.flash_alpha > 0.0 {
+            cr.set_source_rgba(1.0, 1.0, 1.0, s.flash_alpha);
             cr.rectangle(0.0, 0.0, LENS_SIZE as f64, LENS_SIZE as f64);
             cr.fill().ok();
         }
 
-        // 3. THE BORDER (Cyan)
+        // Cyan Border
         cr.set_source_rgb(0.0, 1.0, 0.8);
         cr.set_line_width(2.0);
         cr.rectangle(1.0, 1.0, (LENS_SIZE - 2) as f64, (LENS_SIZE - 2) as f64);
         cr.stroke().ok();
 
-        // Dark Inner Contrast
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
-        cr.set_line_width(1.0);
-        cr.rectangle(2.0, 2.0, (LENS_SIZE - 4) as f64, (LENS_SIZE - 4) as f64);
-        cr.stroke().ok();
-
-        // 4. UI Panel
-        cr.set_source_rgba(0.01, 0.01, 0.05, 0.8);
+        // UI Panel
+        cr.set_source_rgba(0.01, 0.01, 0.05, 0.85);
         cr.rectangle(
             0.0,
             LENS_SIZE as f64,
@@ -107,7 +109,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         cr.fill().ok();
 
-        // 5. Render Text
         let context = win.pango_context();
         let layout = pango::Layout::new(&context);
 
@@ -116,17 +117,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cr.move_to(12.0, (LENS_SIZE + 10) as f64);
         pangocairo::show_layout(cr, &layout);
 
+        if s.is_loading {
+            cr.save().ok();
+            cr.translate((LENS_SIZE - 30) as f64, (LENS_SIZE + 20) as f64);
+            cr.rotate(s.spinner_angle);
+            cr.set_line_width(3.0);
+            cr.set_source_rgb(0.0, 1.0, 0.8);
+            cr.arc(0.0, 0.0, 8.0, 0.0, 1.5 * std::f64::consts::PI);
+            cr.stroke().ok();
+            cr.restore().ok();
+        }
+
         cr.set_source_rgb(1.0, 1.0, 1.0);
         let font_desc = pango::FontDescription::from_string("Sans Bold 13");
         layout.set_font_description(Some(&font_desc));
-
-        let text_to_draw = if s.ocr_result.is_empty() {
-            "Target Japanese text with the crosshair...".to_string()
-        } else {
-            s.ocr_result.clone()
-        };
-
-        layout.set_text(&text_to_draw);
+        layout.set_text(&s.ocr_result);
         layout.set_width(pango::units_from_double((LENS_SIZE - 24) as f64));
         layout.set_ellipsize(pango::EllipsizeMode::End);
         cr.move_to(12.0, (LENS_SIZE + 40) as f64);
@@ -135,70 +140,96 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed
     });
 
-    let window_poll = window.clone();
-    let state_poll = state.clone();
+    let state_rx = state.clone();
+    let window_rx = window.clone();
+    rx.attach(None, move |api_result: Result<String, String>| {
+        let mut s = state_rx.borrow_mut();
+        s.is_loading = false;
+        match api_result {
+            Ok(text) => {
+                s.ocr_result = text.clone();
+                s.status = "SUCCESS".to_string();
+                let _ = s.clipboard.set_text(text.clone());
+                if let Ok(mut f) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(HISTORY_PATH)
+                {
+                    let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%H:%M:%S"), text);
+                }
+            }
+            Err(e) => s.status = format!("API Error: {}", e),
+        }
+        window_rx.queue_draw();
+        glib::ControlFlow::Continue
+    });
+
+    // Animation timer for Spinner AND Flash Fade
+    let window_anim = window.clone();
+    let state_anim = state.clone();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        let mut s = state_anim.borrow_mut();
+        let mut needs_redraw = false;
+
+        if s.is_loading {
+            s.spinner_angle += 0.2;
+            needs_redraw = true;
+        }
+
+        if s.flash_alpha > 0.0 {
+            s.flash_alpha -= 0.1; // Fast fade-out
+            if s.flash_alpha < 0.0 {
+                s.flash_alpha = 0.0;
+            }
+            needs_redraw = true;
+        }
+
+        if needs_redraw {
+            window_anim.queue_draw();
+        }
+        glib::ControlFlow::Continue
+    });
+
+    let window_main = window.clone();
+    let state_main = state.clone();
 
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let display = gdk::Display::default().unwrap();
         let seat = display.default_seat().unwrap();
         let device = seat.pointer().unwrap();
-        let root_win = gdk::Screen::default().unwrap().root_window().unwrap();
+        let screen = gdk::Screen::default().unwrap();
+        let root_win = screen.root_window().unwrap();
         let (_, x, y, modifier) = root_win.device_position(&device);
 
-        // Center the LENS area (top 400x400) on the cursor
-        // This means the Cursor is at LENS_SIZE/2, LENS_SIZE/2 relative to the window
         let win_x = x - (LENS_SIZE / 2);
         let win_y = y - (LENS_SIZE / 2);
-        window_poll.move_(win_x, win_y);
+        window_main.move_(win_x, win_y);
 
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
         {
-            let mut s = state_poll.borrow_mut();
-            if s.last_capture.elapsed() > Duration::from_secs(1) {
+            let mut s = state_main.borrow_mut();
+            if s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading {
                 s.last_capture = Instant::now();
                 s.status = "CAPTURING...".to_string();
-                window_poll.queue_draw();
+                s.is_loading = true;
+                s.flash_alpha = 1.0; // TRIGGER FLASH
+                window_main.queue_draw();
 
-                window_poll.hide();
+                window_main.hide();
                 while gtk::events_pending() {
                     gtk::main_iteration();
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                // FIXED MATH:
-                // We capture exactly what is inside the green border.
-                // Since the window's top-left is at (win_x, win_y),
-                // and the green border starts at (0,0) of the window:
-                let cap_x = win_x.max(0);
-                let cap_y = win_y.max(0);
-
-                if let Ok(raw) = capture_x11(cap_x, cap_y, LENS_SIZE as u32, LENS_SIZE as u32) {
+                if let Ok(raw) = capture_x11(
+                    win_x.max(0),
+                    win_y.max(0),
+                    LENS_SIZE as u32,
+                    LENS_SIZE as u32,
+                ) {
                     save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
                     let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
-                    s.status = "ANALYZING...".to_string();
-                    window_poll.queue_draw();
-
-                    match call_api(&s.api_key, &b64) {
-                        Ok(text) => {
-                            s.ocr_result = text.clone();
-                            s.status = "COPIED TO CLIPBOARD".to_string();
-                            let _ = s.clipboard.set_text(text.clone());
-                            if let Ok(mut f) = OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(HISTORY_PATH)
-                            {
-                                let _ = writeln!(
-                                    f,
-                                    "[{}] {}",
-                                    chrono::Local::now().format("%H:%M:%S"),
-                                    text
-                                );
-                            }
-                        }
-                        Err(e) => s.status = format!("API Error: {}", e),
-                    }
 
                     let mut rgb = raw;
                     for chunk in rgb.chunks_exact_mut(4) {
@@ -213,8 +244,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         LENS_SIZE,
                         LENS_SIZE * 4,
                     ));
+                    window_main.show();
+                    window_main.queue_draw();
+
+                    let api_key = s.api_key.clone();
+                    let tx_clone = tx.clone();
+                    std::thread::spawn(move || {
+                        let result = call_api(&api_key, &b64).map_err(|e| e.to_string());
+                        let _ = tx_clone.send(result);
+                    });
+                } else {
+                    s.is_loading = false;
+                    s.status = "Capture Failed".to_string();
+                    window_main.show();
                 }
-                window_poll.show();
             }
         }
         glib::ControlFlow::Continue
@@ -274,7 +317,7 @@ fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> 
         .json(&json!({
             "model": "google/gemini-2.0-flash-001",
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": "OCR ONLY the Japanese text. Return ONLY the transcribed text, line by line."},
+                {"type": "text", "text": "OCR the Japanese text. Output transcription only, line by line."},
                 {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
             ]}]
         })).send()?;
