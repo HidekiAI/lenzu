@@ -1,53 +1,75 @@
+use arboard::Clipboard;
+use base64::{engine::general_purpose, Engine as _};
 use gdk::prelude::*;
+use gtk::glib;
 use gtk::prelude::*;
-use ort::session::Session;
+use pango;
+use pangocairo;
+use serde_json::json;
 use std::cell::RefCell;
-use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
+// --- CONFIGURATION ---
+const LENS_SIZE: i32 = 400;
+const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
+const DEBUG_IMAGE_PATH: &str = "/dev/shm/debug_lens.png";
+
 struct AppState {
     pixels: Option<gdk_pixbuf::Pixbuf>,
-    info_text: String,
     ocr_result: String,
-    det_model: Session,
-    rec_model: Session,
+    status: String,
     last_capture: Instant,
+    clipboard: Clipboard,
+    api_key: String,
 }
 
-const LENS_SIZE: i32 = 256;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    gtk::init().expect("Failed to initialize GTK.");
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .expect("ERROR: OPENROUTER_API_KEY environment variable not set!");
 
-    // Load converted ONNX models
-    let det_model = Session::builder()?.commit_from_file("assets/det_model.onnx")?;
-    let rec_model = Session::builder()?.commit_from_file("assets/rec_model.onnx")?;
+    gtk::init().expect("Failed to initialize GTK.");
 
     let state = Rc::new(RefCell::new(AppState {
         pixels: None,
-        info_text: "Target JPN Text & Shift+Click".to_string(),
         ocr_result: String::new(),
-        det_model,
-        rec_model,
-        last_capture: Instant::now() - Duration::from_secs(1),
+        status: "READY: Shift+Click | ESC to Quit".to_string(),
+        last_capture: Instant::now() - Duration::from_secs(2),
+        clipboard: Clipboard::new().expect("Failed to init clipboard"),
+        api_key,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_default_size(LENS_SIZE, LENS_SIZE + 100);
+    window.set_default_size(LENS_SIZE, LENS_SIZE + 130);
     window.set_decorated(false);
     window.set_keep_above(true);
     window.set_app_paintable(true);
 
-    let state_draw = state.clone();
-    window.connect_draw(move |_, cr| {
-        let s = state_draw.borrow();
-        let size = LENS_SIZE as f64;
+    if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
+        if let Some(visual) = screen.rgba_visual() {
+            window.set_visual(Some(&visual));
+        }
+    }
 
-        cr.set_source_rgb(0.0, 0.0, 0.0);
+    // Close on Escape key
+    window.connect_key_press_event(|_, event| {
+        if event.keyval() == gdk::keys::constants::Escape {
+            gtk::main_quit();
+        }
+        glib::Propagation::Proceed
+    });
+
+    let state_draw = state.clone();
+    window.connect_draw(move |win, cr| {
+        let s = state_draw.borrow();
+
+        // Background
+        cr.set_source_rgb(0.01, 0.01, 0.02);
         cr.paint().ok();
 
         if let Some(ref pb) = s.pixels {
@@ -55,64 +77,112 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cr.paint().ok();
         }
 
-        // UI Results
-        cr.set_source_rgb(0.05, 0.05, 0.1);
-        cr.rectangle(0.0, size, size, 100.0);
+        // Dark Panel
+        cr.set_source_rgba(0.02, 0.02, 0.08, 0.95);
+        cr.rectangle(0.0, LENS_SIZE as f64, LENS_SIZE as f64, 130.0);
         cr.fill().ok();
 
-        cr.set_source_rgb(0.0, 1.0, 0.5);
-        cr.set_font_size(14.0);
-        cr.move_to(10.0, size + 30.0);
-        cr.show_text(&format!("OCR: {}", s.ocr_result)).ok();
+        // Pango Rendering for Japanese
+        let context = win.pango_context();
+        let layout = pango::Layout::new(&context);
+
+        // Render Status
+        cr.set_source_rgb(0.0, 1.0, 0.8);
+        layout.set_text(&s.status);
+        cr.move_to(10.0, (LENS_SIZE + 10) as f64);
+        pangocairo::show_layout(cr, &layout);
+
+        // Render OCR Result with CJK support
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        let font_desc = pango::FontDescription::from_string("Sans Bold 13");
+        layout.set_font_description(Some(&font_desc));
+
+        let text_to_draw = if s.ocr_result.is_empty() {
+            "No data...".to_string()
+        } else {
+            s.ocr_result.clone()
+        };
+
+        layout.set_text(&text_to_draw);
+        layout.set_width(pango::units_from_double((LENS_SIZE - 20) as f64));
+        layout.set_ellipsize(pango::EllipsizeMode::End);
+        cr.move_to(10.0, (LENS_SIZE + 40) as f64);
+        pangocairo::show_layout(cr, &layout);
 
         glib::Propagation::Proceed
     });
 
     let window_poll = window.clone();
     let state_poll = state.clone();
+
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let display = gdk::Display::default().unwrap();
         let seat = display.default_seat().unwrap();
         let device = seat.pointer().unwrap();
-        let root_win = gdk::Screen::default().unwrap().root_window().unwrap();
+        let screen = gdk::Screen::default().unwrap();
+        let root_win = screen.root_window().unwrap();
         let (_, x, y, modifier) = root_win.device_position(&device);
 
-        window_poll.move_(x - (LENS_SIZE / 2), y - ((LENS_SIZE + 100) / 2));
+        window_poll.move_(x - (LENS_SIZE / 2), y - ((LENS_SIZE + 130) / 2));
 
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
         {
             let mut s = state_poll.borrow_mut();
-            if s.last_capture.elapsed() > Duration::from_millis(1500) {
+            if s.last_capture.elapsed() > Duration::from_secs(1) {
                 s.last_capture = Instant::now();
-                window_poll.hide();
-                display.flush();
-                display.sync();
-                std::thread::sleep(Duration::from_millis(200));
+                s.status = "CAPTURING...".to_string();
+                window_poll.queue_draw();
 
-                if let Ok(mut raw) = capture_x11_raw(
-                    x - (LENS_SIZE / 2),
-                    y - (LENS_SIZE / 2),
-                    LENS_SIZE as u32,
-                    LENS_SIZE as u32,
-                ) {
-                    for chunk in raw.chunks_exact_mut(4) {
-                        chunk.swap(0, 2);
+                window_poll.hide();
+                while gtk::events_pending() {
+                    gtk::main_iteration();
+                }
+                std::thread::sleep(Duration::from_millis(400));
+
+                let cap_x = (x - (LENS_SIZE / 2)).max(0);
+                let cap_y = (y - (LENS_SIZE / 2)).max(0);
+
+                if let Ok(raw) = capture_x11(cap_x, cap_y, LENS_SIZE as u32, LENS_SIZE as u32) {
+                    save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
+                    let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
+                    s.status = "THINKING...".to_string();
+                    window_poll.queue_draw();
+
+                    match call_api(&s.api_key, &b64) {
+                        Ok(text) => {
+                            s.ocr_result = text.clone();
+                            s.status = "SUCCESS".to_string();
+                            let _ = s.clipboard.set_text(text.clone());
+                            if let Ok(mut f) = OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(HISTORY_PATH)
+                            {
+                                let _ = writeln!(
+                                    f,
+                                    "[{}] {}",
+                                    chrono::Local::now().format("%H:%M:%S"),
+                                    text
+                                );
+                            }
+                        }
+                        Err(e) => s.status = format!("API Error: {}", e),
                     }
 
-                    // Logic to run Paddle detection + recognition goes here
-                    s.ocr_result = "Reading Japanese...".to_string();
-
-                    let pixbuf = gdk_pixbuf::Pixbuf::from_mut_slice(
-                        raw,
+                    let mut rgb = raw;
+                    for chunk in rgb.chunks_exact_mut(4) {
+                        chunk.swap(0, 2);
+                    }
+                    s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
+                        rgb,
                         gdk_pixbuf::Colorspace::Rgb,
                         true,
                         8,
                         LENS_SIZE,
                         LENS_SIZE,
                         LENS_SIZE * 4,
-                    );
-                    s.pixels = Some(pixbuf);
+                    ));
                 }
                 window_poll.show();
             }
@@ -120,19 +190,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::ControlFlow::Continue
     });
 
-    window.connect_key_press_event(move |_, event| {
-        if event.keyval() == gdk::keys::constants::Escape {
-            gtk::main_quit();
-        }
-        glib::Propagation::Stop
-    });
-
     window.show_all();
     gtk::main();
     Ok(())
 }
 
-fn capture_x11_raw(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn capture_x11(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let (conn, screen_num) = RustConnection::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
     let reply = conn
@@ -147,4 +210,48 @@ fn capture_x11_raw(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn st
         )?
         .reply()?;
     Ok(reply.data)
+}
+
+fn save_debug_image(raw: &[u8], w: u32, h: u32) {
+    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+    for chunk in raw.chunks_exact(4) {
+        rgb.push(chunk[2]);
+        rgb.push(chunk[1]);
+        rgb.push(chunk[0]);
+    }
+    if let Some(img) = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb) {
+        let _ = img.save(DEBUG_IMAGE_PATH);
+    }
+}
+
+fn encode_to_base64(raw: &[u8], w: u32, h: u32) -> String {
+    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+    for chunk in raw.chunks_exact(4) {
+        rgb.push(chunk[2]);
+        rgb.push(chunk[1]);
+        rgb.push(chunk[0]);
+    }
+    let img = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb).unwrap();
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buffer, image::ImageFormat::Png).unwrap();
+    general_purpose::STANDARD.encode(buffer.into_inner())
+}
+
+fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
+    let res = client.post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", key))
+        .json(&json!({
+            "model": "google/gemini-2.0-flash-001",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "OCR the Japanese text. Return only the transcription, line by line."},
+                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
+            ]}]
+        })).send()?;
+    let body: serde_json::Value = res.json()?;
+    Ok(body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
