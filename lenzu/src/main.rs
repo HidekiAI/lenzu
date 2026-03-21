@@ -1,25 +1,24 @@
 use arboard::Clipboard;
-use base64::{engine::general_purpose, Engine as _};
 use gdk::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
 use pango;
 use pangocairo;
-use serde_json::json;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use x11rb::connection::Connection;
-use x11rb::protocol::xproto::*;
-use x11rb::rust_connection::RustConnection;
+
+// Import the local library modules
+mod capture;
+mod client;
+mod utils;
 
 // --- CONFIGURATION ---
 const LENS_SIZE: i32 = 400;
 const UI_PANEL_HEIGHT: i32 = 130;
 const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
-const DEBUG_IMAGE_PATH: &str = "/dev/shm/debug_lens.png";
 
 struct AppState {
     pixels: Option<gdk_pixbuf::Pixbuf>,
@@ -30,7 +29,7 @@ struct AppState {
     api_key: String,
     is_loading: bool,
     spinner_angle: f64,
-    flash_alpha: f64, // New: for the camera flash effect
+    flash_alpha: f64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,7 +74,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
-
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);
         cr.paint().ok();
@@ -86,20 +84,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cr.paint().ok();
         }
 
-        // --- CAMERA FLASH EFFECT ---
         if s.flash_alpha > 0.0 {
             cr.set_source_rgba(1.0, 1.0, 1.0, s.flash_alpha);
             cr.rectangle(0.0, 0.0, LENS_SIZE as f64, LENS_SIZE as f64);
             cr.fill().ok();
         }
 
-        // Cyan Border
         cr.set_source_rgb(0.0, 1.0, 0.8);
         cr.set_line_width(2.0);
         cr.rectangle(1.0, 1.0, (LENS_SIZE - 2) as f64, (LENS_SIZE - 2) as f64);
         cr.stroke().ok();
 
-        // UI Panel
         cr.set_source_rgba(0.01, 0.01, 0.05, 0.85);
         cr.rectangle(
             0.0,
@@ -111,7 +106,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let context = win.pango_context();
         let layout = pango::Layout::new(&context);
-
         cr.set_source_rgb(0.0, 1.0, 0.8);
         layout.set_text(&s.status);
         cr.move_to(12.0, (LENS_SIZE + 10) as f64);
@@ -164,26 +158,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::ControlFlow::Continue
     });
 
-    // Animation timer for Spinner AND Flash Fade
     let window_anim = window.clone();
     let state_anim = state.clone();
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let mut s = state_anim.borrow_mut();
         let mut needs_redraw = false;
-
         if s.is_loading {
             s.spinner_angle += 0.2;
             needs_redraw = true;
         }
-
         if s.flash_alpha > 0.0 {
-            s.flash_alpha -= 0.1; // Fast fade-out
+            s.flash_alpha -= 0.1;
             if s.flash_alpha < 0.0 {
                 s.flash_alpha = 0.0;
             }
             needs_redraw = true;
         }
-
         if needs_redraw {
             window_anim.queue_draw();
         }
@@ -213,7 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.last_capture = Instant::now();
                 s.status = "CAPTURING...".to_string();
                 s.is_loading = true;
-                s.flash_alpha = 1.0; // TRIGGER FLASH
+                s.flash_alpha = 1.0;
                 window_main.queue_draw();
 
                 window_main.hide();
@@ -222,21 +212,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                if let Ok(raw) = capture_x11(
+                if let Ok(raw) = capture::capture_x11(
                     win_x.max(0),
                     win_y.max(0),
                     LENS_SIZE as u32,
                     LENS_SIZE as u32,
                 ) {
-                    save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
-                    let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
+                    // 1. Process for API
+                    let rgb = utils::raw_to_rgb(&raw);
+                    utils::save_debug_image(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
+                    let b64 = utils::encode_to_base64(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
 
-                    let mut rgb = raw;
-                    for chunk in rgb.chunks_exact_mut(4) {
-                        chunk.swap(0, 2);
-                    }
+                    // 2. Process for UI Display
+                    let mut pb_data = raw.clone();
+                    utils::swap_bytes_for_pixbuf(&mut pb_data);
+
                     s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
-                        rgb,
+                        pb_data,
                         gdk_pixbuf::Colorspace::Rgb,
                         true,
                         8,
@@ -244,13 +236,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         LENS_SIZE,
                         LENS_SIZE * 4,
                     ));
+
                     window_main.show();
                     window_main.queue_draw();
 
                     let api_key = s.api_key.clone();
                     let tx_clone = tx.clone();
                     std::thread::spawn(move || {
-                        let result = call_api(&api_key, &b64).map_err(|e| e.to_string());
+                        let ocr_client = client::OcrClient::new(api_key);
+                        let result = ocr_client.call_api(&b64).map_err(|e| e.to_string());
                         let _ = tx_clone.send(result);
                     });
                 } else {
@@ -266,65 +260,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.show_all();
     gtk::main();
     Ok(())
-}
-
-fn capture_x11(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let (conn, screen_num) = RustConnection::connect(None)?;
-    let root = conn.setup().roots[screen_num].root;
-    let reply = conn
-        .get_image(
-            ImageFormat::Z_PIXMAP,
-            root,
-            x as i16,
-            y as i16,
-            w as u16,
-            h as u16,
-            0xffffffff,
-        )?
-        .reply()?;
-    Ok(reply.data)
-}
-
-fn save_debug_image(raw: &[u8], w: u32, h: u32) {
-    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-    for chunk in raw.chunks_exact(4) {
-        rgb.push(chunk[2]);
-        rgb.push(chunk[1]);
-        rgb.push(chunk[0]);
-    }
-    if let Some(img) = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb) {
-        let _ = img.save(DEBUG_IMAGE_PATH);
-    }
-}
-
-fn encode_to_base64(raw: &[u8], w: u32, h: u32) -> String {
-    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-    for chunk in raw.chunks_exact(4) {
-        rgb.push(chunk[2]);
-        rgb.push(chunk[1]);
-        rgb.push(chunk[0]);
-    }
-    let img = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb).unwrap();
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buffer, image::ImageFormat::Png).unwrap();
-    general_purpose::STANDARD.encode(buffer.into_inner())
-}
-
-fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let client = reqwest::blocking::Client::new();
-    let res = client.post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", key))
-        .json(&json!({
-            "model": "google/gemini-2.0-flash-001",
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": "OCR the Japanese text. Output transcription only, line by line."},
-                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
-            ]}]
-        })).send()?;
-    let body: serde_json::Value = res.json()?;
-    Ok(body["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string())
 }
