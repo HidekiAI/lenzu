@@ -4,7 +4,6 @@ use std::io::Cursor;
 
 const DEBUG_IMAGE_PATH: &str = "/dev/shm/debug_lens.png";
 
-/// Converts raw BGRX/BGRA bytes from X11 to RGB bytes.
 pub fn raw_to_rgb(raw: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity((raw.len() / 4) * 3);
     for chunk in raw.chunks_exact(4) {
@@ -15,7 +14,6 @@ pub fn raw_to_rgb(raw: &[u8]) -> Vec<u8> {
     rgb
 }
 
-/// Swaps bytes in place for GDK Pixbuf compatibility (BGRX -> RGBX).
 pub fn swap_bytes_for_pixbuf(raw: &mut [u8]) {
     for chunk in raw.chunks_exact_mut(4) {
         chunk.swap(0, 2);
@@ -33,4 +31,33 @@ pub fn encode_to_base64(rgb_data: &[u8], w: u32, h: u32) -> String {
     let mut buffer = Cursor::new(Vec::new());
     img.write_to(&mut buffer, ImageFormat::Png).unwrap();
     general_purpose::STANDARD.encode(buffer.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_raw_to_rgb_conversion() {
+        // Mock 1 pixel: B=10, G=20, R=30, X=0
+        let raw = vec![10, 20, 30, 0];
+        let rgb = raw_to_rgb(&raw);
+        assert_eq!(rgb, vec![30, 20, 10]); // Should be RGB
+    }
+
+    #[test]
+    fn test_pixbuf_byte_swap() {
+        // Start with BGRX: 10, 20, 30, 255
+        let mut data = vec![10, 20, 30, 255];
+        swap_bytes_for_pixbuf(&mut data);
+        // Should become RGBX: 30, 20, 10, 255
+        assert_eq!(data, vec![30, 20, 10, 255]);
+    }
+
+    #[test]
+    fn test_base64_is_not_empty() {
+        let rgb = vec![255, 255, 255]; // 1 white pixel
+        let b64 = encode_to_base64(&rgb, 1, 1);
+        assert!(!b64.is_empty());
+    }
 }

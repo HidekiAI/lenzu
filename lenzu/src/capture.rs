@@ -21,3 +21,20 @@ pub fn capture_x11(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn st
 
     Ok(reply.data)
 }
+
+// Unit test for X11 is usually an integration test,
+// but we can at least check the connection error handling.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_x11_connection_attempt() {
+        // This will pass if an X server is running, or return an Err if not.
+        // It validates that our RustConnection logic doesn't panic.
+        let result = capture_x11(0, 0, 1, 1);
+        if std::env::var("DISPLAY").is_err() {
+            assert!(result.is_err());
+        }
+    }
+}
