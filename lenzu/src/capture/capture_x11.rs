@@ -6,16 +6,16 @@ use x11rb::protocol::xproto::{GContext, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 
 #[cfg(feature = "gtk")]
-use gdk4::prelude::*;
+use gdk::prelude::*;
 #[cfg(feature = "gtk")]
-use gdk4_x11::X11Surface;
+use gdkx11::X11Window;
 
 pub struct CaptureX11 {
     pub cursor_data: CursorData,
     pub conn: Option<RustConnection>,
     pub screen_num: usize,
     #[cfg(feature = "gtk")]
-    pub window: Option<glib::WeakRef<gtk4::ApplicationWindow>>,
+    pub window: Option<glib::WeakRef<gtk::ApplicationWindow>>,
     pub xid: Option<x11rb::protocol::xproto::Window>,
     pub gc: Option<GContext>,
 }
@@ -33,11 +33,11 @@ impl CaptureTrait for CaptureX11 {
         }
     }
 #[cfg(feature = "gtk")]
-fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool {
+fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool {
     self.window = Some(app_window_gtk.downgrade());
 
-    let surface = app_window_gtk.surface();
-    if let Some(x11_surface) = surface.and_then(|s| s.downcast::<X11Surface>().ok()) {
+    let surface = app_window_gtk.window();
+    if let Some(x11_surface) = surface.and_then(|s| s.downcast::<X11Window>().ok()) {
         self.xid = Some(x11_surface.xid() as x11rb::protocol::xproto::Window);
     }
 
@@ -106,11 +106,11 @@ fn init(&mut self, _app_window_gtk: &super::capture_traits::dummy_types::DummyWi
     #[cfg(feature = "gtk")]
     fn update(&mut self) {
         if let Some(window) = self.window.as_ref().and_then(|w| w.upgrade()) {
-            let display = window.display();
+            let display = window.get_display();
             let seat = display.default_seat().unwrap();
             let pointer = seat.pointer().unwrap();
             
-            let (pos_x, pos_y) = pointer.position();
+            let (pos_x, pos_y) = pointer.get_position();
             self.cursor_data.x = pos_x as i32;
             self.cursor_data.y = pos_y as i32;
 
@@ -123,8 +123,8 @@ fn init(&mut self, _app_window_gtk: &super::capture_traits::dummy_types::DummyWi
             }
 
             // Update application window size
-            let width = window.width();
-            let height = window.height();
+            let width = window.get_width();
+            let height = window.get_height();
             self.cursor_data.window.width = width as u32;
             self.cursor_data.window.height = height as u32;
             
