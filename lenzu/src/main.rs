@@ -12,7 +12,7 @@ use capture::{
 #[cfg(feature = "gtk")]
 use gdk::Key;
 #[cfg(all(feature = "gtk", target_os = "windows"))]
-use gdk4_win32::{
+use gdk::{
     ffi::{gdk_win32_surface_get_impl_hwnd, GdkWin32Surface},
     Win32Surface, HWND,
 };
@@ -20,7 +20,7 @@ use gdk4_win32::{
 use glib::translate::ToGlibPtr;
 // NOTE: make sure to 'cargo add' glib for graphene_point_t
 #[cfg(feature = "gtk")]
-use gtk4::{
+use gtk::{
     ffi::{
         gtk_list_store_append, gtk_widget_compute_transform, GtkButton, GtkEventController,
         GtkEventControllerKeyClass, GtkWidget,
@@ -235,14 +235,14 @@ fn quit_signal_sender_thread() -> &'static Runtime {
 }
 
 fn main() -> glib::ExitCode {
-    let application = gtk4::Application::builder()
+    let application = gtk::Application::builder()
         .application_id(GTK_APP_ID)
         .build();
     application.connect_activate(build_ui);
     application.run()
 }
 
-fn build_ui(application: &gtk4::Application) {
+fn build_ui(application: &gtk::Application) {
     // default to Tesseract OCR, but if  --use-winmedia-ocr is passed, then use Windows.Media.Ocr
     let args: &Vec<String> = &std::env::args().collect();
     let mut ocr = create_ocr(&args);
@@ -251,19 +251,19 @@ fn build_ui(application: &gtk4::Application) {
     let mut ocr_font = OCRImage::new(None);
     let mut capture = create_capture(&args);
 
-    let app_window_gtk: ApplicationWindow = gtk4::ApplicationWindow::builder()
+    let app_window_gtk: ApplicationWindow = gtk::ApplicationWindow::builder()
         .application(application)
         .title("Lenzu")
         .default_width(DEFAULT_WINDOW_WIDTH)
         .default_height(DEFAULT_WINDOW_HEIGHT)
         .build();
-    let window_scrollable = gtk4::ScrolledWindow::builder().build();
+    let window_scrollable = gtk::ScrolledWindow::builder().build();
     window_scrollable.set_visible(true);
-    window_scrollable.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
+    window_scrollable.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     app_window_gtk.set_child(Some(&window_scrollable));
 
     // container to append multiple children
-    let parent_box = gtk4::Box::new(Orientation::Vertical, 0);
+    let parent_box = gtk::Box::new(Orientation::Vertical, 0);
 
     // as Picture
     let image_path = "recognized_image.png"; // if it exists, load last used image
@@ -276,7 +276,7 @@ fn build_ui(application: &gtk4::Application) {
         "Loaded image '{}' with dimensions: {:?}",
         image_path, pic_paintable_dim
     );
-    picture.set_halign(gtk4::Align::Center);
+    picture.set_halign(gtk::Align::Center);
     picture.set_size_request(pic_paintable_dim.0, pic_paintable_dim.1);
     picture.set_visible(true);
     parent_box.append(&picture);
@@ -291,7 +291,7 @@ fn build_ui(application: &gtk4::Application) {
         "Loaded image '{}' with dimensions: {:?}",
         image_path, img_paintable_dim
     );
-    image.set_halign(gtk4::Align::Center);
+    image.set_halign(gtk::Align::Center);
     image.set_size_request(img_paintable_dim.0, img_paintable_dim.1);
     image.set_visible(true);
     //parent_box.append(&image);
@@ -310,8 +310,8 @@ fn build_ui(application: &gtk4::Application) {
         .margin_end(12)
         .width_request(16 * 16)
         .height_request(16)
-        .halign(gtk4::Align::End) // anchor to bottom right
-        .valign(gtk4::Align::End)
+        .halign(gtk::Align::End) // anchor to bottom right
+        .valign(gtk::Align::End)
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
@@ -336,7 +336,7 @@ fn build_ui(application: &gtk4::Application) {
     // create a sub-window for use as a lens - it's non-modal, floating, and barely visible
     // lens does not need to have a renderer since the transparancies acts like what is
     // under the window is what is being focused on
-    let lens_window = gtk4::Window::builder()
+    let lens_window = gtk::Window::builder()
         .application(application) // application stays alive as long as any of windows associated to it is alive
         //.parent(Some(&app_window_gtk)) //  hopefully, this will make it so it becomes a sibling to main window
         .destroy_with_parent(true)
@@ -352,11 +352,11 @@ fn build_ui(application: &gtk4::Application) {
     // Note that add_controller() method only exists for gtk_widget_add_controller(GtkEventController)
     // and GtkShortcutManager.add_controller(Gtk.ShortcutController(base:GtkEventController))
     // to register for GtkControllerEvent.  So first, cast what we are interested in to Widget
-    let app_win_widget: Widget = app_window_gtk.clone().upcast::<gtk4::Widget>();
+    let app_win_widget: Widget = app_window_gtk.clone().upcast::<gtk::Widget>();
     let app_win_gtkwdiget: *mut GtkWidget = app_win_widget.to_glib_none().0;
-    let lens_as_widget: gtk4::Widget = lens_window.clone().upcast::<Widget>(); // Widget == WidgetExt
+    let lens_as_widget: gtk::Widget = lens_window.clone().upcast::<Widget>(); // Widget == WidgetExt
     let lens_gtkwidget: *mut GtkWidget = lens_as_widget.to_glib_none().0;
-    // box trait WidgetExt (std::boxed::Box<dyn gtk4::prelude::WidgetExt>) for gtk4::Widgets?
+    // box trait WidgetExt (std::boxed::Box<dyn gtk::prelude::WidgetExt>) for gtk::Widgets?
 
     // guint keycode = gdk_key_event_get_keycode(event);
     // guint keyval = gdk_key_event_get_keyval(event);
@@ -378,8 +378,8 @@ fn build_ui(application: &gtk4::Application) {
     //   // Control was pressed
 
     //register gtk_widget_add_controller(GtkEventController)
-    let event_controller_key: gtk4::EventControllerKey =
-        gtk4::EventControllerKey::builder().build();
+    let event_controller_key: gtk::EventControllerKey =
+        gtk::EventControllerKey::builder().build();
     // before we transfer owneship, setup signal/event handler
     event_controller_key.connect_key_released(
         |event_controller_key, keyval, keycode_raw, state| {
@@ -405,11 +405,11 @@ fn build_ui(application: &gtk4::Application) {
             }
         },
     );
-    app_win_widget.add_controller(gtk4::EventController::from(event_controller_key)); // transfer ownership to Widget once callback is in place...
+    app_win_widget.add_controller(gtk::EventController::from(event_controller_key)); // transfer ownership to Widget once callback is in place...
 
     // Event for mouse pointer movement (we only care if it is in ToggleState::MoveWindow)
-    let event_controller_motion: gtk4::EventControllerMotion =
-        gtk4::EventControllerMotion::builder().build();
+    let event_controller_motion: gtk::EventControllerMotion =
+        gtk::EventControllerMotion::builder().build();
     event_controller_motion.connect_motion(|event_controller_motion, x: f64, y: f64| {
         println!(
             "Mouse moved: {:?} x={}, y={}",
@@ -424,11 +424,11 @@ fn build_ui(application: &gtk4::Application) {
             let current_point: graphene_point_t = graphene_point_t { x: x32, y: y32 };
         }
     });
-    app_win_widget.add_controller(gtk4::EventController::from(event_controller_motion)); // transfer ownership to Widget once callback is in place...
+    app_win_widget.add_controller(gtk::EventController::from(event_controller_motion)); // transfer ownership to Widget once callback is in place...
 
     // let the lens window set it's coordinate/position based on the mouse cursor
     //lens_window.connect_move_focus(focus_lens_window);
-    let gesture_single = gtk4::GestureSingle::from(gtk4::GestureClick::new()); // handling mouse events and single-touch gestures
+    let gesture_single = gtk::GestureSingle::from(gtk::GestureClick::new()); // handling mouse events and single-touch gestures
 
     //GtkWidget *somewidget; // Your GtkWidget instance
     //gint wx, wy; gtk_widget_translate_coordinates(somewidget, gtk_widget_get_toplevel(somewidget), 0, 0, &wx, &wy); // Now wx and wy contain the absolute position of somewidget
@@ -438,7 +438,7 @@ fn build_ui(application: &gtk4::Application) {
     };
     let mut out_point: graphene_point_t = graphene_point_t { x: 0.0, y: 0.0 };
     let _compute_success = unsafe {
-        gtk4::ffi::gtk_widget_compute_point(
+        gtk::ffi::gtk_widget_compute_point(
             app_win_gtkwdiget,
             lens_gtkwidget,
             &current_point,
@@ -454,7 +454,7 @@ fn build_ui(application: &gtk4::Application) {
     app_window_gtk.present(); // mark (child scene-graph nodes) for refresh
 
     // all is setup, now pass the window structure/model to Display
-    capture.init(&app_window_gtk); // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND), it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
+    capture.init(&app_window_gtk); // IMPORTANT:  init() attempts to extract gdk3_<desktop>::Surface::Handle() (i.e. HWND), it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
 
     // Create an action for quitting
     let quit_action = gio::SimpleAction::new("quit", None);

@@ -1,15 +1,15 @@
 use std::ptr;
 
 use super::capture_traits::*;
-use gdk4_win32::Win32Surface;
-use gtk4::{
+use gdk::Win32Surface;
+use gtk::{
     ffi::gtk_native_get_surface,
     gdk::{Backend, Surface},
     gio,
     prelude::*,
     Widget,
 };
-//use gtk4::gio::list_model::ListModelMutatedDuringIter;
+//use gtk::gio::list_model::ListModelMutatedDuringIter;
 use image::{DynamicImage, GenericImageView, ImageBuffer, RgbaImage};
 use winapi::{
     shared::{
@@ -42,12 +42,12 @@ impl CaptureTrait for CaptureWinApi {
         CaptureWinApi {
             cursor_data: CursorData::new(),
             hwnd: std::ptr::null_mut(), // use set_hwnd
-            handle: HandleTypes::Win32Handle(gdk4_win32::HWND::default()),
+            handle: HandleTypes::Win32Handle(gdk::HWND::default()),
         }
     }
 
-    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool {
-        self.from_gtk4(app_window_gtk);
+    fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool {
+        self.from_gtk3(app_window_gtk);
         true
     }
 
@@ -206,19 +206,19 @@ impl CaptureTrait for CaptureWinApi {
 impl CaptureWinApi {
     pub fn set_hwnd(&mut self, hwnd: winapi::shared::windef::HWND) {
         self.hwnd = hwnd;
-        self.handle = HandleTypes::Win32Handle(gdk4_win32::HWND(hwnd as isize));
+        self.handle = HandleTypes::Win32Handle(gdk::HWND(hwnd as isize));
     }
 
     // On a splucations based on:
-    // * get_first_child(): https://docs.gtk.org/gtk4/method.Widget.get_first_child.html
-    // * get_next_sibling(): https://docs.gtk.org/gtk4/method.Widget.get_next_sibling.html
+    // * get_first_child(): https://docs.gtk.org/gtk3/method.Widget.get_first_child.html
+    // * get_next_sibling(): https://docs.gtk.org/gtk3/method.Widget.get_next_sibling.html
     // You first get the first child of the parent, then iterate through the siblings
     // and return list of Win32Surfaces
-    fn find_surfaces(&self, app_window_gtk: &gtk4::ApplicationWindow) -> Vec<Win32Surface> {
+    fn find_surfaces(&self, app_window_gtk: &gtk::ApplicationWindow) -> Vec<Win32Surface> {
         let mut surfaces: Vec<Win32Surface> = Vec::new();
         // see if ApplicationWindow itself has a surface (doubtful but just in case)
-        if app_window_gtk.surface().is_some() {
-            let win32_surface_result = app_window_gtk.surface().unwrap().downcast::<Win32Surface>();
+        if app_window_gtk.window().is_some() {
+            let win32_surface_result = app_window_gtk.window().unwrap().downcast::<Win32Surface>();
             if win32_surface_result.is_ok() {
                 println!("Found Win32Surface in the application window");
                 surfaces.push(win32_surface_result.unwrap());
@@ -268,13 +268,13 @@ impl CaptureWinApi {
     }
 
     // use this method so so that the application can remain agnostic to the platform
-    fn from_gtk4(&mut self, app_window_gtk: &gtk4::ApplicationWindow) {
-        // using gtk4 gdk_win32_window_get_handle to get the HWND seems to be the practice used by OpenGL users
+    fn from_gtk3(&mut self, app_window_gtk: &gtk::ApplicationWindow) {
+        // using gtk3 gdk_win32_window_get_handle to get the HWND seems to be the practice used by OpenGL users
         // now that all the renderable widgets are appended to parent_box, we can inspect display and surface
-        // NOTE: According to https://docs.gtk.org/gtk4/method.Widget.get_display.html
+        // NOTE: According to https://docs.gtk.org/gtk3/method.Widget.get_display.html
         //       "This function can only be called after the widget has been added to a widget hierarchy with a GtkWindow at the top."
         //       in other words, the widget must be realized/presented before we can get the display!
-        let display: gtk4::gdk::Display = app_window_gtk.clone().upcast::<Widget>().display();
+        let display: gtk::gdk::Display = app_window_gtk.clone().upcast::<Widget>().display();
         let backend: Backend = display.backend();
 
         // using GtkNative, we can get the surface via gtk_native_get_surface(), but not all widgets have a native
@@ -288,7 +288,7 @@ impl CaptureWinApi {
         let win_surfaces = surfaces
             .iter()
             .flat_map(|current_surface| {
-                match current_surface.handle() != gdk4_win32::HWND::default() {
+                match current_surface.handle() != gdk::HWND::default() {
                     true => Some(current_surface),
                     false => None,
                 }
@@ -307,7 +307,7 @@ impl CaptureWinApi {
             let my_handle: HandleTypes = if cfg!(target_os = "windows") {
                 // Windows
                 if backend.is_win32() {
-                    let gdk_win32_hwnd: gdk4_win32::HWND = win_surface.handle(); // am I the only who thinks this was a bit too complicated to get the HWND?
+                    let gdk_win32_hwnd: gdk::HWND = win_surface.handle(); // am I the only who thinks this was a bit too complicated to get the HWND?
                     let win32_handle = gdk_win32_hwnd.0 as winapi::shared::windef::HWND;
                     // for verification, let's locate the "Title" of the HWND window
                     let mut title = [0u16; 1024];
