@@ -1,134 +1,84 @@
-# Project Refactoring Plan for lenzu
+\# Project Refactoring Plan for lenzu
 
-Based on the current implementation of lenzu on the RemoteOCR branch, the project functions as a desktop "lens" that captures a region around the mouse cursor, processes it with OpenCV, and sends it to a remote OCR service. Currently, the logic is likely concentrated in `main.rs`, which handles window management, image processing, networking, and configuration.
+Based on the successful modularization of the RemoteOCR branch into \`capture\`, \`client\`, and \`utils\`, the project is now ready for **\*\*Phase 2: The Translation HUD\*\***. This phase moves beyond simple OCR into a real-time "Closed Caption" (CC) style overlay for Furigana, Romaji, and English translations.
 
-To improve testability and maintainability, I recommend refactoring the project into a modular structure. This allows you to isolate side-effect-heavy code (like GUI and Networking) from pure logic (image manipulation and coordinate math), which is much easier to unit test.
+\#\# Recommended Project Structure
 
-## Recommended Project Structure
+\`\`\`plaintext  
+src/  
+├── main.rs \# GTK Lens Entry Point (The Trigger)  
+├── capture.rs \# X11 Screen capture (Verified)  
+├── client.rs \# OpenRouter Multimodal Client (Updated for JSON)  
+├── utils.rs \# Image processing & Base64 utilities (Verified)  
+├── config.rs \# NEW: Configurable font sizes, colors, and positions  
+└── overlay/ \# NEW: The "Closed Caption" HUD Logic  
+ ├── mod.rs  
+ └── tauri_bridge.rs \# Logic to sync with the Tauri Translucent Overlay
 
-```plaintext
-src/
-├── main.rs          # Entry point, orchestrates the modules
-├── config.rs        # Configuration loading and CLI arguments
-├── capture.rs       # Screen capturing and cursor tracking
-├── processor.rs     # OpenCV image processing logic
-├── client.rs        # Remote OCR API client (Networking)
-└── ui/              # Optional: UI-related code (eg. egui or tray)
-    ├── mod.rs
-    └── overlay.rs
-```
+## **Phase 2: Implementation Strategy**
 
-## Refactoring Strategy by Module
+### **1\. Structured Translation (client.rs)**
 
-### 1. processor.rs (The Core Logic)
+To support Furigana and Translation simultaneously, the API client must move from returning a String to a structured TranslationResult.
 
-This is where the OpenCV operations live. To make this testable, separate the "image transformation" from the "display."
+**The Smart Prompt:** Update the OpenRouter prompt to request JSON:
 
-**What to move**: Functions that take a `Mat` (OpenCV matrix) and return a processed `Mat` (grayscale, thresholding, resizing).
+"OCR the Japanese text. Return a JSON object with: 'original', 'furigana' (kanji with \[reading\]), 'romaji', and 'english'. If no Japanese is found, return an empty object with a 'debug_info' field explaining why."
 
-**Testing**: You can write unit tests that load a static `.png` file from a `tests/fixtures` folder, run the processor, and assert that the output dimensions or pixel values meet expectations.
+**Refactor**: Implement serde::Deserialize for a TranslationResult struct to handle this multi-part response.
 
-### 2. client.rs (Remote OCR Communication)
+### **2\. The CC Overlay HUD (The "Ghost" Window)**
 
-Move all `reqwest` or networking logic here.
+The goal is a non-modal, semi-opaque "Closed Caption" box that stays on screen while the Lens remains active for new captures.
 
-**Refactor**: Create a `OCRClient` struct that holds the endpoint URL and API keys.
+**UI Requirements:**
 
-**Testing**: Use the `mockito` or `wiremock` crates to simulate the Remote OCR server. This allows you to test how your app handles 200 OK, 404, or 500 Internal Server errors without actually making network calls.
+- **Visuals**: Semi-opaque black/grey background (rgba(0,0,0,0.6)).
+- **Typography**: Yellow text with black shadows (configurable font size).
+- **Behavior**: Static position (Top or Bottom), but "Click-Through" so it doesn't intercept mouse events intended for the Lens or Desktop.
 
-### 3. config.rs
+### **3\. Integration with Tauri (The UI Bridge)**
 
-If you have hardcoded values for the lens size or OCR URL, move them to a `Config` struct.
+Since a Tauri prototype already exists for translucent rendering, we will use a **Producer-Consumer** model.
 
-**Refactor**: Implement `Default` for your config and a `load()` function that reads from a `.toml` or `.env` file.
+- **Producer (GTK/Rust)**: The Lens captures and sends data to OpenRouter.
+- **Consumer (Tauri)**: Receives the TranslationResult and renders the CSS-styled CC box.
+- **Bridge**: Use a local IPC (Unix Domain Socket or Crossbeam Channel) to pass the JSON between the Lens logic and the Tauri Frontend.
 
-**Testing**: You can test that the configuration correctly defaults when a file is missing or correctly overrides values from environment variables.
+## ---
 
-### 4. capture.rs
+**Benefits of this Approach**
 
-Isolate the logic that calculates the "Crop Area" based on cursor position.
+- **Persistent Context**: Users can keep the translation on screen while moving the Lens to a different part of the image.
+- **Readability**: High-contrast yellow-on-dark text mimics professional subtitling.
+- **Multi-View**: The HUD can display Furigana and English translation stacked, significantly aiding language learners.
 
-**Refactor**: Create a function `calculate_capture_rect(cursor_pos, lens_size, screen_size) -> Rect`.
+## **Prioritized HUD Tasks**
 
-**Testing**: This is purely mathematical. You can write unit tests to ensure that if the mouse is at the very edge of the screen, the capture box doesn't go out of bounds (clamping logic).
+### **Phase 2A: The Data Model (High Priority)**
 
-## Implementation Example: processor.rs
+1. **Update client.rs**: Change the prompt and implement the TranslationResult struct.
+2. **Unit Testing**: Add tests to ensure the JSON parser handles empty or malformed Japanese OCR results gracefully (displaying Italicized debug info).
 
-By moving logic out of `main.rs`, your code becomes much cleaner:
+### **Phase 2B: The CC Overlay (Medium Priority)**
 
-```rust
-// src/processor.rs
-use opencv::prelude::*;
-use opencv::imgproc;
+1. **Overlay Module**: Create the "Ghost" window logic.
+2. **Styling**: Implement the yellow-shadowed text rendering.
+3. **Configuration**: Add config.rs to allow users to toggle:
+   - font_size (e.g., 18px)
+   - position (Top vs Bottom)
+   - translation_mode (English only, Furigana only, or Both)
 
-pub struct ImageProcessor {
-    pub scale_factor: f64,
-}
+### **Phase 2C: Orchestration (Low Priority)**
 
-impl ImageProcessor {
-    pub fn prepare_for_ocr(&self, src: &Mat) -> opencv::Result<Mat> {
-        let mut gray = Mat::default();
-        imgproc::cvt_color(src, &mut gray, imgproc::COLOR_BGR2GRAY, 0)?;
-        // ... more processing ...
-        Ok(gray)
-    }
-}
+1. **Main Loop update**: Update the API callback in main.rs to send the results to the Overlay instead of just printing to the console.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+## ---
 
-    #[test]
-    fn test_grayscale_conversion() {
-        // Assert that a 3-channel input becomes a 1-channel output
-    }
-}
-```
+**Updated Summary Table: New Modules**
 
-## Benefits for Unit Testing
-
-- **Mocking**: By using traits for the `OCRClient`, you can swap the real network client for a "Mock" client during tests.
-- **No GUI dependency**: You can run `cargo test` in a headless environment (like a GitHub Action) because the core logic no longer requires a live window or mouse cursor to be present.
-- **Parallelism**: Rust's test runner can run tests for config, processor, and capture in parallel, speeding up your dev cycle.
-
-## Prioritized Phases
-
-Phase 1: Decouple Domain Logic (High Priority)
-The easiest things to test are "pure" functions that don't touch the screen or the internet. Start here to see immediate value from unit tests.
-
-1. Extract math/geometry logic:
-   Task: Move the logic that calculates the "Lens" capture area (handling screen boundaries and cursor offsets) into a capture.rs or geometry.rs.
-   Testing Goal: Write tests for edge cases, such as when the mouse is at (0,0) or at the far bottom-right of a 4K monitor, to ensure your crop rectangle never exceeds screen bounds.
-2. Extract config handling:
-   Task: Create a config.rs with a Settings struct.
-   Testing Goal: Ensure that if a config file is missing, the app loads safe defaults.
-
-Phase 2: Functional Abstraction (Medium Priority)
-This step involves wrapping external dependencies (OpenCV and Reqwest) so they can be "mocked" or tested in isolation. 3. Create an ImageProcessor module:
-
-- Task: Move all OpenCV calls (grayscale, thresholding, resizing) into processor.rs.
-- Testing Goal: Use a small, hard-coded byte array or a sample .png in your tests/ folder to verify that your processing pipeline actually improves image contrast as expected.
-
-Isolate the OCRClient:
-Task: Move the reqwest logic to client.rs.
-Testing Goal: Use the mockiato or wiremock crates. You want to test how your app reacts to a "429 Too Many Requests" or a malformed JSON response from the remote OCR without actually hitting the server.
-
-Phase 3: Main Orchestration (Low Priority)
-Once the logic is moved, main.rs should only be responsible for "wiring" things together.
-Refactor main.rs to an App Loop:
-Task: Your main function should now look like a clean list of steps:
-
-```rust
-let config = Config::load();
-let frame = capture::get_screen_near_cursor(&config);
-let processed = processor::prepare(frame);
-let text = client.send(processed).await?;
-ui::display(text);
-```
-
-Summary Table: What to test first
-Module Difficulty Test Type Why?
-Geometry Easy Unit Prevents "Out of Bounds" crashes on different monitor setups.
-Config Easy Unit Ensures the app doesn't crash on the first run.
-Processor Medium Integration Ensures OCR accuracy by verifying image preprocessing.
-OCR Client Hard Mock Ensures the UI doesn't freeze if the network is down.
+| Module          | Difficulty | Purpose                                               |
+| :-------------- | :--------- | :---------------------------------------------------- |
+| **Config**      | Easy       | Handles user preferences for HUD font and position.   |
+| **Client (v2)** | Medium     | Requests and parses multi-part Japanese/English JSON. |
+| **Overlay**     | Hard       | Manages the transparent, click-through CC window.     |
