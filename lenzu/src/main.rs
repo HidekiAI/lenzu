@@ -222,7 +222,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                if let Ok(raw) = capture_x11(win_x, win_y, LENS_SIZE as u32, LENS_SIZE as u32) {
+                if let Ok(raw) = capture_x11(
+                    win_x.max(0),
+                    win_y.max(0),
+                    LENS_SIZE as u32,
+                    LENS_SIZE as u32,
+                ) {
                     save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
                     let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
 
@@ -306,9 +311,7 @@ fn encode_to_base64(raw: &[u8], w: u32, h: u32) -> String {
 }
 
 fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    let client = reqwest::blocking::Client::new();
     let res = client.post("https://openrouter.ai/api/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", key))
         .json(&json!({
@@ -318,10 +321,10 @@ fn call_api(key: &str, b64: &str) -> Result<String, Box<dyn std::error::Error>> 
                 {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
             ]}]
         })).send()?;
-    let res = res.error_for_status()?;
     let body: serde_json::Value = res.json()?;
-    body["choices"][0]["message"]["content"]
+    Ok(body["choices"][0]["message"]["content"]
         .as_str()
-        .map(|s| s.trim().to_string())
-        .ok_or_else(|| "Missing 'choices[0].message.content' in API response".into())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
