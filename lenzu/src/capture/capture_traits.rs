@@ -10,10 +10,10 @@ use std::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleTypes {
     #[cfg(all(feature = "gtk", target_os = "windows"))]
-    Win32Handle(gdk4_win32::HWND),
+    Win32Handle(gdk::HWND),
     #[cfg(not(feature = "gtk"))]
     MockHandle,
-    //Xwin( gdk4_wayland::HANDLE),
+    //Xwin( gdk3_wayland::HANDLE),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,7 +67,7 @@ pub trait CaptureTrait {
     // IMPORTANT:  init() attempts to extract gdk3_<desktop>::Surface::Handle() (i.e. HWND),
     // it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
     #[cfg(feature = "gtk")]
-    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool;
+    fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool;
 
     #[cfg(not(feature = "gtk"))]
     fn init(&mut self, app_window_gtk: &dummy_types::DummyWindow) -> bool;
