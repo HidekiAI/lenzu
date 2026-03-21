@@ -1,13 +1,18 @@
+use chrono::Local;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::fs::OpenOptions;
+use std::io::Write;
+
+const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 
 pub struct OcrClient {
     api_key: String,
     client: Client,
 }
 
-#[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone, PartialEq)]
 pub struct TranslationResult {
     pub original: String,
     pub furigana: Option<String>,
@@ -28,7 +33,7 @@ struct Choice {
 
 #[derive(Deserialize, Debug)]
 struct Message {
-    content: String,
+    content: Value,
 }
 
 impl OcrClient {
@@ -39,49 +44,121 @@ impl OcrClient {
         }
     }
 
-    /// Sends the base64 image to OpenRouter and requests a structured JSON response.
-    pub fn call_api(&self, b64: &str) -> Result<TranslationResult, Box<dyn std::error::Error>> {
-        // The prompt is engineered to force a JSON-only response for easier parsing.
-        let prompt = "OCR the Japanese text in this image. \
-                      Return ONLY a JSON object with these keys: \
-                      'original' (raw OCR text), \
-                      'furigana' (kanji with [reading], e.g. 漢字[かんじ]), \
-                      'romaji' (latin script), \
-                      'english' (translation). \
-                      If the image is blurry or contains no Japanese, provide a 'debug_info' \
-                      explaining why in italics and leave other fields empty.";
+    fn log_to_history(&self, tag: &str, data: &str) {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(HISTORY_PATH)
+        {
+            let _ = writeln!(
+                f,
+                "[{}] [{}] {}",
+                Local::now().format("%H:%M:%S"),
+                tag,
+                data
+            );
+        }
+    }
 
-        // Note: I also use FREE:
-        // - endpoint = "https://openrouter.ai/api/v1",
-        // - model = "openrouter/free",
-        // It is rate-limited, but if you have paid openrouter account, their limit is increased
-        let res = self.client.post("https://openrouter.ai/api/v1/chat/completions")
+    fn generate_payload(&self, b64: &str) -> Value {
+        // We now encourage a List format but accept anything.
+        let prompt = "Act as a highly accurate Japanese-to-English OCR engine. \
+                      Extract ALL text. Return a JSON array of objects, one per line/bubble found. \
+                      Each object MUST have: 'original', 'furigana', 'romaji', 'english', 'debug_info'. \
+                      Format for furigana: 漢字[かんじ].";
+
+        json!({
+            "model": "google/gemini-2.0-flash-001",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
+                ]
+            }],
+            "response_format": { "type": "json_object" },
+            "temperature": 0.1
+        })
+    }
+
+    pub fn call_api(
+        &self,
+        b64: &str,
+    ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        let payload = self.generate_payload(b64);
+
+        let res = self
+            .client
+            .post("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("HTTP-Referer", "https://github.com/HidekiAI/lenzu")
-            .json(&json!({
-                "model": "google/gemini-2.0-flash-001", // is it cheaper to use DeepSeek?
-                "messages": [{
-                    "role": "user", 
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
-                    ]
-                }],
-                "response_format": { "type": "json_object" }
-            })).send()?;
+            .json(&payload)
+            .send()?;
 
-        let response_data: OpenRouterResponse = res.json()?;
+        let raw_response = res.text()?;
+        self.log_to_history("RAW_API_RESPONSE", &raw_response);
 
-        // Extract the raw string content from the LLM response
-        let content_raw = response_data
+        let response_data: OpenRouterResponse = serde_json::from_str(&raw_response)?;
+
+        let content_value = &response_data
             .choices
             .get(0)
-            .map(|c| c.message.content.trim())
-            .ok_or("Empty response from API")?;
+            .ok_or("No choices in API response")?
+            .message
+            .content;
 
-        // Parse the inner JSON string into our TranslationResult struct
-        let result: TranslationResult = serde_json::from_str(content_raw)?;
+        // Normalize the shape: always returns a Vec
+        self.normalize_results(content_value)
+    }
 
-        Ok(result)
+    fn normalize_results(
+        &self,
+        val: &Value,
+    ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        // 1. Unwrap stringified JSON if necessary
+        let actual_json = if val.is_string() {
+            serde_json::from_str(val.as_str().unwrap())?
+        } else {
+            val.clone()
+        };
+
+        // 2. Handle the "Object vs Array" fallback
+        if actual_json.is_array() {
+            // Case: [{}, {}]
+            let results: Vec<TranslationResult> = serde_json::from_value(actual_json)?;
+            Ok(results)
+        } else if actual_json.is_object() {
+            // Case: {} -> wrap in Vec
+            let single: TranslationResult = serde_json::from_value(actual_json)?;
+            Ok(vec![single])
+        } else {
+            Err("Unexpected JSON shape (neither object nor array)".into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalization_handles_single_object() {
+        let client = OcrClient::new("key".into());
+        let obj = json!({"original": "single", "english": "one"});
+        let results = client.normalize_results(&obj).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "single");
+    }
+
+    #[test]
+    fn test_normalization_handles_array() {
+        let client = OcrClient::new("key".into());
+        let arr = json!([
+            {"original": "line1", "english": "one"},
+            {"original": "line2", "english": "two"}
+        ]);
+        let results = client.normalize_results(&arr).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[1].original, "line2");
     }
 }

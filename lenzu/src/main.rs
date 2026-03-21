@@ -10,17 +10,16 @@ use std::io::Write;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-// Import the local library modules
+// Import modules
 mod capture;
 mod client;
+mod config;
 mod utils;
 
-// --- CONFIGURATION ---
-const LENS_SIZE: i32 = 400;
-const UI_PANEL_HEIGHT: i32 = 130;
 const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 
 struct AppState {
+    config: config::AppConfig,
     pixels: Option<gdk_pixbuf::Pixbuf>,
     ocr_result: String,
     status: String,
@@ -32,13 +31,27 @@ struct AppState {
     flash_alpha: f64,
 }
 
+fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return (0.0, 1.0, 0.8);
+    } // Fallback
+    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f64 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255) as f64 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(204) as f64 / 255.0;
+    (r, g, b)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .expect("ERROR: OPENROUTER_API_KEY environment variable not set!");
 
+    let cfg = config::AppConfig::load();
+
     gtk::init().expect("Failed to initialize GTK.");
 
     let state = Rc::new(RefCell::new(AppState {
+        config: cfg.clone(),
         pixels: None,
         ocr_result: String::new(),
         status: "READY: Shift+Click | ESC to Quit".to_string(),
@@ -51,12 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_default_size(LENS_SIZE, LENS_SIZE + UI_PANEL_HEIGHT);
+    window.set_default_size(cfg.lens_size, cfg.lens_size + cfg.ui_panel_height);
     window.set_decorated(false);
     window.set_keep_above(true);
     window.set_app_paintable(true);
 
-    // Disambiguate .screen() call for the compiler
     if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
         if let Some(visual) = screen.rgba_visual() {
             window.set_visual(Some(&visual));
@@ -70,14 +82,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed
     });
 
-    // UPDATED: Channel type now matches Result<client::TranslationResult, String>
-    let (tx, rx) = glib::MainContext::channel::<Result<client::TranslationResult, String>>(
+    let (tx, rx) = glib::MainContext::channel::<Result<Vec<client::TranslationResult>, String>>(
         glib::Priority::default(),
     );
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
+        let (r, g, b) = hex_to_rgb(&s.config.hud_color_hex);
 
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);
@@ -91,50 +103,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if s.flash_alpha > 0.0 {
             cr.set_source_rgba(1.0, 1.0, 1.0, s.flash_alpha);
-            cr.rectangle(0.0, 0.0, LENS_SIZE as f64, LENS_SIZE as f64);
+            cr.rectangle(
+                0.0,
+                0.0,
+                s.config.lens_size as f64,
+                s.config.lens_size as f64,
+            );
             cr.fill().ok();
         }
 
-        cr.set_source_rgb(0.0, 1.0, 0.8);
+        cr.set_source_rgb(r, g, b);
         cr.set_line_width(2.0);
-        cr.rectangle(1.0, 1.0, (LENS_SIZE - 2) as f64, (LENS_SIZE - 2) as f64);
+        cr.rectangle(
+            1.0,
+            1.0,
+            (s.config.lens_size - 2) as f64,
+            (s.config.lens_size - 2) as f64,
+        );
         cr.stroke().ok();
 
         cr.set_source_rgba(0.01, 0.01, 0.05, 0.85);
         cr.rectangle(
             0.0,
-            LENS_SIZE as f64,
-            LENS_SIZE as f64,
-            UI_PANEL_HEIGHT as f64,
+            s.config.lens_size as f64,
+            s.config.lens_size as f64,
+            s.config.ui_panel_height as f64,
         );
         cr.fill().ok();
 
         let context = win.pango_context();
         let layout = pango::Layout::new(&context);
 
-        cr.set_source_rgb(0.0, 1.0, 0.8);
+        cr.set_source_rgb(r, g, b);
         layout.set_text(&s.status);
-        cr.move_to(12.0, (LENS_SIZE + 10) as f64);
+        cr.move_to(12.0, (s.config.lens_size + 10) as f64);
         pangocairo::show_layout(cr, &layout);
 
         if s.is_loading {
             cr.save().ok();
-            cr.translate((LENS_SIZE - 30) as f64, (LENS_SIZE + 20) as f64);
+            cr.translate(
+                (s.config.lens_size - 30) as f64,
+                (s.config.lens_size + 20) as f64,
+            );
             cr.rotate(s.spinner_angle);
             cr.set_line_width(3.0);
-            cr.set_source_rgb(0.0, 1.0, 0.8);
+            cr.set_source_rgb(r, g, b);
             cr.arc(0.0, 0.0, 8.0, 0.0, 1.5 * std::f64::consts::PI);
             cr.stroke().ok();
             cr.restore().ok();
         }
 
         cr.set_source_rgb(1.0, 1.0, 1.0);
-        let font_desc = pango::FontDescription::from_string("Sans Bold 13");
+        let font_str = format!("Sans Bold {}", s.config.font_size);
+        let font_desc = pango::FontDescription::from_string(&font_str);
         layout.set_font_description(Some(&font_desc));
         layout.set_text(&s.ocr_result);
-        layout.set_width(pango::units_from_double((LENS_SIZE - 24) as f64));
+        layout.set_width(pango::units_from_double((s.config.lens_size - 24) as f64));
         layout.set_ellipsize(pango::EllipsizeMode::End);
-        cr.move_to(12.0, (LENS_SIZE + 40) as f64);
+        cr.move_to(12.0, (s.config.lens_size + 40) as f64);
         pangocairo::show_layout(cr, &layout);
 
         glib::Propagation::Proceed
@@ -142,19 +168,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_rx = state.clone();
     let window_rx = window.clone();
-    // UPDATED: Receiver logic to parse TranslationResult
     rx.attach(None, move |api_result| {
         let mut s = state_rx.borrow_mut();
         s.is_loading = false;
         match api_result {
-            Ok(res) => {
-                // If English exists, use it; otherwise fallback to original OCR
-                let display_text = res.english.clone().unwrap_or(res.original.clone());
-                s.ocr_result = display_text.clone();
-                s.status = "SUCCESS".to_string();
+            Ok(results) => {
+                let combined_english = results
+                    .iter()
+                    .map(|r| r.english.clone().unwrap_or_else(|| r.original.clone()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-                // Copy the original OCR to clipboard
-                let _ = s.clipboard.set_text(res.original);
+                let combined_original = results
+                    .iter()
+                    .map(|r| r.original.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                s.ocr_result = combined_english.clone();
+                s.status = format!("SUCCESS ({} items)", results.len());
+                let _ = s.clipboard.set_text(combined_original);
 
                 if let Ok(mut f) = OpenOptions::new()
                     .create(true)
@@ -165,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         f,
                         "[{}] {}",
                         chrono::Local::now().format("%H:%M:%S"),
-                        display_text
+                        combined_english
                     );
                 }
             }
@@ -179,19 +212,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_anim = state.clone();
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let mut s = state_anim.borrow_mut();
-        let mut needs_redraw = false;
         if s.is_loading {
             s.spinner_angle += 0.2;
-            needs_redraw = true;
+            window_anim.queue_draw();
         }
         if s.flash_alpha > 0.0 {
             s.flash_alpha -= 0.1;
-            if s.flash_alpha < 0.0 {
-                s.flash_alpha = 0.0;
-            }
-            needs_redraw = true;
-        }
-        if needs_redraw {
             window_anim.queue_draw();
         }
         glib::ControlFlow::Continue
@@ -199,7 +225,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window_main = window.clone();
     let state_main = state.clone();
-
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let display = gdk::Display::default().unwrap();
         let seat = display.default_seat().unwrap();
@@ -208,8 +233,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let root_win = screen.root_window().unwrap();
         let (_, x, y, modifier) = root_win.device_position(&device);
 
-        let win_x = x - (LENS_SIZE / 2);
-        let win_y = y - (LENS_SIZE / 2);
+        let s_conf = state_main.borrow().config.clone();
+        let win_x = x - (s_conf.lens_size / 2);
+        let win_y = y - (s_conf.lens_size / 2);
         window_main.move_(win_x, win_y);
 
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
@@ -232,29 +258,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(raw) = capture::capture_x11(
                     win_x.max(0),
                     win_y.max(0),
-                    LENS_SIZE as u32,
-                    LENS_SIZE as u32,
+                    s_conf.lens_size as u32,
+                    s_conf.lens_size as u32,
                 ) {
                     let rgb = utils::raw_to_rgb(&raw);
-                    utils::save_debug_image(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
-                    let b64 = utils::encode_to_base64(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
-
+                    let b64 = utils::encode_to_base64(
+                        &rgb,
+                        s_conf.lens_size as u32,
+                        s_conf.lens_size as u32,
+                    );
                     let mut pb_data = raw.clone();
                     utils::swap_bytes_for_pixbuf(&mut pb_data);
-
                     s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
                         pb_data,
                         gdk_pixbuf::Colorspace::Rgb,
                         true,
                         8,
-                        LENS_SIZE,
-                        LENS_SIZE,
-                        LENS_SIZE * 4,
+                        s_conf.lens_size,
+                        s_conf.lens_size,
+                        s_conf.lens_size * 4,
                     ));
-
                     window_main.show();
-                    window_main.queue_draw();
-
                     let api_key = s.api_key.clone();
                     let tx_clone = tx.clone();
                     std::thread::spawn(move || {
