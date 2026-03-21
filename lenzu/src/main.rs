@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_keep_above(true);
     window.set_app_paintable(true);
 
+    // Disambiguate .screen() call for the compiler
     if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
         if let Some(visual) = screen.rgba_visual() {
             window.set_visual(Some(&visual));
@@ -69,11 +70,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed
     });
 
-    let (tx, rx) = glib::MainContext::channel(glib::Priority::default());
+    // UPDATED: Channel type now matches Result<client::TranslationResult, String>
+    let (tx, rx) = glib::MainContext::channel::<Result<client::TranslationResult, String>>(
+        glib::Priority::default(),
+    );
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
+
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);
         cr.paint().ok();
@@ -106,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let context = win.pango_context();
         let layout = pango::Layout::new(&context);
+
         cr.set_source_rgb(0.0, 1.0, 0.8);
         layout.set_text(&s.status);
         cr.move_to(12.0, (LENS_SIZE + 10) as f64);
@@ -136,20 +142,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_rx = state.clone();
     let window_rx = window.clone();
-    rx.attach(None, move |api_result: Result<String, String>| {
+    // UPDATED: Receiver logic to parse TranslationResult
+    rx.attach(None, move |api_result| {
         let mut s = state_rx.borrow_mut();
         s.is_loading = false;
         match api_result {
-            Ok(text) => {
-                s.ocr_result = text.clone();
+            Ok(res) => {
+                // If English exists, use it; otherwise fallback to original OCR
+                let display_text = res.english.clone().unwrap_or(res.original.clone());
+                s.ocr_result = display_text.clone();
                 s.status = "SUCCESS".to_string();
-                let _ = s.clipboard.set_text(text.clone());
+
+                // Copy the original OCR to clipboard
+                let _ = s.clipboard.set_text(res.original);
+
                 if let Ok(mut f) = OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(HISTORY_PATH)
                 {
-                    let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%H:%M:%S"), text);
+                    let _ = writeln!(
+                        f,
+                        "[{}] {}",
+                        chrono::Local::now().format("%H:%M:%S"),
+                        display_text
+                    );
                 }
             }
             Err(e) => s.status = format!("API Error: {}", e),
@@ -218,12 +235,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     LENS_SIZE as u32,
                     LENS_SIZE as u32,
                 ) {
-                    // 1. Process for API
                     let rgb = utils::raw_to_rgb(&raw);
                     utils::save_debug_image(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
                     let b64 = utils::encode_to_base64(&rgb, LENS_SIZE as u32, LENS_SIZE as u32);
 
-                    // 2. Process for UI Display
                     let mut pb_data = raw.clone();
                     utils::swap_bytes_for_pixbuf(&mut pb_data);
 
