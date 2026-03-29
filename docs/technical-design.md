@@ -1,5 +1,87 @@
 # Technical Design Document
 
+> **Note (2026-03-22):** Sections 1–11 below describe the original design goals and future architecture. The section immediately below describes the **current, working implementation** on the `RemoteOCR` branch.
+
+---
+
+## 0. Current Implementation (RemoteOCR branch)
+
+### Stack
+
+| Layer | Technology |
+|---|---|
+| Lens window | GTK3 + Cairo + Pango (floating, RGBA, always-on-top) |
+| Screen capture | `x11rb` — X11 root window `GetImage` (ZPixmap) |
+| OCR / Translation | OpenRouter API → `google/gemini-2.0-flash-001` (multimodal JSON) |
+| HTTP client | `reqwest` (blocking) |
+| Overlay HUD | `lenzu_server` — Tauri 2.x transparent window |
+| IPC | UDP loopback (default port 7331) |
+| Config | `lenzu_config.json` — `serde_json`, `isolang` for language codes |
+
+### Process architecture
+
+```
+lenzu (GTK3 client)
+  │  Shift+Click → X11 capture → base64 PNG
+  │  → OpenRouter API → Vec<TranslationResult>
+  │  → format_for_overlay(results, render_mode)
+  └──UDP──► lenzu_server (Tauri 2.x)
+              transparent overlay window
+              UDP listener thread
+              emits "hud-text-changed" to frontend
+              app.js renders text
+```
+
+`lenzu` auto-spawns `lenzu_server` as a child process (`std::process::Child`), passing `--port` from config, and kills it on exit (ESC key and window close). This is complete as of Phase 2.
+
+### `TranslationResult` (client.rs)
+
+```rust
+pub struct TranslationResult {
+    pub original: String,           // source text as seen in image
+    pub furigana: Option<String>,   // 漢字[かんじ] format
+    pub romaji:   Option<String>,   // romanized reading
+    pub english:  Option<String>,   // translated text
+    pub top_xy:   Option<String>,   // upper-left bounding box (from LLM)
+    pub bot_xy:   Option<String>,   // lower-right bounding box (from LLM)
+    pub debug_info: Option<String>, // LLM diagnostic notes
+}
+```
+
+### Prompt design
+
+The base prompt is hardcoded in `config.rs::TRANSLATE_PROMPT` and is language-agnostic. It uses `{src}` / `{dest}` placeholders resolved at runtime via `AppConfig::resolved_prompt()`. Language-specific additions (e.g. furigana/romaji instructions for Japanese) go in the configurable `translate_extra_prompt` field.
+
+### Overlay render modes (`OverlayRenderMode`)
+
+| Value | HUD shows |
+|---|---|
+| `original` | Source text only |
+| `english` | Translation only (fallback: original) |
+| `furigana` | Furigana reading (fallback: original) |
+| `romaji` | Romanized reading (fallback: original) |
+| `all` | All text fields joined with ` | ` |
+| `debug` | All fields + bounding boxes + debug_info |
+
+### Workspace layout
+
+```
+lenzu/                          ← Cargo workspace root
+├── Cargo.toml
+├── lenzu/                      ← lenzu_client binary ("lenzu")
+│   ├── src/{main,capture,client,config,utils}.rs
+│   ├── tests/integration_test.rs
+│   └── lenzu_config.json             ← runtime config (not committed)
+└── lenzu_server/               ← Tauri overlay
+    ├── package.json
+    ├── src-tauri/              ← workspace member
+    │   ├── Cargo.toml          ← name = "lenzu_server"
+    │   └── src/main.rs         ← UDP listener + --port arg
+    └── ui/                     ← index.html, app.js, styles.css
+```
+
+---
+
 ## 1. Why Offline OCR?
 
 This section explains the rationale for implementing offline OCR in the application, emphasizing performance, privacy, and reliability for Japanese text recognition, particularly for manga and graphic novels. Offline OCR eliminates network latency, ensures user privacy by not transmitting images to external services, and provides consistent performance regardless of internet connectivity.
@@ -24,10 +106,9 @@ This section outlines the key libraries used in the project:
      - Last updated: 2023-11-15 (v0.11.0)
      - GitHub: [psychon/x11rb](https://github.com/psychon/x11rb) (last commit 2024-02-19)
      - Status: **Actively maintained** (20 open issues, CI passing)
-   - [`gdk4-x11`](https://crates.io/crates/gdk4-x11)/[`gdk4-wayland`](https://crates.io/crates/gdk4-wayland) (LGPL) - Multi-monitor handling
-     - Last updated: 2023-12-30 (v0.7.3)
-     - GitHub: [gtk-rs/gtk4-rs](https://github.com/gtk-rs/gtk4-rs) (last commit 2024-03-01)
-     - Status: **Stable** (15 open issues, part of GTK-rs ecosystem)
+   - [`gtk` 0.18 (gtk-rs)](https://crates.io/crates/gtk) (LGPL) - GTK3 bindings — **GTK3 only, GTK4 abandoned**
+     - Multi-monitor geometry: `gdk::Display::default()` + `gdk::Monitor` (GTK3 API)
+     - Status: Stable, actively maintained
    - [`cairo-rs`](https://crates.io/crates/cairo-rs) (LGPL) - Surface rendering
      - Last updated: 2024-01-28 (v0.18.3)
      - GitHub: [gtk-rs/cairo-rs](https://github.com/gtk-rs/cairo-rs) (last commit 2024-03-10)
@@ -41,9 +122,8 @@ This section outlines the key libraries used in the project:
    - [`x11`](https://crates.io/crates/x11) (legacy bindings, last updated 2021)
    - [`xcb`](https://crates.io/crates/xcb) (XCB bindings, actively maintained)
 
-4. **Window Management** (transitioning):
-   - Currently: `winit`
-   - Future: GTK4/gdk4 for better integration
+4. **Window Management**:
+   - GTK3 (`gtk-rs` 0.18) — permanent choice. GTK4 was evaluated and abandoned (graphene/gobject dep complexity, API churn, prototype build failures).
 
 5. **Optional Services**:
    - Google Cloud Vision/Azure Computer Vision via OAuth2
@@ -157,7 +237,7 @@ Key findings from analyzing xfce4-screenshooter's X11 implementation:
 
 - **Whole-screen Capture**: Capture entire desktop across all monitors simultaneously using `x11rb`.
 - **Multi-monitor Support**:
-  - Uses `gdk4::Monitor::workarea()` to determine individual monitor boundaries.
+  - Uses `gdk::Display::default()` + `gdk::Monitor` (GTK3) to determine individual monitor boundaries.
   - X11 implementation captures from the Root Window using `GetImage` (ZPixmap format), handling unified coordinate spaces (negative offsets for monitors relative to primary).
 - **Pixel Conversion**:
   - Implements BGRA to RGBA conversion for compatibility with the `image` crate.
@@ -176,7 +256,7 @@ Key findings from analyzing xfce4-screenshooter's X11 implementation:
 ![Hybrid Architecture](assets/architecture.png)
 
 1. **Capture Layer**:
-   - Phase I: Fullscreen capture via GTK4 Window
+   - Phase I: Fullscreen capture via GTK3 window + `x11rb` root `GetImage`
    - Phase II: Region capture with compositor integration
 
 2. **Processing Layer**:
@@ -228,7 +308,7 @@ Key findings from analyzing xfce4-screenshooter's X11 implementation:
      - Floating toolbar maintains lens control state
    - Source Inspiration:
      - Xfce4-screenshooter's focus management (GPL-licensed) - https://gitlab.xfce.org/apps/xfce4-screenshooter
-     - GTK4 adaptation of their focus tracking approach
+     - GTK3 adaptation of their focus tracking approach
      - Will analyze their implementation for reference
 
 2. **Translation Service**:
@@ -248,14 +328,14 @@ Key findings from analyzing xfce4-screenshooter's X11 implementation:
 - **Decision**: Prioritize full-screen capture for Phase I
 - **Rationale**:
   - Reduces complexity in early development
-  - Leverages existing GTK4/X11/Wayland capture capabilities
+  - Leverages GTK3/X11 capture capabilities (`x11rb` root `GetImage`)
   - Provides maximum coverage for manga users
   - Allows progressive refinement through Phase II
 
 ### Multi-monitor Handling
 
 - **Strategy**:
-  - Capture all monitors simultaneously using GTK4's `GdkDisplay` API
+  - Capture all monitors simultaneously using GTK3's `GdkDisplay` API
   - Handle scaling factors per-monitor
   - Provide unified coordinate system across displays
 

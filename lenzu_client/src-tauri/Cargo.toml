@@ -1,0 +1,19 @@
+[package]
+name = "lenzu_client"
+version = "0.1.0"
+description = "Lenzu overlay HUD — transparent Tauri window that renders OCR results"
+authors = ["HidekiAI"]
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "^2.2.0", features = [] }
+
+[dependencies]
+tauri = { version = "^2.5.0", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+# DO NOT REMOVE — required for production builds
+custom-protocol = ["tauri/custom-protocol"]

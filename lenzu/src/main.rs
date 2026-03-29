@@ -18,6 +18,47 @@ mod utils;
 
 const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 
+fn format_for_overlay(
+    results: &[client::TranslationResult],
+    mode: &config::OverlayRenderMode,
+) -> String {
+    use config::OverlayRenderMode::*;
+    results
+        .iter()
+        .map(|r| match mode {
+            Original => r.original.clone(),
+            English => r.english.clone().unwrap_or_else(|| r.original.clone()),
+            Furigana => r.furigana.clone().unwrap_or_else(|| r.original.clone()),
+            Romaji => r.romaji.clone().unwrap_or_else(|| r.original.clone()),
+            All => {
+                let mut parts = vec![r.original.clone()];
+                if let Some(v) = &r.english  { parts.push(v.clone()); }
+                if let Some(v) = &r.furigana { parts.push(v.clone()); }
+                if let Some(v) = &r.romaji   { parts.push(v.clone()); }
+                parts.join("  |  ")
+            }
+            Debug => {
+                let mut parts = vec![r.original.clone()];
+                if let Some(v) = &r.english  { parts.push(format!("en: {}", v)); }
+                if let Some(v) = &r.furigana { parts.push(format!("furigana: {}", v)); }
+                if let Some(v) = &r.romaji   { parts.push(format!("romaji: {}", v)); }
+                if let Some(v) = &r.top_xy   { parts.push(format!("top: {}", v)); }
+                if let Some(v) = &r.bot_xy   { parts.push(format!("bot: {}", v)); }
+                if let Some(v) = &r.debug_info { parts.push(format!("debug: {}", v)); }
+                parts.join("\n")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n")
+}
+
+fn send_to_overlay(text: &str, port: u16) {
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let addr = format!("127.0.0.1:{}", port);
+        let _ = socket.send_to(text.as_bytes(), addr);
+    }
+}
+
 struct AppState {
     config: config::AppConfig,
     pixels: Option<gdk_pixbuf::Pixbuf>,
@@ -29,6 +70,32 @@ struct AppState {
     is_loading: bool,
     spinner_angle: f64,
     flash_alpha: f64,
+    server_process: Option<std::process::Child>,
+}
+
+/// Locate and spawn `lenzu_server --port <N>`.
+/// Prefers a sibling binary (production install), falls back to PATH (dev).
+fn spawn_server(port: u16) -> Option<std::process::Child> {
+    let bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("lenzu_client")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| std::path::PathBuf::from("lenzu_client"));
+
+    std::process::Command::new(&bin)
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .map_err(|e| eprintln!("lenzu: could not spawn lenzu_client ({:?}): {e}", bin))
+        .ok()
+}
+
+/// Kill the server child process and reap it.
+fn kill_server(server: &mut Option<std::process::Child>) {
+    if let Some(mut child) = server.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
@@ -50,6 +117,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     gtk::init().expect("Failed to initialize GTK.");
 
+    let server_process = if cfg.overlay_enabled {
+        spawn_server(cfg.overlay_udp_port)
+    } else {
+        None
+    };
+
     let state = Rc::new(RefCell::new(AppState {
         config: cfg.clone(),
         pixels: None,
@@ -61,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_loading: false,
         spinner_angle: 0.0,
         flash_alpha: 0.0,
+        server_process,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -75,11 +149,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    window.connect_key_press_event(|_, event| {
+    let state_esc = state.clone();
+    window.connect_key_press_event(move |_, event| {
         if event.keyval() == gdk::keys::constants::Escape {
+            kill_server(&mut state_esc.borrow_mut().server_process);
             gtk::main_quit();
         }
         glib::Propagation::Proceed
+    });
+
+    let state_del = state.clone();
+    window.connect_delete_event(move |_, _| {
+        kill_server(&mut state_del.borrow_mut().server_process);
+        glib::Propagation::Proceed  // allow window close → GTK loop ends naturally
     });
 
     let (tx, rx) = glib::MainContext::channel::<Result<Vec<client::TranslationResult>, String>>(
@@ -189,6 +271,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.status = format!("SUCCESS ({} items)", results.len());
                 let _ = s.clipboard.set_text(combined_original);
 
+                if s.config.overlay_enabled {
+                    let text = format_for_overlay(&results, &s.config.overlay_render_mode);
+                    send_to_overlay(&text, s.config.overlay_udp_port);
+                }
+
                 if let Ok(mut f) = OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -280,9 +367,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ));
                     window_main.show();
                     let api_key = s.api_key.clone();
+                    let endpoint = s.config.llm_api_endpoint.clone();
+                    let model = s.config.llm_default_model.clone();
+                    let prompt = s.config.resolved_prompt();
                     let tx_clone = tx.clone();
                     std::thread::spawn(move || {
-                        let ocr_client = client::OcrClient::new(api_key);
+                        let ocr_client = client::OcrClient::new(api_key, endpoint, model, prompt);
                         let result = ocr_client.call_api(&b64).map_err(|e| e.to_string());
                         let _ = tx_clone.send(result);
                     });

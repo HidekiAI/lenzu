@@ -1,4 +1,4 @@
-use lenzu::{client, utils};
+use lenzu_client::{client, utils};
 use serde_json::json;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
