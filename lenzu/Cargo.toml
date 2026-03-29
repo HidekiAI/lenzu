@@ -3,6 +3,10 @@ name = "lenzu"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "lenzu"
+path = "src/main.rs"
+
 [dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
 gdk = { version = "0.18", features = ["v3_24"] }
@@ -19,7 +23,7 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 arboard = "3.4"
 chrono = "0.4"
-toml = "0.8" # Added for config parsing
+isolang = { version = "2.4.0" , features = ["serde"]}
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

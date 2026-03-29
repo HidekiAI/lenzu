@@ -9,6 +9,9 @@ const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 
 pub struct OcrClient {
     api_key: String,
+    endpoint: String,
+    model: String,
+    prompt: String,
     client: Client,
 }
 
@@ -18,6 +21,8 @@ pub struct TranslationResult {
     pub furigana: Option<String>,
     pub romaji: Option<String>,
     pub english: Option<String>,
+    pub top_xy: Option<String>,  // upper-left bounding box corner
+    pub bot_xy: Option<String>,  // lower-right bounding box corner
     pub debug_info: Option<String>,
 }
 
@@ -37,9 +42,12 @@ struct Message {
 }
 
 impl OcrClient {
-    pub fn new(api_key: String) -> Self {
+    pub fn new(api_key: String, endpoint: String, model: String, prompt: String) -> Self {
         Self {
             api_key,
+            endpoint,
+            model,
+            prompt,
             client: Client::new(),
         }
     }
@@ -61,18 +69,12 @@ impl OcrClient {
     }
 
     fn generate_payload(&self, b64: &str) -> Value {
-        // We now encourage a List format but accept anything.
-        let prompt = "Act as a highly accurate Japanese-to-English OCR engine. \
-                      Extract ALL text. Return a JSON array of objects, one per line/bubble found. \
-                      Each object MUST have: 'original', 'furigana', 'romaji', 'english', 'debug_info'. \
-                      Format for furigana: 漢字[かんじ].";
-
         json!({
-            "model": "google/gemini-2.0-flash-001",
+            "model": self.model,
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": self.prompt},
                     {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
                 ]
             }],
@@ -89,7 +91,7 @@ impl OcrClient {
 
         let res = self
             .client
-            .post("https://openrouter.ai/api/v1/chat/completions")
+            .post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("HTTP-Referer", "https://github.com/HidekiAI/lenzu")
             .json(&payload)
@@ -143,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_normalization_handles_single_object() {
-        let client = OcrClient::new("key".into());
+        let client = OcrClient::new("key".into(), String::new(), String::new(), String::new());
         let obj = json!({"original": "single", "english": "one"});
         let results = client.normalize_results(&obj).unwrap();
         assert_eq!(results.len(), 1);
@@ -152,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_normalization_handles_array() {
-        let client = OcrClient::new("key".into());
+        let client = OcrClient::new("key".into(), String::new(), String::new(), String::new());
         let arr = json!([
             {"original": "line1", "english": "one"},
             {"original": "line2", "english": "two"}
