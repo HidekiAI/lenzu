@@ -1,11 +1,14 @@
 # Lenzu Project Planning & Roadmap
 
-## Current Status
-- **Platform**: Cross-platform (Windows primary, Linux secondary)
-- **OCR Engines**: Windows Media OCR (fast, accurate), Tesseract (slow, less accurate)
-- **UI**: GTK4 with winit/gdk4 backends
-- **Capture**: WinAPI (Windows), X11 (Linux), Wayland support incomplete
-- **Interpreter**: Kakasi (external binary or limited crate)
+## Current Status (2026-03-22, branch: `RemoteOCR`)
+- **Platform**: Linux-primary (X11, GTK3)
+- **OCR/Translation**: OpenRouter API → Gemini 2.0 Flash (multimodal); returns structured JSON
+- **UI**: GTK3 floating lens window (Cairo + Pango), transparent RGBA
+- **Capture**: X11 root window via `x11rb` (bypasses GPU-accelerated windows correctly)
+- **Overlay HUD**: Separate Tauri 2.x process (`lenzu_server`) — transparent window, UDP IPC
+- **Interpreter**: Removed (was Kakasi); translation now handled entirely by the LLM
+- **Config**: `lenzu_config.json` with `isolang` language codes and `OverlayRenderMode` enum
+- **Workspace**: Cargo workspace at repo root; members: `lenzu` (client), `lenzu_server/src-tauri`
 
 ## Vision
 Make **Linux the primary platform** with a robust, performant OCR lens that works across Wayland and X11, using open-source tools while maintaining the offline-first, privacy-respecting design.
@@ -13,30 +16,28 @@ Make **Linux the primary platform** with a robust, performant OCR lens that work
 ## Goals
 
 ### Short-term (Next 2-4 Weeks)
-1. **Modern Detection Pipeline (Phase II)**
-   - Implement **Text Detection** as a standalone stage using **YOLOv8-tiny** or **DBNet** via ONNX Runtime.
-   - Extract text-rectangles from full-screen/lens captures before passing to recognition.
-   - Optimize detection for manga speech bubbles and vertical text layouts.
 
-2. **Linux Capture Pipeline**
-   - Complete Wayland support via gdk4-wayland (portal integration).
-   - Optimize X11 capture (already implemented via x11rb).
+Journal Entry (2026-03-28): Starting Phase 2 tasks.
 
-3. **Recognition Engine Pivot**
-   - Evaluate **PaddleOCR (ONNX)** or **Manga-OCR** as the primary recognition engine for extracted regions.
-   - Keep Tesseract only as a lightweight fallback for clean, horizontal text.
+1. **Phase 2 — Process Lifecycle** *(see `lenzu/PLANNINGS.md` for detail)*
+   - `lenzu` (client) spawns `lenzu_client` on startup, kills it on exit
+   - Rename package to `lenzu_client`, keep binary name `lenzu`
+   **[COMPLETED: 2026-03-28]**
 
-3. **UI/UX Improvements**
-   - Replace winit with pure GTK4 (remove winit dependency)
-   - Add configuration UI for OCR language, PSM, and preprocessing
-   - Implement lens size/position persistence
-   - Add keyboard shortcuts reference overlay
+2. **Phase 3 — Migrate Overlay HUD (Tauri → Electron)**
+   - **Rationale**: Tauri's `xfwm4` compositor ghosting issue (alpha-blend accumulation) is persistent despite mitigation; Electron may offer a more robust translucent overlay solution.
+   - Investigate existing Electron translucent overlay projects (e.g., `/home/hidekiai/projects/remote/github/mine/hidekiai/electron-translucent-desktop-overlay`).
+   - Create new Electron project, port UI, adapt IPC, and update `lenzu` client to manage it.
+   - Verify resolution of ghosting and overall functionality.
 
-4. **Packaging & Distribution**
-   - Create Flatpak for easy Linux installation
-   - Include jpn_vert.traineddata in package
-   - Bundle kakasi as fallback (static or dynamic)
-   - Add AppStream metadata for software centers
+3. **Phase 4 — Local Pre-detection**
+   - Use `yolov8n_fp16.onnx` (already in repo) to find text bounding boxes before API call
+   - Send only cropped regions → lower token cost, higher accuracy
+   - `top_xy` / `bot_xy` in `TranslationResult` anchor results to screen coords
+
+3. **UI/UX**
+   - Overlay position: configurable top/bottom via `hud_config.json`
+   - Click-through mode for `lenzu_server` window (doesn't steal mouse events)
 
 ### Medium-term (1-3 Months)
 1. **OCR Engine Diversification**
@@ -85,29 +86,24 @@ Make **Linux the primary platform** with a robust, performant OCR lens that work
 
 ## Known Issues & Blockers
 
+### Overlay HUD (`lenzu_server`)
+- **xfwm4 compositor ghosting**: xfwm4's built-in compositor uses alpha-blend accumulation — each frame is blended on top of the previous buffer rather than composited fresh against the desktop, so semi-transparent areas fill with dark ghost pixels over time. The 3-frame erase cycle in `app.js` mitigates this but does not eliminate it. Full fix: disable xfwm4 compositing (`xfconf-query -c xfwm4 -p /general/use_compositing -s false`) and replace with `picom --backend glx --no-use-damage` (`--no-use-damage` forces full-surface redraws). See `lenzu_server/README.md` for complete steps.
+- `lenzu_server` must be started before `lenzu` (Phase 2 will fix this with auto-spawn)
+- Click-through not yet implemented (window intercepts mouse events)
+
+### API / Token Cost
+- Full lens image sent on every capture — no pre-filtering yet
+- Gemini 2.0 Flash is cheap (~$0.0006/hr in practice) but Phase 4 YOLOv8 pre-detection will cut costs further
+
 ### Linux Capture
-- Wayland: Screen capture requires user consent via portal; may be slow
-- X11: Root window capture includes all windows; need to filter by Z-order
-- Multi-monitor: `xinerama` vs `randr` - need unified API
-- Performance: Full-screen captures at 60fps are expensive; need region-of-interest optimization
-
-### Tesseract Limitations
-- Speed: ~5s per image with PSM 5 on manga panels
-- Accuracy: ~60-70% on vertical text without preprocessing
-- Training: Requires building custom traineddata with manga fonts
-- Language: jpn_vert.traineddata may not include modern manga fonts
-
-### Kakasi Integration
-- Current crate is fake/limited; needs proper FFI to libkakasi
-- Windows builds require manual MinGW compilation
-- Linux: package manager installs kakasi CLI, but no Rust crate yet
-- MeCab alternative is heavier but more accurate
+- Wayland: not yet supported; X11 only via `x11rb`
+- Multi-monitor: untested with monitors at non-zero offsets
 
 ## Technical Decisions
 
-### GTK4 vs Winit
-- **Decision**: Migrate to pure GTK4 (already in progress in Cargo.toml)
-- **Rationale**: GTK4 provides cross-platform windowing, input, and rendering; simplifies build and dependencies
+### UI toolkit: GTK3 (final decision)
+- **Decision**: GTK3 (`gtk-rs` 0.18) — permanent choice, not a stepping stone to GTK4
+- **Rationale**: GTK4 was evaluated and abandoned — graphene/gobject dep complexity, API churn, prototype build failures. GTK3 provides everything needed and is simpler to build against.
 
 ### OCR Backend Selection
 - **Linux**: Tesseract CLI (via `rusty-tesseract` or custom wrapper)
@@ -130,10 +126,9 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 
 ### Must-Have (Linux)
 - `tesseract-ocr` (>=5.0) with `jpn_vert` traineddata
-- `kakasi` (or libkakasi-dev for FFI)
-- `gtk4` (>=4.14)
-- `gdk4-wayland` / `gdk4-x11`
-- `pkg-config` and build-essential
+- `libgtk-3-dev` (GTK3 >=3.24 — **not GTK4**)
+- `libwebkit2gtk-4.1-dev` (for `lenzu_server` / Tauri)
+- `pkg-config` and `build-essential`
 
 ### Nice-to-Have
 - `opencv` (for advanced preprocessing) - but heavy dependency
@@ -145,19 +140,20 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 
 1. **Tesseract Training**: Investigate manga109s dataset format and training pipeline
 2. **Wayland Portals**: Study `xdg-desktop-portal` API for screen capture permissions
-3. **GTK4 Layered Windows**: Check if GTK4 supports transparent overlay windows on Wayland/X11
+3. **Tauri overlay positioning**: ArrowUp/Down key cycling (top/center/bottom) already implemented in lenzu_server
 4. **Performance Profiling**: Profile capture → OCR pipeline to identify bottlenecks
 
 ## Milestones
 
-- [ ] **M1**: Linux capture works on X11 with correct multi-monitor support
-- [ ] **M2**: Tesseract OCR accuracy >80% on test manga pages with preprocessing
-- [ ] **M3**: GTK4 UI fully functional without winit; lens window overlays correctly
-- [ ] **M4**: Flatpak builds and installs on Ubuntu/Debian/Fedora
-- [ ] **M5**: Kakasi integration via libkakasi FFI (not just CLI)
-- [ ] **M6**: Wayland support via portals (test on GNOME/KDE)
-- [ ] **M7**: Performance: Capture+OCR pipeline <2s on 1080p
-- [ ] **M8**: User documentation and troubleshooting guide
+- [x] **M1**: X11 capture works correctly (bypasses GPU-accelerated windows)
+- [x] **M2**: Structured OCR results via OpenRouter/Gemini multimodal API
+- [x] **M3**: GTK3 lens window with transparent overlay, spinner, flash feedback
+- [x] **M4**: Tauri overlay HUD (`lenzu_server`) integrated into workspace via UDP IPC
+- [x] **M5**: Configurable language pair, render mode, and prompt via `lenzu_config.json`
+- [x] **M6**: `lenzu` auto-spawns/kills `lenzu_server` (Phase 2)
+- [ ] **M7**: YOLOv8 pre-detection reduces token cost by 80-90% (Phase 4)
+- [ ] **M8**: Wayland support via portals
+- [ ] **M9**: Flatpak packaging
 
 ## Testing Strategy
 
@@ -186,7 +182,7 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 
 ## References
 
-- GTK4 Rust Book: https://gtk-rs.org/gtk4-rs/stable/latest/
+- GTK3 (gtk-rs): https://gtk-rs.org/gtk3-rs/stable/latest/
 - Tesseract Training: https://tesseract-ocr.github.io/tessdoc/Training-Tesseract.html
 - Wayland Portals: https://flatpak.org/xdg-desktop-portal/
 - Manga109: http://www.manga109.org/
@@ -194,7 +190,7 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 
 ---
 
-**Last Updated**: 2026-03-14
+**Last Updated**: 2026-03-22
 **Maintainer**: Hideki AI
-**Status**: Planning phase - Linux-first transition
+**Status**: Active development — `RemoteOCR` branch, Phase 2 next
 
