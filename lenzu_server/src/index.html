@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
+  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HUD Overlay</title>
+  <style>
+    /* ── Reset ─────────────────────────────────────────────────── */
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    /* ── Root / body ────────────────────────────────────────────── */
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      /* Prevent accidental drag of the entire window */
+      -webkit-app-region: no-drag;
+      user-select: none;
+    }
+
+    /* ── Outer wrapper — full-window flex column ────────────────── */
+    #hud-root {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;   /* lines stack from the bottom */
+      width: 100%;
+      height: 100%;
+      padding: 10px 16px;
+    }
+
+    /* ── Caption container ──────────────────────────────────────── */
+    #hud-container {
+      /*
+       * The background colour and border-radius give the subtitle "pill"
+       * appearance.  Actual colour is driven by JS via CSS custom properties.
+       */
+      background: var(--hud-bg, rgba(0, 0, 0, 0.4));
+      border-radius: 8px;
+      padding: 8px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      /* Hidden until the first message arrives */
+      visibility: hidden;
+    }
+
+    /* ── Individual caption line ────────────────────────────────── */
+    .caption-line {
+      color: var(--hud-text-color, #ffffff);
+      font-family: 'Segoe UI', 'Arial', sans-serif;
+      font-size: var(--hud-font-size, 24px);
+      font-weight: 600;
+      line-height: 1.3;
+      text-align: center;
+      white-space: pre-wrap;
+      word-break: break-word;
+      /*
+       * Classic subtitle drop-shadow for legibility on any background.
+       */
+      text-shadow:
+        1px  1px 3px rgba(0, 0, 0, 0.9),
+       -1px -1px 3px rgba(0, 0, 0, 0.9),
+        1px -1px 3px rgba(0, 0, 0, 0.9),
+       -1px  1px 3px rgba(0, 0, 0, 0.9);
+
+      /* Slide-in animation for each new line */
+      animation: slideIn 0.25s ease-out forwards;
+      opacity: 0;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* ── Fade-out class (applied before removal) ────────────────── */
+    .caption-line.fading {
+      animation: fadeOut 0.4s ease-in forwards;
+    }
+
+    @keyframes fadeOut {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div id="hud-root">
+    <div id="hud-container" aria-live="polite" aria-atomic="false"></div>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
