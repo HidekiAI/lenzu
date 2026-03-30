@@ -26,9 +26,9 @@ Journal Entry (2026-03-28): Starting Phase 2 tasks.
 
 2. **Phase 3 — Migrate Overlay HUD (Tauri → Electron)**
    - **Rationale**: Tauri's `xfwm4` compositor ghosting issue (alpha-blend accumulation) is persistent despite mitigation; Electron may offer a more robust translucent overlay solution.
-   - Investigate existing Electron translucent overlay projects (e.g., `/home/hidekiai/projects/remote/github/mine/hidekiai/electron-translucent-desktop-overlay`).
-   - Create new Electron project, port UI, adapt IPC, and update `lenzu` client to manage it.
-   - Verify resolution of ghosting and overall functionality.
+   - [x] Investigate existing Electron translucent overlay projects (e.g., `/home/hidekiai/projects/remote/github/mine/hidekiai/electron-translucent-desktop-overlay`).
+   - [x] Electron `lenzu_server` (`src/main.js` + UDP JSON protocol) wired to `lenzu`: spawn via `npm run start`, `LENZU_OVERLAY_UDP_PORT` syncs with `overlay_udp_port`, `./scripts/run.sh` no longer double-starts the HUD.
+   - [ ] Verify resolution of ghosting and overall functionality on target WM (manual QA).
 
 3. **Phase 4 — Local Pre-detection**
    - Use `yolov8n_fp16.onnx` (already in repo) to find text bounding boxes before API call
@@ -84,12 +84,16 @@ Journal Entry (2026-03-28): Starting Phase 2 tasks.
    - Shared traineddata repository
    - Translation backends (DeepL, Google Translate, offline dictionaries)
 
-## Known Issues & Blockers
+### Known Issues & Blockers
 
 ### Overlay HUD (`lenzu_server`)
 - **xfwm4 compositor ghosting**: xfwm4's built-in compositor uses alpha-blend accumulation — each frame is blended on top of the previous buffer rather than composited fresh against the desktop, so semi-transparent areas fill with dark ghost pixels over time. The 3-frame erase cycle in `app.js` mitigates this but does not eliminate it. Full fix: disable xfwm4 compositing (`xfconf-query -c xfwm4 -p /general/use_compositing -s false`) and replace with `picom --backend glx --no-use-damage` (`--no-use-damage` forces full-surface redraws). See `lenzu_server/README.md` for complete steps.
-- `lenzu_server` must be started before `lenzu` (Phase 2 will fix this with auto-spawn)
+- `lenzu_server` must be started before `lenzu` (Phase 2 fixed this with auto-spawn)
 - Click-through not yet implemented (window intercepts mouse events)
+
+### Electron Overlay Issues
+- **Electron failed to install correctly**: Error `Electron failed to install correctly, please delete node_modules/electron and try installing again`.
+  - **Resolution**: Manually delete `lenzu_server/node_modules` and `lenzu_server/pnpm-lock.yaml`, then re-run `lenzu_server/scripts/setup.sh`. This ensures a clean reinstallation of Electron and its dependencies.
 
 ### API / Token Cost
 - Full lens image sent on every capture — no pre-filtering yet
@@ -122,12 +126,26 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 - **Secondary**: Debian/Ubuntu PPA
 - **Tertiary**: AppImage for universal Linux distribution
 
+### Installation (`scripts/install.sh`) — planned, not yet in repo
+
+End-user and “single command after clone” flows are not fully covered today. **What exists now** is developer bootstrap only:
+
+| Artifact | Purpose |
+|---|---|
+| `scripts/setup.sh` | APT packages + runs `lenzu_server/scripts/setup.sh` (Node, pnpm, Electron) |
+| `lenzu_server/scripts/setup.sh` | Node toolchain and `pnpm install` / Electron binary |
+| `scripts/run.sh` | `cargo build -p lenzu` and run the debug client (client auto-spawns the Electron HUD when enabled) |
+
+**Gap:** there is no `scripts/install.sh` yet — no release build to `~/.local/bin` (or `/usr/local`), no `.desktop` entry, and no documented layout for a relocatable install. The GTK client resolves `lenzu_server` relative to the `lenzu` crate at compile time (`../lenzu_server`); a real installer must either install both trees under a known prefix, set an environment variable, or change the client to resolve the HUD path at runtime (decision TBD when the script lands).
+
+**Planned add:** `scripts/install.sh` (or equivalent) should: optional `setup.sh`, `cargo build --release -p lenzu`, install the `lenzu` binary and ship `lenzu_server` beside it or under a fixed share path, update `PATH` / symlink, and optionally install a desktop file. Formal distribution for non-developers remains **Packaging** above (Flatpak first).
+
 ## Dependencies & Tools
 
 ### Must-Have (Linux)
 - `tesseract-ocr` (>=5.0) with `jpn_vert` traineddata
 - `libgtk-3-dev` (GTK3 >=3.24 — **not GTK4**)
-- `libwebkit2gtk-4.1-dev` (for `lenzu_server` / Tauri)
+- `libwebkit2gtk-4.1-dev` (optional — only if building legacy Tauri experiments in-repo; Electron HUD uses its own Chromium)
 - `pkg-config` and `build-essential`
 
 ### Nice-to-Have
@@ -154,6 +172,7 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 - [ ] **M7**: YOLOv8 pre-detection reduces token cost by 80-90% (Phase 4)
 - [ ] **M8**: Wayland support via portals
 - [ ] **M9**: Flatpak packaging
+- [ ] **M10**: `scripts/install.sh` (or equivalent) — release binary + `lenzu_server` layout, `PATH` / `.desktop`, runtime HUD path (see **Installation** above)
 
 ## Testing Strategy
 
