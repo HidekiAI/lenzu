@@ -14,8 +14,8 @@
 | Screen capture | `x11rb` — X11 root window `GetImage` (ZPixmap) |
 | OCR / Translation | OpenRouter API → `google/gemini-2.0-flash-001` (multimodal JSON) |
 | HTTP client | `reqwest` (blocking) |
-| Overlay HUD | `lenzu_server` — Tauri 2.x transparent window |
-| IPC | UDP loopback (default port 7331) |
+| Overlay HUD | `lenzu_server` — Electron transparent window |
+| IPC | UDP loopback (default port 7331; overridable via `overlay_udp_port` / `LENZU_OVERLAY_UDP_PORT`), JSON messages |
 | Config | `lenzu_config.json` — `serde_json`, `isolang` for language codes |
 
 ### Process architecture
@@ -25,14 +25,21 @@ lenzu (GTK3 client)
   │  Shift+Click → X11 capture → base64 PNG
   │  → OpenRouter API → Vec<TranslationResult>
   │  → format_for_overlay(results, render_mode)
-  └──UDP──► lenzu_server (Tauri 2.x)
-              transparent overlay window
-              UDP listener thread
-              emits "hud-text-changed" to frontend
-              app.js renders text
+  └──UDP JSON──► lenzu_server (Electron)
+                  transparent BrowserWindow (src/main.js)
+                  UDP listener → ipc to renderer
+                  renderer.js renders caption lines
 ```
 
-`lenzu` auto-spawns `lenzu_server` as a child process (`std::process::Child`), passing `--port` from config, and kills it on exit (ESC key and window close). This is complete as of Phase 2.
+`lenzu` auto-spawns `lenzu_server` as a child process (`std::process::Child`), sets `LENZU_OVERLAY_UDP_PORT` from `overlay_udp_port`, and kills it on exit (ESC key and window close). Phase 2 lifecycle; Phase 3 switched the HUD to Electron.
+
+### Installation and deployment
+
+| Mode | Mechanism |
+|---|---|
+| **Developer checkout** | `scripts/setup.sh` then `scripts/run.sh` or `cargo run -p lenzu`. No system install; HUD spawned via `npm run start` inside `lenzu_server` next to the `lenzu` crate (path derived from `CARGO_MANIFEST_DIR` at compile time). |
+| **`scripts/install.sh`** | **Not implemented.** Planned: release install to a user prefix (e.g. `~/.local/bin` + shared `lenzu_server` tree), `PATH`, optional `.desktop`; must define how the client finds `lenzu_server` when not running from a git tree (env var or install prefix). See **Installation** in `docs/planning.md`. |
+| **Distribution** | Long-term: Flatpak / PPA / AppImage (see `planning.md` **Packaging**). |
 
 ### `TranslationResult` (client.rs)
 
@@ -72,12 +79,9 @@ lenzu/                          ← Cargo workspace root
 │   ├── src/{main,capture,client,config,utils}.rs
 │   ├── tests/integration_test.rs
 │   └── lenzu_config.json             ← runtime config (not committed)
-└── lenzu_server/               ← Tauri overlay
+└── lenzu_server/               ← Electron overlay HUD
     ├── package.json
-    ├── src-tauri/              ← workspace member
-    │   ├── Cargo.toml          ← name = "lenzu_server"
-    │   └── src/main.rs         ← UDP listener + --port arg
-    └── ui/                     ← index.html, app.js, styles.css
+    └── src/                      ← main.js, preload.js, index.html, renderer.js, config.json
 ```
 
 ---
@@ -400,4 +404,5 @@ Notes on building and compiling the project including dependencies and platform-
 
 - **Windows (MinGW64)**: Use `mingw64` toolchain; install packages via pacman; enable `Media_Ocr` feature.
 - **Linux (Debian)**: Install `kakasi`, `tesseract-ocr`, and `leptonica` via apt; use cargo build commands.
+- **Linux install script**: There is no `scripts/install.sh` yet; developer workflow uses `scripts/setup.sh` and `cargo build`. When `install.sh` is added, it should be documented here (release profile, install prefix, HUD path resolution).
 - **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.

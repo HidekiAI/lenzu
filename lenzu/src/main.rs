@@ -7,14 +7,14 @@ use pangocairo;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-// Import modules
-mod capture;
-mod client;
-mod config;
-mod utils;
+use lenzu::capture;
+use lenzu::client;
+use lenzu::config;
+use lenzu::utils;
 
 const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
 
@@ -32,19 +32,37 @@ fn format_for_overlay(
             Romaji => r.romaji.clone().unwrap_or_else(|| r.original.clone()),
             All => {
                 let mut parts = vec![r.original.clone()];
-                if let Some(v) = &r.english  { parts.push(v.clone()); }
-                if let Some(v) = &r.furigana { parts.push(v.clone()); }
-                if let Some(v) = &r.romaji   { parts.push(v.clone()); }
+                if let Some(v) = &r.english {
+                    parts.push(v.clone());
+                }
+                if let Some(v) = &r.furigana {
+                    parts.push(v.clone());
+                }
+                if let Some(v) = &r.romaji {
+                    parts.push(v.clone());
+                }
                 parts.join("  |  ")
             }
             Debug => {
                 let mut parts = vec![r.original.clone()];
-                if let Some(v) = &r.english  { parts.push(format!("en: {}", v)); }
-                if let Some(v) = &r.furigana { parts.push(format!("furigana: {}", v)); }
-                if let Some(v) = &r.romaji   { parts.push(format!("romaji: {}", v)); }
-                if let Some(v) = &r.top_xy   { parts.push(format!("top: {}", v)); }
-                if let Some(v) = &r.bot_xy   { parts.push(format!("bot: {}", v)); }
-                if let Some(v) = &r.debug_info { parts.push(format!("debug: {}", v)); }
+                if let Some(v) = &r.english {
+                    parts.push(format!("en: {}", v));
+                }
+                if let Some(v) = &r.furigana {
+                    parts.push(format!("furigana: {}", v));
+                }
+                if let Some(v) = &r.romaji {
+                    parts.push(format!("romaji: {}", v));
+                }
+                if let Some(v) = &r.top_xy {
+                    parts.push(format!("top: {}", v));
+                }
+                if let Some(v) = &r.bot_xy {
+                    parts.push(format!("bot: {}", v));
+                }
+                if let Some(v) = &r.debug_info {
+                    parts.push(format!("debug: {}", v));
+                }
                 parts.join("\n")
             }
         })
@@ -55,7 +73,24 @@ fn format_for_overlay(
 fn send_to_overlay(text: &str, port: u16) {
     if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
         let addr = format!("127.0.0.1:{}", port);
-        let _ = socket.send_to(text.as_bytes(), addr);
+        let message = serde_json::json!({
+            "type": "message",
+            "text": text
+        });
+        let _ = socket.send_to(message.to_string().as_bytes(), addr);
+    }
+}
+
+/// Send a shutdown command to the server via UDP
+fn send_shutdown_command(port: u16) {
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let addr = format!("127.0.0.1:{}", port);
+        let message = serde_json::json!({
+            "type": "shutdown"
+        });
+        let _ = socket.send_to(message.to_string().as_bytes(), addr);
+        // Give the server a moment to process the shutdown command
+        let _ = std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
@@ -73,28 +108,45 @@ struct AppState {
     server_process: Option<std::process::Child>,
 }
 
-/// Locate and spawn `lenzu_server --port <N>`.
-/// Prefers a sibling binary (production install), falls back to PATH (dev).
-fn spawn_server(port: u16) -> Option<std::process::Child> {
-    let bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("lenzu_client")))
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| std::path::PathBuf::from("lenzu_client"));
+/// Path to `lenzu_server` next to the `lenzu` crate (repo layout).
+fn lenzu_server_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../lenzu_server")
+}
 
-    std::process::Command::new(&bin)
-        .arg("--port")
-        .arg(port.to_string())
+/// Spawn the Electron HUD (`lenzu_server`). UDP port is passed via `LENZU_OVERLAY_UDP_PORT`
+/// so it stays in sync with `overlay_udp_port` in `lenzu_config.json`.
+fn spawn_server(port: u16) -> Option<std::process::Child> {
+    let dir = lenzu_server_dir();
+    if !dir.is_dir() {
+        eprintln!(
+            "lenzu: lenzu_server not found at {} (expected Electron overlay package)",
+            dir.display()
+        );
+        return None;
+    }
+    std::process::Command::new("npm")
+        .args(["run", "start"])
+        .current_dir(&dir)
+        .env("LENZU_OVERLAY_UDP_PORT", port.to_string())
         .spawn()
-        .map_err(|e| eprintln!("lenzu: could not spawn lenzu_client ({:?}): {e}", bin))
+        .map_err(|e| {
+            eprintln!(
+                "lenzu: could not spawn Electron overlay (npm start in {}): {e}",
+                dir.display()
+            )
+        })
         .ok()
 }
 
 /// Kill the server child process and reap it.
-fn kill_server(server: &mut Option<std::process::Child>) {
+fn kill_server(server: &mut Option<std::process::Child>, config: &config::AppConfig) {
     if let Some(mut child) = server.take() {
+        // First send shutdown command via UDP
+        send_shutdown_command(config.overlay_udp_port);
+        // Then kill the process if it didn't exit
         let _ = child.kill();
         let _ = child.wait();
+        eprintln!("lenzu: Electron overlay terminated.");
     }
 }
 
@@ -152,7 +204,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_esc = state.clone();
     window.connect_key_press_event(move |_, event| {
         if event.keyval() == gdk::keys::constants::Escape {
-            kill_server(&mut state_esc.borrow_mut().server_process);
+            kill_server(&mut state_esc.borrow_mut().server_process, &cfg);
             gtk::main_quit();
         }
         glib::Propagation::Proceed
@@ -160,8 +212,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_del = state.clone();
     window.connect_delete_event(move |_, _| {
-        kill_server(&mut state_del.borrow_mut().server_process);
-        glib::Propagation::Proceed  // allow window close → GTK loop ends naturally
+        kill_server(&mut state_del.borrow_mut().server_process, &cfg);
+        glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
     let (tx, rx) = glib::MainContext::channel::<Result<Vec<client::TranslationResult>, String>>(

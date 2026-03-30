@@ -1,0 +1,14 @@
+{
+  "udpPort": 7331,
+  "position": "bottom-center",
+  "x": null,
+  "y": null,
+  "opacity": 0.85,
+  "fontSize": 24,
+  "maxLines": 5,
+  "textColor": "#FFFFFF",
+  "backgroundColor": "#00000066",
+  "width": 800,
+  "height": 200,
+  "displayDuration": 0
+}

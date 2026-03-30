@@ -62,7 +62,7 @@ impl Default for AppConfig {
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
             translate_extra_prompt:
-                "Each object must also include: '{OverlayRenderMode::Furigana}' (format: 漢字[かんじ]) and '{OverlayRenderMode::Romaji}'."
+                "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation."
                     .to_string(),
             overlay_render_mode: OverlayRenderMode::Furigana,
         }
