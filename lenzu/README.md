@@ -3,8 +3,8 @@
 Lenzu is a high-performance, real-time screen-capture and OCR utility written in Rust. It provides a "magnifying lens" that follows the mouse cursor, allowing the user to capture and translate text from any window (including browsers and hardware-accelerated apps) using a configurable LLM API (default: Gemini 2.0 Flash via OpenRouter).
 
 Lenzu is two processes:
-- **`lenzu`** (`lenzu_client`) — the GTK3 lens window; does capture, OCR, and manages the server lifecycle
-- **`lenzu_server`** — a transparent Tauri overlay window that renders the translated text on screen
+- **`lenzu`** — the GTK3 lens window; does capture, OCR, and manages the overlay lifecycle
+- **`lenzu_server`** — a transparent Electron overlay window that renders the translated text on screen
 
 `lenzu` auto-spawns `lenzu_server` on startup and kills it on exit. You only need to run one command.
 
@@ -25,7 +25,7 @@ Lenzu is two processes:
 
 ### 3. Overlay HUD (`lenzu_server`)
 
-- **Transparent Tauri window** pinned to the bottom of the screen — results appear as subtitles.
+- **Transparent Electron window** pinned to the bottom of the screen — results appear as subtitles.
 - **Configurable render mode**: show `english`, `furigana`, `romaji`, `original`, `all`, or `debug`.
 - **UDP IPC**: client sends text datagrams to server on loopback — fire-and-forget, no blocking.
 
@@ -41,7 +41,7 @@ Lenzu is two processes:
 - **UI Toolkit**: GTK 0.18 (gtk-rs), Cairo & Pango
 - **Capture**: x11rb (X11 Rust Bindings)
 - **AI Model**: `google/gemini-2.0-flash-001` (via OpenRouter, configurable)
-- **Overlay**: Tauri 2.x (`lenzu_server`), Vanilla JS/HTML/CSS
+- **Overlay**: Electron (`lenzu_server`), Vanilla JS/HTML/CSS
 - **Language Codes**: `isolang` (ISO 639-3)
 
 ## ⌨️ Controls
@@ -55,9 +55,12 @@ Lenzu is two processes:
 ### Prerequisites
 
 ```bash
-# System dependencies
-sudo apt install libwebkit2gtk-4.1-dev build-essential libssl-dev \
+# System dependencies (GTK3 + capture stack; WebKit only needed if you build old Tauri prototypes)
+sudo apt install build-essential pkg-config libgtk-3-dev libcairo2-dev libpango1.0-dev \
+                 libgdk-pixbuf-2.0-dev libx11-dev libssl-dev \
                  fonts-noto-cjk fonts-ipafont-gothic
+
+# Node.js for lenzu_server — use repo ./lenzu_server/scripts/setup.sh or install Node + run npm install in lenzu_server
 
 # API key
 export OPENROUTER_API_KEY=sk-your-key-here
@@ -72,35 +75,32 @@ cd /path/to/lenzu
 ./scripts/run.sh
 ```
 
-Or manually (after building `lenzu_server` once):
+Or manually:
 
 ```bash
-# Step 1 — build lenzu_server (only needed once, or after server changes)
-cd lenzu_server && npm install && npm run tauri build && cd ..
+# Install Electron app deps once
+cd lenzu_server && npm install && cd ..
 
-# Step 2 — copy server binary next to client binary so lenzu can find it
-cp lenzu_server/src-tauri/target/release/lenzu_server target/debug/
-
-# Step 3 — run (lenzu auto-spawns lenzu_server)
-cargo run -p lenzu_client
+# Run client — it spawns `npm run start` in lenzu_server when overlay_enabled is true
+cargo run -p lenzu
 ```
 
 ### Development mode (separate terminals)
 
-If you want `lenzu_server` hot-reloading its UI:
+To hack the HUD without the client spawning a second instance:
 
 ```bash
-# Terminal 1 — server with live UI
-cd lenzu_server && npm run tauri dev -- -- --port 7331
+# Terminal 1 — Electron overlay (port must match overlay_udp_port, default 7331)
+cd lenzu_server && LENZU_OVERLAY_UDP_PORT=7331 npm start
 
-# Terminal 2 — client (set overlay_enabled = false in lenzu_config.json
-#              so it doesn't try to spawn a second server)
-cargo run -p lenzu_client
+# Terminal 2 — client with overlay spawn disabled
+# Set "overlay_enabled": false in lenzu_config.json
+cargo run -p lenzu
 ```
 
 ## ⚙️ Configuration (`lenzu_config.json`)
 
-Optional file in the working directory. All fields have defaults if the file is absent or a field is omitted. This is the client-side config; the server has its own separate `hud_config.json`.
+Optional file in the working directory. All fields have defaults if the file is absent or a field is omitted. This is the client-side config; the Electron HUD reads `lenzu_server/src/config.json` for window styling and UDP bind defaults — when the client spawns the HUD it sets `LENZU_OVERLAY_UDP_PORT` so the port matches `overlay_udp_port`.
 
 ```json
 {
