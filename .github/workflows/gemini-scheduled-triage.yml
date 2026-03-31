@@ -11,7 +11,7 @@ on:
       - '.github/workflows/gemini-scheduled-triage.yml'
   push:
     branches:
-      - 'main'
+      - 'trunk'
       - 'release/**/*'
     paths:
       - '.github/workflows/gemini-scheduled-triage.yml'
