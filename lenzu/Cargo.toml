@@ -4,23 +4,92 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# UI and Screen Capture
-gtk = { version = "0.18", features = ["v3_24"] }
-gdk = { version = "0.18", features = ["v3_24"] }
-glib = "0.18"
-gdk-pixbuf = "0.18"
-cairo-rs = "0.18"
-pango = "0.18"
-pangocairo = "0.18"
-x11rb = "0.13"
+image = "0.25.1"     # NOTE: rusty-tesseract (currently) expects image v0.24.9
+imageproc = "0.24.0" # NOTE: imageproc relies implicitly on image, make sure they match! (current imageproc v0.24.0 relies on image 0.25.0)
+# NOTE: rusty-tesseract will only install correctly IF you have MinGW64 setup correctly! (very time consuming and what a waste of time!)
+rusty-tesseract = "1.1.10" # depends on thiserror and image
 
-# Networking and API
-reqwest = { version = "0.12", features = ["blocking", "json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+pkg-config = "0.3.30"
 
-# Utilities
-base64 = "0.22"
-image = { version = "0.25", default-features = false, features = ["png"] }
-arboard = "3.4"
-chrono = "0.4"
+anyhow = "1.0.82"
+reqwest = { version = "0.12.3", features = [
+    "json",
+    "gzip",
+    "blocking",
+    "rustls-tls",
+] }
+
+ab_glyph = "0.2.25" # this is a rewrite/replacement of rusttype (rusttype is no longer maintained)
+
+# TODO: Getting rid of winit and switch over to GTK4 so we can use cairo/pango for text rendering
+#winit = { version = "0.29.15", features = ["mint", "wayland", "x11", "rwh_06"] }
+
+futures = "0.3.30" # commonly fails on 'futures-impl'
+tokio = { version = "1.37.0", features = [
+    "test-util",
+    "time",
+    "fs",
+    "full",
+    "rt-multi-thread",
+    "macros",
+] }
+encoding_rs = { version = "0.8.34", features = [
+    "fast-kanji-encode",
+    "less-slow-kanji-encode",
+] }
+mecab = "0.1.6"
+async-channel = "2.2.1"
+
+# based on gtk version:
+#   $ pkg-config --modversion gtk4
+#   4.14.2
+gtk4 = { version = "0.8.1", features = ["v4_14"] }
+gdk4 = { version = "0.8.1", features = ["v4_14"] }
+glib = { version = "0.19.4", features = ["gio", "gio_ffi"] }    # hopefully, glib/gobject binding contains grpahene-sys as well
+once_cell = "1.19.0"
+zerocopy = { version = "0.7.32", features = ["alloc", "byteorder"] }
+#graphene-sys = "0.19.0" # graphene is part of glib gtk-rs-core
+#gdk-win32 = { git = "https://github.com/gtk-rs/gtk4-rs.git", package = "gdk4-win32" }
+
+[target.'cfg(windows)'.dependencies.gdk4-win32]
+version = "0.8.1"
+features = ["win32", "windows", "egl"]
+
+[target.'cfg(linux)'.dependencies.gdk4-wayland]
+version = "0.8.1"
+features = ["wayland-backend", "wayland-client", "egl"]
+
+[target.'cfg(linux)'.dependencies.gdk4-x11]
+version = "0.8.1"
+features = ["x11", "xlib", "egl"]
+
+# Until prototype is done, we'll allow Linux specific code
+[target.'cfg(linux)'.dependencies.x11]
+version = "^2.21.0"
+features = ["xlib"]
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.56.0"
+features = [
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    "Globalization",
+    "Win32_System_SystemServices",
+    "Foundation_Collections",
+]
+
+# Until prototype is done, we'll allow Windows specific code
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "^0.3.9", features = [
+    "winbase",
+    "windef",
+    "winsock2",
+    "namedpipeapi",
+    "winuser",
+    "everything",
+] }
+
+#[target.'cfg(windows)'.dependencies.windows-sys]
+#version = "0.52.0"
+#features = []
