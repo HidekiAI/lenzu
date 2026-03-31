@@ -165,14 +165,12 @@ impl CaptureTrait for CaptureX11 {
 }
 
 pub fn swap_red_blue(mut data: Vec<u8>) -> Vec<u8> {
-    for i in (0..data.len()).step_by(4) {
-        let b = data[i];
-        let r = data[i + 2];
-        data[i] = r;
-        data[i + 2] = b;
-        if i + 3 < data.len() {
-            data[i + 3] = 255; // Ensure alpha is opaque
-        }
+    for chunk in data.chunks_exact_mut(4) {
+        let b = chunk[0];
+        let r = chunk[2];
+        chunk[0] = r;
+        chunk[2] = b;
+        chunk[3] = 255;
     }
     data
 }
