@@ -1,8 +1,12 @@
 [workspace]
     resolver = "2"
     members = [
-        "lenzu", "prototypes/get_hwnd_win32_api", "prototypes/gtk4_dialogbox_test", "prototypes/gtk_gdk_test", "prototypes/kakasi-cli-test", "prototypes/kakasi-static-libs", "prototypes/mecab-test",
-        "prototypes/windows-rs/ocr"
-    , "prototypes/winit-test"]
+        "lenzu", 
+    "prototypes/gtk4_dialogbox_test", "prototypes/gtk_gdk_test", "prototypes/kakasi-cli-test", "prototypes/kakasi-static-libs", 
+    "prototypes/mecab-test",
+    "prototypes/x11-gtk3-lens-test",
+    "prototypes/jp_ocr_app",
+        "prototypes/winit-test"]
+
 
 
