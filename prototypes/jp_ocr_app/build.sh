@@ -9,10 +9,10 @@ mkdir -p assets
 mkdir -p tests/data
 
 echo "--- 2. RUNNING PIPELINE TESTS ---"
-cargo test --manifest-path prototypes/jp_ocr_app/Cargo.toml
+cargo test
 
 echo "--- 3. COMPILING RELEASE BINARY ---"
-cargo build --release --manifest-path prototypes/jp_ocr_app/Cargo.toml
+cargo build --release
 
 echo "------------------------------------------------"
 echo "BUILD SUCCESSFUL"
