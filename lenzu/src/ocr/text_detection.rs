@@ -1,9 +1,12 @@
+#[cfg(feature = "onnx")]
+use ndarray::Array4;
+#[cfg(feature = "onnx")]
+use ort::{inputs, Session};
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, GenericImageView};
-use ndarray::Array4;
-use ort::{inputs, Session};
 
 pub struct TextDetector {
+    #[cfg(feature = "onnx")]
     session: Session,
 }
 
@@ -28,7 +31,6 @@ impl TextDetector {
                 input_array[[0, 1, y as usize, x as usize]] = pixel[1] as f32 / 255.0;
                 input_array[[0, 2, y as usize, x as usize]] = pixel[2] as f32 / 255.0;
             }
-        }
 
         let outputs = self.session.run(inputs!["images" => input_array]?)?;
         let output = outputs["output0"].try_extract_tensor::<f32>()?;
