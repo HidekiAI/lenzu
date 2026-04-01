@@ -1,57 +1,85 @@
 # lenzu
 
-Desktop OCR lens — a transparent floating window that follows the mouse cursor, captures the region under it on demand, and sends it to an LLM API for OCR and translation. Results appear in a separate transparent overlay HUD (`lenzu_server`).
+Desktop lens (almost like desktop magnifier commonly found in accessibility application for the visually impaired users) which detects images via OFFLINE OCR to real-time analyze (possibly via OpenCV or neural network text detectors in the future) the small window where the mouse cursor hovers to convert kanji to hiragana (will not furigana) dynamically similar to Yomitan/Rikaichan/Rikaikun (and other browser extension for plain-TEXT).
 
-The key difference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
+Again, the key differences is that it is an OCR (optical character recognition) from images, NOT plain (UTF8) TEXT. For UTF8 based texts, use the aforementioned (reliable and proven to work) tool such as [Yomitan](https://github.com/themoeway/yomitan).
 
-> **Architecture note**: The Windows/winit/GTK4 experiments are archived in `prototypes/`. The active implementation uses **GTK3** (`gtk-rs` 0.18) on Linux/X11. GTK4 was evaluated and abandoned due to integration complexity — GTK3 provides everything needed and is simpler to build against. See [Technical Design](./docs/technical-design.md) for current architecture.
+> **Note**: The legacy Windows-first implementation (built around `windows-rs` and `winit`) is being deprecated in favor of a new cross-platform (Linux-primary) architecture based on GTK4 and X11/Wayland. For full technical details on the V2 architecture, please see the [Technical Design Document](./docs/technical-design.md). (The original OCR research and engine evaluations found in [TDD OCR](./docs/technical-design.OCR.md) are now out-of-date and deprecated).
 
-## Architecture (Current)
+## Features & UI Design
 
-```
-lenzu (GTK3 client)               lenzu_server (Tauri 2.x)
-  floating lens window     UDP     transparent overlay HUD
-  X11 root capture       ──────►  renders translated text
-  OpenRouter/Gemini API            ArrowUp/Down moves position
-  manages server lifecycle
-```
+### Lens Interaction Mode
 
-1. **Capture**: `x11rb` captures the X11 root window directly — bypasses GPU-accelerated and hardware-rendered windows correctly.
-2. **OCR/Translation**: Image sent as base64 PNG to OpenRouter (Gemini 2.0 Flash). Returns structured JSON with `original`, `furigana`, `romaji`, `english`, bounding boxes.
-3. **Overlay**: Formatted text sent via UDP loopback to `lenzu_server`, a Tauri 2.x transparent window pinned to screen edge.
+- **Manual Region Selection**: Users move a transparent lens window over text regions. On click, it captures only the lens area (+5px padding), reducing the processing area by ~95% compared to full-screen capture.
+- **Hotkeys**:
+  - **Right-click**: Standard furigana/romaji conversion.
+  - **Shift+Right-click**: Direct translation to configured language (default: English).
+  - **Ctrl+Right-Click**: Freeze current OCR result.
+  - **Mouse Wheel** (or PgUp|PgDn): Adjust lens magnification (1x-4x).
+  - **Tab**: Scan entire desktop for Japanese text and save discovered text-rectangles to local buffer (`/dev/shm/`).
+
+## Architecture (V2)
+
+Lenzu is moving towards a modern, multi-layered approach to Japanese text extraction, separating text *detection* from text *recognition*.
+
+1. **Capture Layer**:
+   - Built on `x11rb`, `gdk4-x11`/`gdk4-wayland`, and `cairo-rs`.
+   - **Phase I**: Fullscreen capture via GTK4 Window.
+   - **Phase II**: Smart region capture with compositor integration for minimal latency.
+2. **Processing Layer (Detection -> Recognition)**:
+   - **Text Detection**: Lightweight models (EAST, CRAFT, DBNet, or YOLOv8-tiny) detect text regions (speech bubbles, curved text).
+   - **Text Recognition**: Extracted regions are passed to an OCR engine (Tesseract, Windows Media OCR, or Cloud APIs).
+   - **Benefit**: Reduces the OCR processing area by 80-90%, lowering token costs for cloud services and improving offline performance.
+3. **Output Layer**:
+   - Text rendering with furigana via Kakasi.
+   - History tracking and Clipboard integration.
+   - Translation pipeline (OCR → Kakasi → Dictionary lookup → Translation API).
+
+![Hybrid Architecture](assets/architecture.png)
 
 ## Hardware and Privacy
 
-- **Cloud OCR**: Images are sent to OpenRouter (Gemini) by default. Set `overlay_enabled = false` and/or use a local LLM endpoint to keep everything on-device.
-- **GPU Acceleration**: Optional YOLOv8n pre-detection (model in repo) to crop text regions before API call, reducing token cost ~80%.
+- **Offline-First**: Rationale for prioritizing offline functionality is for performance and privacy. Images are never transmitted off-device unless the user explicitly opts for premium/cloud services.
+- **CPU-First Design**: The full pipeline (detection + OCR) works entirely on the CPU, ensuring compatibility with any hardware.
+- **GPU Acceleration**: Optional integration of YOLOv8-tiny models (via ONNX Runtime) for detection acceleration on systems with compatible GPUs.
 
 ## Libraries & Dependencies
 
-- [`gtk` 0.18](https://crates.io/crates/gtk) — GTK3 bindings (gtk-rs). **GTK3, not GTK4.**
-- [`x11rb`](https://crates.io/crates/x11rb) — X11 protocol (screen capture)
-- [`cairo-rs`](https://crates.io/crates/cairo-rs) — 2D drawing
-- [`pango`](https://crates.io/crates/pango) / [`pangocairo`](https://crates.io/crates/pangocairo) — text layout and CJK rendering
-- [`reqwest`](https://crates.io/crates/reqwest) — HTTP client (OpenRouter API)
-- [`isolang`](https://crates.io/crates/isolang) — ISO 639-3 language codes
-- Tauri 2.x (`lenzu_server`) — transparent overlay window
+- **Rust Implementation**:
+  - [`x11rb`](https://crates.io/crates/x11rb) - Modern X11 protocol implementation.
+  - [`gdk4-x11`](https://crates.io/crates/gdk4-x11) / [`gdk4-wayland`](https://crates.io/crates/gdk4-wayland) - Multi-monitor handling.
+  - [`cairo-rs`](https://crates.io/crates/cairo-rs) - Surface rendering.
+- **OCR & NLP**:
+  - **kakasi**: Japanese text conversion from kanji to hiragana.
+  - **tesseract** / **leptonica**: Open-source OCR engine (requires `jpn_vert.traineddata`).
+  - **windows-rs**: For legacy Windows Media OCR integration.
 
-## Build & Run
+## Build/Compile Notes
 
-```bash
-# 1. Install system dependencies
-./scripts/setup.sh
+- **Linux (Debian/Ubuntu)**: 
+  - Install dependencies: `apt install kakasi tesseract-ocr leptonica`
+  - Build via Cargo.
+- **Windows (MinGW64)**: 
+  - Use `mingw64` toolchain. Install packages via `pacman`. 
+  - Enable `Media_Ocr` feature in Cargo if compiling the legacy OCR module.
+- **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.
 
-# 2. Set API key
-export OPENROUTER_API_KEY=sk-your-key-here
+## Sample outputs and results
 
-# 3. Build and run (builds lenzu_server on first run)
-./scripts/run.sh
-```
+*Note: The detailed performance benchmarks and legacy visual comparisons in the deprecated [TDD OCR](./docs/technical-design.OCR.md) are out-of-date.*
 
-See [`lenzu/README.md`](lenzu/README.md) for full configuration reference and controls.
+![running demo](assets/demo.gif)
+
+Please note that the UIX is currently being revamped using GTK4.
+
+![kakasi furigana](assets/ubunchu01_02.furigana.png)
 
 ## TODO
 
-- YOLOv8n pre-detection to crop text regions before API call (reduce token cost)
-- Wayland support via xdg-desktop-portal
-- Multi-monitor capture at non-zero offsets
+- Transition completely from `winit` to GTK4/gdk4 for window management.
+- Implement EAST/CRAFT or YOLOv8-tiny for the text detection phase.
+- Train manga-109s dataset for Tesseract to improve Linux OCR accuracy.
+- Add online OCR fallback option via OAuth2 (Google Cloud Vision).
+- Develop image preprocessing pipeline (grayscale, denoise, contrast adjustment).
+- Integrate dictionary lookup for enhanced translation capabilities.
+- Replace the fake kakasi crate with the official version.

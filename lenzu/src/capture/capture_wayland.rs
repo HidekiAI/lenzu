@@ -1,14 +1,6 @@
-use super::capture_traits::{CaptureRect, CaptureTrait, CursorData};
-use anyhow::{anyhow, Result};
-use gdk::prelude::*;
+use super::capture_traits::{CaptureRect, CaptureTrait};
 
-/// Wayland capture implementation using xdg-desktop-portal.
-/// Note: Wayland does not allow direct screen capture for security reasons.
-/// This implementation will eventually use the ScreenCast portal.
-pub struct CaptureWayland {
-    pub cursor_data: CursorData,
-    pub window: Option<glib::WeakRef<gtk::ApplicationWindow>>,
-}
+pub struct CaptureWayland {}
 
 impl CaptureTrait for CaptureWayland {
     fn new() -> Self {
@@ -18,27 +10,12 @@ impl CaptureTrait for CaptureWayland {
         }
     }
 
-    fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool {
-        self.window = Some(app_window_gtk.downgrade());
-        // TODO: Initialize portal session here
-        true
+    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool {
+        todo!()
     }
 
     fn update(&mut self) {
-        if let Some(window) = self.window.as_ref().and_then(|w| w.upgrade()) {
-            let display = window.get_display();
-            // Note: On Wayland, global pointer position is not directly accessible.
-            // We might need to use portal or rely on window-relative coordinates.
-            
-            // For now, use GDK if it provides anything (might be relative to window)
-            if let Some(seat) = display.default_seat() {
-                if let Some(pointer) = seat.pointer() {
-                    let (pos_x, pos_y) = pointer.get_position();
-                    self.cursor_data.x = pos_x as i32;
-                    self.cursor_data.y = pos_y as i32;
-                }
-            }
-        }
+        todo!()
     }
 
     fn capture(
