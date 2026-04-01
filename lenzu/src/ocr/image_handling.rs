@@ -11,17 +11,9 @@ use std::boxed::Box;
 const DEFAULT_FONT_SIZE: f32 = 32.0;
 
 // Embedded resources: fonts as constant (data pool)
-const FONT_DATA: &[u8] = if cfg!(target_os = "windows") {
-    include_bytes!("..\\..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Regular.ttf")
-} else {
-    include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Regular.ttf")
-};
+const FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Regular.ttf");
 
-const FONT_DATA_BOLD: &[u8] = if cfg!(target_os = "windows") {
-    include_bytes!("..\\..\\..\\assets\\fonts\\Noto_Sans_JP\\static\\NotoSansJP-Bold.ttf")
-} else {
-    include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Bold.ttf")
-};
+const FONT_DATA_BOLD: &[u8] = include_bytes!("../../../assets/fonts/Noto_Sans_JP/static/NotoSansJP-Bold.ttf");
 
 #[derive(Debug, Clone)]
 pub struct OCRImage {

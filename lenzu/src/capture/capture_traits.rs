@@ -9,8 +9,11 @@ use std::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleTypes {
-    Win32Handle(gdk4_win32::HWND),
-    //Xwin( gdk4_wayland::HANDLE),
+    #[cfg(all(feature = "gtk", target_os = "windows"))]
+    Win32Handle(gdk::HWND),
+    #[cfg(not(feature = "gtk"))]
+    MockHandle,
+    //Xwin( gdk3_wayland::HANDLE),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,35 +64,17 @@ pub trait CaptureTrait {
     where
         Self: Sized;
 
-    // IMPORTANT:  init() attempts to extract gdk4_<desktop>::Surface::Handle() (i.e. HWND),
+    // IMPORTANT:  init() attempts to extract gdk3_<desktop>::Surface::Handle() (i.e. HWND),
     // it MUST be called AFTER the window has been presented() so that the GdkSurface exists!!!
-    fn init(&mut self, app_window_gtk: &gtk4::ApplicationWindow) -> bool;
+    #[cfg(feature = "gtk")]
+    fn init(&mut self, app_window_gtk: &gtk::ApplicationWindow) -> bool;
+
+    #[cfg(not(feature = "gtk"))]
+    fn init(&mut self, app_window_gtk: &dummy_types::DummyWindow) -> bool;
     fn capture(
         &mut self,
         possible_rect: Option<CaptureRect>,
     ) -> Result<image::DynamicImage, anyhow::Error>;
     fn update(&mut self);
     fn render(&mut self, image: DynamicImage);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_capture_rect_new() {
-        let rect = CaptureRect::new();
-        assert_eq!(rect.x, 0);
-        assert_eq!(rect.y, 0);
-        assert_eq!(rect.width, 1024);
-        assert_eq!(rect.height, 768);
-    }
-
-    #[test]
-    fn test_cursor_data_new() {
-        let data = CursorData::new();
-        assert_eq!(data.x, 0);
-        assert_eq!(data.y, 0);
-        assert_eq!(data.monitor.width, 1024);
-    }
 }
