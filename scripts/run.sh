@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(git rev-parse --show-toplevel)" && pwd)"
 CLIENT_BINARY="$REPO_ROOT/target/debug/lenzu"
 
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
