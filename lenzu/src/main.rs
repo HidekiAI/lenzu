@@ -78,11 +78,13 @@ fn send_to_overlay(text: &str, port: u16) {
             "type": "message",
             "text": text
         });
-        // Log the message being sent
+        // Log the message being sent (JSON payload)
         eprintln!(
             "[UDP] About to send message to port {}: {:?}",
             port, message
         );
+        // Log the actual overlay text (original/furigana/etc.)
+        eprintln!("[HUD] Sending overlay text: {}", text);
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
         eprintln!("[UDP] Sent message to port {}: {}", port, text);
     }
