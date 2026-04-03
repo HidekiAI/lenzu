@@ -21,8 +21,8 @@ pub struct TranslationResult {
     pub furigana: Option<String>,
     pub romaji: Option<String>,
     pub english: Option<String>,
-    pub top_xy: Option<String>,  // upper-left bounding box corner
-    pub bot_xy: Option<String>,  // lower-right bounding box corner
+    pub top_xy: Option<String>, // upper-left bounding box corner
+    pub bot_xy: Option<String>, // lower-right bounding box corner
     pub debug_info: Option<String>,
 }
 
@@ -99,17 +99,18 @@ impl OcrClient {
 
         let status = res.status();
         let raw_response = res.text()?;
-        self.log_to_history("RAW_API_RESPONSE", &raw_response);
+        self.log_to_history("RAW_API_RESPONSE", &raw_response.trim());
 
         if !status.is_success() {
             let snippet: String = raw_response.chars().take(800).collect();
             return Err(format!("OpenRouter HTTP {} — {}", status, snippet).into());
         }
 
-        let response_data: OpenRouterResponse = serde_json::from_str(&raw_response).map_err(|e| {
-            let snippet: String = raw_response.chars().take(400).collect();
-            format!("Invalid API JSON ({}): {}", e, snippet)
-        })?;
+        let response_data: OpenRouterResponse =
+            serde_json::from_str(&raw_response).map_err(|e| {
+                let snippet: String = raw_response.chars().take(400).collect();
+                format!("Invalid API JSON ({}): {}", e, snippet)
+            })?;
 
         let content_value = &response_data
             .choices

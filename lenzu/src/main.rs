@@ -78,6 +78,11 @@ fn send_to_overlay(text: &str, port: u16) {
             "type": "message",
             "text": text
         });
+        // Log the message being sent
+        eprintln!(
+            "[UDP] About to send message to port {}: {:?}",
+            port, message
+        );
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
         eprintln!("[UDP] Sent message to port {}: {}", port, text);
     }
@@ -90,6 +95,11 @@ fn send_shutdown_command(port: u16) {
         let message = serde_json::json!({
             "type": "shutdown"
         });
+        // Log the shutdown command being sent
+        eprintln!(
+            "[UDP] About to send shutdown command to port {}: {:?}",
+            port, message
+        );
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
         // Give the server a moment to process the shutdown command
         eprintln!("[UDP] Sent shutdown command to port {}", port);
@@ -132,6 +142,8 @@ fn spawn_server(port: u16) -> Option<std::process::Child> {
         .args(["electron", "."])
         .current_dir(&dir)
         .env("LENZU_OVERLAY_UDP_PORT", port.to_string())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .map_err(|e| {
             eprintln!(

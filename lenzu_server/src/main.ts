@@ -4,6 +4,7 @@ import * as dgram from "dgram";
 import { loadConfig, DEFAULT_CONFIG, type HudConfig } from "./config";
 import { computePosition, type WindowPosition } from "./window-position";
 
+console.log("lenzu_server starting");
 // Required for transparent windows on X11
 app.commandLine.appendSwitch("enable-transparent-visuals");
 
