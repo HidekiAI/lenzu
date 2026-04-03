@@ -7,6 +7,7 @@ use pangocairo;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -78,6 +79,7 @@ fn send_to_overlay(text: &str, port: u16) {
             "text": text
         });
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
+        eprintln!("[UDP] Sent message to port {}: {}", port, text);
     }
 }
 
@@ -90,6 +92,7 @@ fn send_shutdown_command(port: u16) {
         });
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
         // Give the server a moment to process the shutdown command
+        eprintln!("[UDP] Sent shutdown command to port {}", port);
         let _ = std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
@@ -124,14 +127,15 @@ fn spawn_server(port: u16) -> Option<std::process::Child> {
         );
         return None;
     }
-    std::process::Command::new("npm")
-        .args(["run", "start"])
+    // Spawn Electron directly using npx to avoid intermediate npm process
+    std::process::Command::new("npx")
+        .args(["electron", "."])
         .current_dir(&dir)
         .env("LENZU_OVERLAY_UDP_PORT", port.to_string())
         .spawn()
         .map_err(|e| {
             eprintln!(
-                "lenzu: could not spawn Electron overlay (npm start in {}): {e}",
+                "lenzu: could not spawn Electron overlay (npx electron in {}): {e}",
                 dir.display()
             )
         })
@@ -143,9 +147,16 @@ fn kill_server(server: &mut Option<std::process::Child>, config: &config::AppCon
     if let Some(mut child) = server.take() {
         // First send shutdown command via UDP
         send_shutdown_command(config.overlay_udp_port);
-        // Then kill the process if it didn't exit
-        let _ = child.kill();
-        let _ = child.wait();
+        // Give the server time to process shutdown command
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Force kill the entire process group (Electron spawns child processes)
+        // Negative PID means kill the process group
+        let id = child.id() as i32;
+        unsafe {
+            libc::kill(-id, libc::SIGKILL); // Kill process group
+        }
+        // Try to reap the process, but don't block if it's already gone
+        let _ = child.try_wait();
         eprintln!("lenzu: Electron overlay terminated.");
     }
 }
@@ -403,6 +414,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s_conf.lens_size as u32,
                 ) {
                     let rgb = utils::raw_to_rgb(&raw);
+                    // Save debug image for inspection
+                    utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
                     let b64 = utils::encode_to_base64(
                         &rgb,
                         s_conf.lens_size as u32,

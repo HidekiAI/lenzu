@@ -2984,6 +2984,7 @@ dependencies = [
  "gtk",
  "image 0.25.10",
  "isolang",
+ "libc",
  "pango 0.18.3",
  "pangocairo",
  "reqwest 0.12.28",

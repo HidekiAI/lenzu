@@ -21,6 +21,7 @@ obj/
 .config/
 .local/
 .gemini/
+.claude/
 
 *.v*proj.user
 *.zip
