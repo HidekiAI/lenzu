@@ -358,11 +358,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .append(true)
                     .open(HISTORY_PATH)
                 {
+                    let trimmed_text = combined_english.trim();
                     let _ = writeln!(
                         f,
                         "[{}] {}",
                         chrono::Local::now().format("%H:%M:%S"),
-                        combined_english
+                        trimmed_text
                     );
                 }
             }

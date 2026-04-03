@@ -18,4 +18,4 @@ cd "$REPO_ROOT"
 cargo build -p lenzu
 
 echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
-exec "$CLIENT_BINARY"
+exec "$CLIENT_BINARY" 2>&1
