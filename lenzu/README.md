@@ -55,7 +55,7 @@ Lenzu is two processes:
 ### Prerequisites
 
 ```bash
-# System dependencies (GTK3 + capture stack; WebKit only needed if you build old Tauri prototypes)
+# System dependencies (GTK3 + capture stack; no WebKit needed — Electron bundles its own Chromium)
 sudo apt install build-essential pkg-config libgtk-3-dev libcairo2-dev libpango1.0-dev \
                  libgdk-pixbuf-2.0-dev libx11-dev libssl-dev \
                  fonts-noto-cjk fonts-ipafont-gothic

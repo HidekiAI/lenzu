@@ -23,8 +23,6 @@ sudo apt install -y \
     libx11-dev \
     libxcb1-dev \
     libssl-dev \
-    libwebkit2gtk-4.1-dev \
-    libjavascriptcoregtk-4.1-dev \
     libgtk-4-dev \
     libgraphene-1.0-dev \
     fonts-noto-cjk \
