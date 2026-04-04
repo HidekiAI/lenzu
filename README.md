@@ -4,6 +4,8 @@ Desktop OCR lens — a transparent floating window that follows the mouse cursor
 
 The key difference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
 
+![beta demo](docs/lenzu-beta-demo.gif)
+
 > **Architecture note**: The Windows/winit/GTK4 experiments are archived in `prototypes/`. The active implementation uses **GTK3** (`gtk-rs` 0.18) on Linux/X11. GTK4 was evaluated and abandoned due to integration complexity — GTK3 provides everything needed and is simpler to build against. See [Technical Design](./docs/technical-design.md) for current architecture.
 
 ## Architecture (Current)
