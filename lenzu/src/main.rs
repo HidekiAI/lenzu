@@ -351,18 +351,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send_to_overlay(&text, s.config.overlay_udp_port);
                 }
 
-                if let Ok(mut f) = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(HISTORY_PATH)
-                {
-                    let trimmed_text = combined_english.trim();
-                    let _ = writeln!(
-                        f,
-                        "[{}] {}",
-                        chrono::Local::now().format("%H:%M:%S"),
-                        trimmed_text
-                    );
+                let trimmed_text = combined_english.trim();
+                if !trimmed_text.is_empty() {
+                    if let Ok(mut f) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(HISTORY_PATH)
+                    {
+                        let _ = writeln!(
+                            f,
+                            "[{}] {}",
+                            chrono::Local::now().format("%H:%M:%S"),
+                            trimmed_text
+                        );
+                    } else {
+                        eprintln!("[history] failed to open {}", HISTORY_PATH);
+                    }
                 }
             }
             Err(e) => s.status = format!("API Error: {}", e),
