@@ -8,6 +8,12 @@
 >
 > This directory is kept for historical reference only. Do not use it.
 
+## Historical reference only
+
+> The remainder of this document is preserved solely as archival reference for the deprecated Tauri/WebKit2GTK overlay.
+> Do **not** use the configuration, compositor, or build steps below for current development or deployment.
+> Use [`../lenzu_server`](../lenzu_server) instead.
+
 ## Configuration (`hud_config.json`)
 
 Optional file in this directory. All fields have defaults.
