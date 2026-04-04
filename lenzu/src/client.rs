@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
 
-const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
+const API_DEBUG_PATH: &str = "/dev/shm/api_debug.txt";
 
 pub struct OcrClient {
     api_key: String,
@@ -52,22 +52,6 @@ impl OcrClient {
         }
     }
 
-    fn log_to_history(&self, tag: &str, data: &str) {
-        if let Ok(mut f) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(HISTORY_PATH)
-        {
-            let _ = writeln!(
-                f,
-                "[{}] [{}] {}",
-                Local::now().format("%H:%M:%S"),
-                tag,
-                data
-            );
-        }
-    }
-
     fn generate_payload(&self, b64: &str) -> Value {
         json!({
             "model": self.model,
@@ -99,7 +83,10 @@ impl OcrClient {
 
         let status = res.status();
         let raw_response = res.text()?;
-        self.log_to_history("RAW_API_RESPONSE", &raw_response);
+        // Write raw API JSON to a separate debug file — not the user-facing history
+        if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
+            let _ = writeln!(f, "[{}] {}", Local::now().format("%H:%M:%S"), raw_response.trim());
+        }
 
         if !status.is_success() {
             let snippet: String = raw_response.chars().take(800).collect();

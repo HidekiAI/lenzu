@@ -93,7 +93,7 @@ app.whenReady().then(() => {
     const text = msg.toString().trim();
     if (!text) return;
     console.log('[UDP] Received:', text.substring(0, 200) + (text.length > 200 ? '...' : ''));
-    // Check for JSON command (shutdown, etc.) before treating as display text
+    // Parse JSON commands; fall back to plain-text display
     try {
       const cmd = JSON.parse(text);
       if (cmd.type === 'shutdown') {
@@ -103,8 +103,15 @@ app.whenReady().then(() => {
         app.quit();
         return;
       }
+      if (cmd.type === 'message' && typeof cmd.text === 'string') {
+        // Extract inner text from the JSON envelope and display it
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('hud-text-changed', cmd.text);
+        }
+        return;
+      }
     } catch {
-      // Not JSON — fall through and treat as plain display text
+      // Not JSON — treat as plain text (backward compat)
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('hud-text-changed', text);
