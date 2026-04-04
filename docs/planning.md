@@ -8,7 +8,7 @@
 - **Overlay HUD**: Separate Electron process (`lenzu_server`) — transparent window, UDP IPC
 - **Interpreter**: Removed (was Kakasi); translation now handled entirely by the LLM
 - **Config**: `lenzu_config.json` with `isolang` language codes and `OverlayRenderMode` enum
-- **Workspace**: Cargo workspace at repo root; member: `lenzu` (client); `lenzu_server` is a separate Node/Electron project
+- **Workspace**: Cargo workspace at repo root; members: `lenzu` (client) and prototypes; `lenzu_server` is a separate Node/Electron project
 
 ## Vision
 Make **Linux the primary platform** with a robust, performant OCR lens that works across Wayland and X11, using open-source tools while maintaining the offline-first, privacy-respecting design.
