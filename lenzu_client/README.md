@@ -1,18 +1,23 @@
-# lenzu_server
+# lenzu_client (DEPRECATED — Tauri/WebKit2GTK overlay)
 
-Transparent desktop overlay HUD for the [Lenzu](../lenzu) OCR lens. Receives text via UDP and renders it in a translucent Tauri window pinned to the bottom of the screen.
+> **This directory is deprecated and no longer used.**
+>
+> The Tauri + WebKit2GTK overlay was abandoned because WebKit2GTK does not correctly composite ARGB windows on X11: alpha pixels vacated by old content are not cleared on the X11 surface, causing "ghost text" accumulation on every text update. Multiple workarounds (near-zero body background, body-background toggle, synthetic X11 Expose events) were attempted but none fully eliminated the artefact under all timing conditions.
+>
+> The active overlay is [`../lenzu_server`](../lenzu_server), which uses **Electron (Chromium)**. Chromium correctly composites ARGB windows when a compositor is running and requires no repaint workarounds.
+>
+> This directory is kept for historical reference only. Do not use it.
 
-Part of the Lenzu workspace. In normal use `lenzu` (the client) will spawn and kill this process automatically (Phase 2). For now it must be started separately.
+## Historical reference only
 
-## Running standalone
+> The remainder of this document is preserved solely as archival reference for the deprecated Tauri/WebKit2GTK overlay.
+> Do **not** use the configuration, compositor, or build steps below for current development or deployment.
+> Use [`../lenzu_server`](../lenzu_server) instead.
+## Historical reference only
 
-```bash
-cd lenzu_server
-npm install          # first time only — installs @tauri-apps/cli
-npm run tauri dev -- -- --port 7331
-```
-
-The `--port` argument overrides `hud_config.json`. Use the same port as `overlay_udp_port` in `lenzu/lenzu_config.json`.
+> The remainder of this document is preserved solely as archival reference for the deprecated Tauri/WebKit2GTK overlay.
+> Do **not** use the configuration, compositor, or build steps below for current development or deployment.
+> Use [`../lenzu_server`](../lenzu_server) instead.
 
 ## Configuration (`hud_config.json`)
 
