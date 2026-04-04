@@ -5,8 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "build": "node build.mjs",
-    "start": "electron .",
-    "start:x11": "electron --enable-transparent-visuals .",
+    "start": "GTK_CSD=0 node_modules/.bin/electron dist/main.js",
     "test:send": "node test_sender.js"
   },
   "keywords": [
@@ -21,15 +20,16 @@
   ],
   "author": "Hideki A. Ikeda",
   "license": "MIT",
+  "//": "electron is hard-pinned to 35.x — Electron 36-41 has a regression on Linux X11 where transparent:true renders as opaque white. See src/main.ts version guard. Do NOT upgrade until confirmed fixed upstream.",
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild"
-    ]
+    "onlyBuiltDependencies": ["electron", "esbuild"],
+    "overrides": {
+      "electron": "35.7.5"
+    }
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "electron": "^41.1.0",
+    "electron": "35.7.5",
     "esbuild": "^0.25.0",
     "vitest": "^3.0.0"
   }
