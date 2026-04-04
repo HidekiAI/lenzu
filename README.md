@@ -9,7 +9,7 @@ The key difference from browser extensions like Yomitan/Rikaichan: this operates
 ## Architecture (Current)
 
 ```
-lenzu (GTK3 client)               lenzu_server (Tauri 2.x)
+lenzu (GTK3 client)               lenzu_server (Electron)
   floating lens window     UDP     transparent overlay HUD
   X11 root capture       ──────►  renders translated text
   OpenRouter/Gemini API            ArrowUp/Down moves position
@@ -18,7 +18,7 @@ lenzu (GTK3 client)               lenzu_server (Tauri 2.x)
 
 1. **Capture**: `x11rb` captures the X11 root window directly — bypasses GPU-accelerated and hardware-rendered windows correctly.
 2. **OCR/Translation**: Image sent as base64 PNG to OpenRouter (Gemini 2.0 Flash). Returns structured JSON with `original`, `furigana`, `romaji`, `english`, bounding boxes.
-3. **Overlay**: Formatted text sent via UDP loopback to `lenzu_server`, a Tauri 2.x transparent window pinned to screen edge.
+3. **Overlay**: Formatted text sent via UDP loopback to `lenzu_server`, an Electron transparent window pinned to screen edge.
 
 ## Hardware and Privacy
 
@@ -33,7 +33,7 @@ lenzu (GTK3 client)               lenzu_server (Tauri 2.x)
 - [`pango`](https://crates.io/crates/pango) / [`pangocairo`](https://crates.io/crates/pangocairo) — text layout and CJK rendering
 - [`reqwest`](https://crates.io/crates/reqwest) — HTTP client (OpenRouter API)
 - [`isolang`](https://crates.io/crates/isolang) — ISO 639-3 language codes
-- Tauri 2.x (`lenzu_server`) — transparent overlay window
+- Electron (`lenzu_server`) — transparent overlay window
 
 ## Build & Run
 

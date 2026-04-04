@@ -186,6 +186,7 @@ Only pure modules are unit-tested. Electron-bound code (`main.ts`, `preload.ts`,
 ## 11. Known limitations
 
 - **X11 only.** Wayland compositors do not implement the same ARGB visual protocol. `--enable-transparent-visuals` has no effect under XWayland. The app should still launch but the background will be opaque.
+- **White titlebar strip (Electron 41+ on X11).** Despite `frame: false`, Electron 41+ can show a thin white strip at the top of the window on some X11 compositors. Mitigated by setting `type: 'toolbar'` and `titleBarStyle: 'hidden'` on `BrowserWindow`, which sets the `_NET_WM_WINDOW_TYPE_TOOLBAR` hint to suppress window-manager decorations. This reduces the strip significantly but may not fully eliminate it on all compositor/WM combinations.
 - **Compositor required.** Without an ARGB compositor the window background is black.
 - **Single window.** Only the primary display's work area is used to size the window. The window is repositioned to whatever display the cursor is on at the time an arrow key is pressed.
 - **No hot reload.** `hud_config.json` is read once at startup. The app must be restarted to pick up config changes.
