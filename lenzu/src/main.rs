@@ -79,7 +79,13 @@ fn send_to_overlay(text: &str, port: u16) {
             "type": "message",
             "text": text
         });
+        eprintln!(
+            "[UDP] About to send message to port {}: {:?}",
+            port, message
+        );
+        eprintln!("[HUD] Sending overlay text: {}", text);
         let _ = socket.send_to(message.to_string().as_bytes(), addr);
+        eprintln!("[UDP] Sent message to port {}: {}", port, text);
     }
 }
 
@@ -341,6 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if s.config.overlay_enabled {
                     let text = format_for_overlay(&results, &s.config.overlay_render_mode);
+                    eprintln!("[HUD] Overlay enabled – prepared text: {}", text);
                     send_to_overlay(&text, s.config.overlay_udp_port);
                 }
 
