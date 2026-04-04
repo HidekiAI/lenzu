@@ -7,8 +7,10 @@ use pangocairo;
 use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::rc::Rc;
+extern crate libc;
 use std::time::{Duration, Instant};
 
 use lenzu::capture;
@@ -124,14 +126,19 @@ fn spawn_server(port: u16) -> Option<std::process::Child> {
         );
         return None;
     }
-    std::process::Command::new("npm")
-        .args(["run", "start"])
+    // Launch Electron directly (not via npm/pnpm) so the child PID is the
+    // actual Electron process — required for process-group kill on exit.
+    // GTK_CSD=0 suppresses client-side decorations on the overlay window.
+    std::process::Command::new("node_modules/.bin/electron")
+        .args(["dist/main.js"])
         .current_dir(&dir)
         .env("LENZU_OVERLAY_UDP_PORT", port.to_string())
+        .env("GTK_CSD", "0")
+        .process_group(0)  // put Electron in its own process group
         .spawn()
         .map_err(|e| {
             eprintln!(
-                "lenzu: could not spawn Electron overlay (npm start in {}): {e}",
+                "lenzu: could not spawn Electron overlay (node_modules/.bin/electron in {}): {e}",
                 dir.display()
             )
         })
@@ -141,11 +148,18 @@ fn spawn_server(port: u16) -> Option<std::process::Child> {
 /// Kill the server child process and reap it.
 fn kill_server(server: &mut Option<std::process::Child>, config: &config::AppConfig) {
     if let Some(mut child) = server.take() {
-        // First send shutdown command via UDP
+        // First try graceful shutdown via UDP
         send_shutdown_command(config.overlay_udp_port);
-        // Then kill the process if it didn't exit
-        let _ = child.kill();
-        let _ = child.wait();
+        // Give the server time to process the shutdown command
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Force-kill the entire process group — Electron spawns child processes
+        // that child.kill() (SIGKILL on the PID) won't reach.
+        let id = child.id() as i32;
+        unsafe {
+            libc::kill(-id, libc::SIGKILL);
+        }
+        // Reap without blocking in case the process is already gone
+        let _ = child.try_wait();
         eprintln!("lenzu: Electron overlay terminated.");
     }
 }
@@ -335,11 +349,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .append(true)
                     .open(HISTORY_PATH)
                 {
+                    let trimmed_text = combined_english.trim();
                     let _ = writeln!(
                         f,
                         "[{}] {}",
                         chrono::Local::now().format("%H:%M:%S"),
-                        combined_english
+                        trimmed_text
                     );
                 }
             }
