@@ -99,6 +99,7 @@ Journal Entry (2026-03-28): Starting Phase 2 tasks.
 ### API / Token Cost
 - Full lens image sent on every capture — no pre-filtering yet
 - Gemini 2.0 Flash is cheap (~$0.0006/hr in practice) but Phase 4 YOLOv8 pre-detection will cut costs further
+- **Gemma 4 E2B / E4B** (Google open-weights VLM, `google/gemma-4-E2B-it` / `google/gemma-4-E4B-it`): 140+ language native support, strong OCR and handwriting recognition, runs fully on-device. Ollama: `gemma4:e2b` / `gemma4:e4b`. GGUF (4-bit/8-bit) via Unsloth HuggingFace page. Viable as a zero-cost offline replacement for the remote API. Evaluation tracked in M7b.
 
 ### Linux Capture
 - Wayland: not yet supported; X11 only via `x11rb`
@@ -173,6 +174,7 @@ End-user and “single command after clone” flows are not fully covered today.
 - [x] **M5**: Configurable language pair, render mode, and prompt via `lenzu_config.json`
 - [x] **M6**: `lenzu` auto-spawns/kills `lenzu_server` (Phase 2)
 - [ ] **M7**: YOLOv8 pre-detection reduces token cost by 80-90% (Phase 4)
+- [ ] **M7b**: Dual-backend OCR — Gemma 4 E2B (ollama/Docker) as primary, OpenRouter as fallback when Gemma returns no translation; fallback image preprocessed to grayscale + proportional downscale before sending over the wire to cut token cost ~70–80%; `DualOcrClient` + `encode_for_fallback` in `client.rs`/`utils.rs` — see `technical-design.phase4-predetect.md §11–13`
 - [ ] **M8**: Wayland support via portals
 - [ ] **M9**: Flatpak packaging
 - [ ] **M10**: `scripts/install.sh` (or equivalent) — release binary + `lenzu_server` layout, `PATH` / `.desktop`, runtime HUD path (see **Installation** above)
