@@ -407,11 +407,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window_main = window.clone();
     let state_main = state.clone();
     glib::timeout_add_local(Duration::from_millis(16), move || {
-        let display = gdk::Display::default().unwrap();
-        let seat = display.default_seat().unwrap();
-        let device = seat.pointer().unwrap();
-        let screen = gdk::Screen::default().unwrap();
-        let root_win = screen.root_window().unwrap();
+        // Safe GDK accessors — any None means the display isn't ready yet; skip tick.
+        let display = match gdk::Display::default() {
+            Some(d) => d,
+            None => return glib::ControlFlow::Continue,
+        };
+        let seat = match display.default_seat() {
+            Some(s) => s,
+            None => return glib::ControlFlow::Continue,
+        };
+        let device = match seat.pointer() {
+            Some(d) => d,
+            None => return glib::ControlFlow::Continue,
+        };
+        let screen = match gdk::Screen::default() {
+            Some(s) => s,
+            None => return glib::ControlFlow::Continue,
+        };
+        let root_win = match screen.root_window() {
+            Some(w) => w,
+            None => return glib::ControlFlow::Continue,
+        };
         let (_, x, y, modifier) = root_win.device_position(&device);
 
         let s_conf = state_main.borrow().config.clone();
@@ -422,59 +438,85 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
         {
-            let mut s = state_main.borrow_mut();
-            if s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading {
-                s.last_capture = Instant::now();
-                s.status = "CAPTURING...".to_string();
-                s.is_loading = true;
-                s.flash_alpha = 1.0;
-                window_main.queue_draw();
+            // Check debounce + loading flag, then release the borrow immediately.
+            // IMPORTANT: do NOT hold borrow_mut() across gtk::main_iteration() —
+            // the animation timer also calls borrow_mut() and will panic (BorrowMutError).
+            let should_capture = {
+                let s = state_main.borrow();
+                s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading
+            };
 
+            if should_capture {
+                // Arm state, extract config values, then DROP borrow before event loop.
+                let (api_key, endpoint, model, prompt) = {
+                    let mut s = state_main.borrow_mut();
+                    s.last_capture = Instant::now();
+                    s.status = "CAPTURING...".to_string();
+                    s.is_loading = true;
+                    s.flash_alpha = 1.0;
+                    let vals = (
+                        s.api_key.clone(),
+                        s.config.llm_api_endpoint.clone(),
+                        s.config.llm_default_model.clone(),
+                        s.config.resolved_prompt(),
+                    );
+                    vals
+                    // borrow_mut dropped here — safe for other callbacks to borrow
+                };
+
+                window_main.queue_draw();
                 window_main.hide();
                 while gtk::events_pending() {
                     gtk::main_iteration();
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                if let Ok(raw) = capture::capture_x11(
+                match capture::capture_x11(
                     win_x.max(0),
                     win_y.max(0),
                     s_conf.lens_size as u32,
                     s_conf.lens_size as u32,
                 ) {
-                    let rgb = utils::raw_to_rgb(&raw);
-                    utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
-                    let b64 = utils::encode_to_base64(
-                        &rgb,
-                        s_conf.lens_size as u32,
-                        s_conf.lens_size as u32,
-                    );
-                    let mut pb_data = raw.clone();
-                    utils::swap_bytes_for_pixbuf(&mut pb_data);
-                    s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
-                        pb_data,
-                        gdk_pixbuf::Colorspace::Rgb,
-                        true,
-                        8,
-                        s_conf.lens_size,
-                        s_conf.lens_size,
-                        s_conf.lens_size * 4,
-                    ));
-                    window_main.show();
-                    let api_key = s.api_key.clone();
-                    let endpoint = s.config.llm_api_endpoint.clone();
-                    let model = s.config.llm_default_model.clone();
-                    let prompt = s.config.resolved_prompt();
-                    let tx_clone = tx.clone();
-                    std::thread::spawn(move || {
-                        let ocr_client = client::OcrClient::new(api_key, endpoint, model, prompt);
-                        let result = ocr_client.call_api(&b64).map_err(|e| e.to_string());
-                        let _ = tx_clone.send(result);
-                    });
-                } else {
-                    s.is_loading = false;
-                    s.status = "Capture Failed".to_string();
-                    window_main.show();
+                    Ok(raw) => {
+                        let rgb = utils::raw_to_rgb(&raw);
+                        utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
+                        let b64 = utils::encode_to_base64(
+                            &rgb,
+                            s_conf.lens_size as u32,
+                            s_conf.lens_size as u32,
+                        );
+                        let mut pb_data = raw.clone();
+                        utils::swap_bytes_for_pixbuf(&mut pb_data);
+                        {
+                            let mut s = state_main.borrow_mut();
+                            s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
+                                pb_data,
+                                gdk_pixbuf::Colorspace::Rgb,
+                                true,
+                                8,
+                                s_conf.lens_size,
+                                s_conf.lens_size,
+                                s_conf.lens_size * 4,
+                            ));
+                        }
+                        window_main.show();
+                        let tx_clone = tx.clone();
+                        std::thread::spawn(move || {
+                            // Catch any unexpected panic so is_loading is always reset.
+                            let result = std::panic::catch_unwind(|| {
+                                let ocr_client = client::OcrClient::new(api_key, endpoint, model, prompt);
+                                ocr_client.call_api(&b64).map_err(|e| e.to_string())
+                            })
+                            .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
+                            let _ = tx_clone.send(result);
+                        });
+                    }
+                    Err(_) => {
+                        let mut s = state_main.borrow_mut();
+                        s.is_loading = false;
+                        s.status = "Capture Failed".to_string();
+                        window_main.show();
+                    }
                 }
             }
         }
