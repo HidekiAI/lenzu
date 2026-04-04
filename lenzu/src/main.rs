@@ -380,7 +380,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Err(e) => s.status = format!("API Error: {}", e),
+            Err(e) => {
+                eprintln!("[OCR] API/parse error: {}", e);
+                s.status = format!("API Error: {}", e);
+            }
         }
         window_rx.queue_draw();
         glib::ControlFlow::Continue

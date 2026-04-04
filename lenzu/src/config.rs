@@ -22,7 +22,12 @@ pub enum OverlayRenderMode {
 const TRANSLATE_PROMPT: &str =
     "Act as a highly accurate {src}-to-{dest} OCR and translation engine. \
     Extract ALL text from the image. Return a JSON array of objects, one per line/bubble found. \
-    Each object MUST have: 'original', 'top_xy' (as upper left bounding-box), 'bot_xy' (as lower right box), 'debug_info' (if any).";
+    Each object MUST have these fields with EXACTLY these types: \
+    'original' (string), \
+    'top_xy' (string in \"x,y\" format, e.g. \"79,48\" — upper-left pixel corner of the text bounding box), \
+    'bot_xy' (string in \"x,y\" format, e.g. \"167,181\" — lower-right pixel corner of the text bounding box), \
+    'debug_info' (string or null). \
+    Do NOT use arrays or objects for top_xy/bot_xy — they must be plain strings.";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
@@ -104,5 +109,35 @@ mod tests {
         let cfg = AppConfig::default();
         assert_eq!(cfg.lens_size, 400);
         assert!(cfg.hud_color_hex.starts_with('#'));
+    }
+
+    #[test]
+    fn test_prompt_specifies_xy_string_format() {
+        // If these fail, the prompt no longer tells the LLM the required format
+        // and models will start returning [x,y] arrays instead of "x,y" strings.
+        let cfg = AppConfig::default();
+        let prompt = cfg.resolved_prompt();
+        assert!(
+            prompt.contains("\"x,y\""),
+            "prompt must specify x,y string format for bounding box fields"
+        );
+        assert!(
+            prompt.contains("top_xy") && prompt.contains("bot_xy"),
+            "prompt must name both bounding box fields"
+        );
+        assert!(
+            prompt.contains("Do NOT use arrays"),
+            "prompt must explicitly forbid array format for top_xy/bot_xy"
+        );
+    }
+
+    #[test]
+    fn test_prompt_resolves_src_dest() {
+        let cfg = AppConfig::default();
+        let prompt = cfg.resolved_prompt();
+        assert!(!prompt.contains("{src}"), "{{src}} placeholder must be resolved");
+        assert!(!prompt.contains("{dest}"), "{{dest}} placeholder must be resolved");
+        assert!(prompt.contains("Japanese"), "default src language should appear");
+        assert!(prompt.contains("English"), "default dest language should appear");
     }
 }

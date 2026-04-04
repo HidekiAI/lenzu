@@ -1,6 +1,6 @@
 use chrono::Local;
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -15,14 +15,30 @@ pub struct OcrClient {
     client: Client,
 }
 
+/// Deserialize any JSON value (string, array, object, number) into an
+/// `Option<String>`.  Arrays and objects are serialized to their compact
+/// JSON representation so bounding-box coords like `[79, 48]` become
+/// `"[79,48]"` rather than crashing with "expected a string".
+fn coerce_to_opt_string<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Option<String>, D::Error> {
+    let val: Option<Value> = Option::deserialize(d)?;
+    Ok(val.map(|v| match v {
+        Value::String(s) => s,
+        other => other.to_string(),
+    }))
+}
+
 #[derive(Deserialize, Serialize, Debug, Default, Clone, PartialEq)]
 pub struct TranslationResult {
     pub original: String,
     pub furigana: Option<String>,
     pub romaji: Option<String>,
     pub english: Option<String>,
-    pub top_xy: Option<String>,  // upper-left bounding box corner
-    pub bot_xy: Option<String>,  // lower-right bounding box corner
+    #[serde(default, deserialize_with = "coerce_to_opt_string")]
+    pub top_xy: Option<String>,  // upper-left bounding box corner (string or [x,y] array)
+    #[serde(default, deserialize_with = "coerce_to_opt_string")]
+    pub bot_xy: Option<String>,  // lower-right bounding box corner (string or [x,y] array)
     pub debug_info: Option<String>,
 }
 
@@ -115,14 +131,23 @@ impl OcrClient {
     ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
         // 1. Unwrap stringified JSON if necessary
         let actual_json = if val.is_string() {
-            serde_json::from_str(val.as_str().unwrap())?
+            let raw = val.as_str().unwrap();
+            eprintln!("[OCR] content is a string, attempting inner parse (first 200 chars): {}", &raw[..raw.len().min(200)]);
+            serde_json::from_str(raw).map_err(|e| {
+                eprintln!("[OCR] inner JSON parse failed: {e}  raw snippet: {}", &raw[..raw.len().min(400)]);
+                e
+            })?
         } else {
+            eprintln!("[OCR] content type: {}", if val.is_array() { "array" } else if val.is_object() { "object" } else { "other" });
             val.clone()
         };
 
         // 2. Handle array, or object (json_object mode often wraps the array in a key).
         if actual_json.is_array() {
-            let results: Vec<TranslationResult> = serde_json::from_value(actual_json)?;
+            let results: Vec<TranslationResult> = serde_json::from_value(actual_json).map_err(|e| {
+                eprintln!("[OCR] array deserialize failed: {e}");
+                e
+            })?;
             return Ok(results);
         }
 
@@ -158,38 +183,200 @@ impl OcrClient {
 mod tests {
     use super::*;
 
+    fn client() -> OcrClient {
+        OcrClient::new("key".into(), String::new(), String::new(), String::new())
+    }
+
+    // ── existing shapes ──────────────────────────────────────────────────────
+
     #[test]
     fn test_normalization_handles_single_object() {
-        let client = OcrClient::new("key".into(), String::new(), String::new(), String::new());
         let obj = json!({"original": "single", "english": "one"});
-        let results = client.normalize_results(&obj).unwrap();
+        let results = client().normalize_results(&obj).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].original, "single");
     }
 
     #[test]
     fn test_normalization_handles_array() {
-        let client = OcrClient::new("key".into(), String::new(), String::new(), String::new());
         let arr = json!([
             {"original": "line1", "english": "one"},
             {"original": "line2", "english": "two"}
         ]);
-        let results = client.normalize_results(&arr).unwrap();
+        let results = client().normalize_results(&arr).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[1].original, "line2");
     }
 
     #[test]
     fn test_normalization_handles_json_object_wrapper() {
-        let client = OcrClient::new("key".into(), String::new(), String::new(), String::new());
         let wrapped = json!({
             "results": [
                 {"original": "a", "english": "A"},
                 {"original": "b", "english": "B"}
             ]
         });
-        let results = client.normalize_results(&wrapped).unwrap();
+        let results = client().normalize_results(&wrapped).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].english.as_deref(), Some("A"));
+    }
+
+    // ── stringified-JSON shapes (most common real-world failure case) ─────────
+    // Gemini/OpenRouter often returns the JSON payload as a *string* inside
+    // the content field when response_format=json_object is requested.
+
+    #[test]
+    fn test_normalization_stringified_array() {
+        // content = "[{...},{...}]"  (the whole array encoded as a JSON string)
+        let stringified = Value::String(
+            r#"[{"original":"漢字","furigana":"漢字[かんじ]","romaji":"kanji","english":"Chinese character"}]"#
+                .to_string(),
+        );
+        let results = client().normalize_results(&stringified).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "漢字");
+        assert_eq!(results[0].furigana.as_deref(), Some("漢字[かんじ]"));
+        assert_eq!(results[0].english.as_deref(), Some("Chinese character"));
+    }
+
+    #[test]
+    fn test_normalization_stringified_object_with_wrapper_key() {
+        // content = "{\"results\":[...]}"  (object with wrapper key, encoded as string)
+        let stringified = Value::String(
+            r#"{"results":[{"original":"hello","english":"hello"},{"original":"world","english":"world"}]}"#
+                .to_string(),
+        );
+        let results = client().normalize_results(&stringified).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[1].original, "world");
+    }
+
+    #[test]
+    fn test_normalization_stringified_single_object() {
+        // content = "{\"original\":\"foo\",...}"  (single object, encoded as string)
+        let stringified = Value::String(
+            r#"{"original":"foo","english":"bar","furigana":"foo[ふー]"}"#.to_string(),
+        );
+        let results = client().normalize_results(&stringified).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "foo");
+        assert_eq!(results[0].furigana.as_deref(), Some("foo[ふー]"));
+    }
+
+    // ── markdown-fenced JSON (LLMs sometimes add ```json fences) ─────────────
+    // If the model ignores response_format and wraps in fences we must strip
+    // them. Currently this is NOT handled, so the test documents the failure
+    // and the fix can be added to normalize_results when confirmed in the wild.
+    #[test]
+    fn test_normalization_markdown_fenced_array_fails_gracefully() {
+        let fenced = Value::String(
+            "```json\n[{\"original\":\"test\",\"english\":\"test\"}]\n```".to_string(),
+        );
+        // This is expected to fail until fence-stripping is added.
+        // When it starts passing, the fence-stripping logic is in place.
+        let result = client().normalize_results(&fenced);
+        assert!(result.is_err(), "markdown-fenced JSON should fail (not silently succeed with wrong data)");
+    }
+
+    // ── all known wrapper keys ────────────────────────────────────────────────
+
+    #[test]
+    fn test_normalization_all_wrapper_keys() {
+        for key in &["results", "items", "data", "translations", "lines", "ocr",
+                     "bubbles", "detections", "text_blocks"] {
+            let wrapped = json!({ (*key): [{"original": "x", "english": "y"}] });
+            let results = client().normalize_results(&wrapped)
+                .unwrap_or_else(|e| panic!("wrapper key '{}' failed: {}", key, e));
+            assert_eq!(results.len(), 1, "wrapper key '{}' should produce 1 result", key);
+            assert_eq!(results[0].original, "x");
+        }
+    }
+
+    // ── optional fields are truly optional ───────────────────────────────────
+
+    #[test]
+    fn test_normalization_minimal_object_only_original() {
+        let obj = json!({"original": "only"});
+        let results = client().normalize_results(&obj).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].english.is_none());
+        assert!(results[0].furigana.is_none());
+        assert!(results[0].romaji.is_none());
+    }
+
+    // ── degenerate inputs return Err, not panic ───────────────────────────────
+
+    #[test]
+    fn test_normalization_null_returns_err() {
+        let null_val = Value::Null;
+        assert!(client().normalize_results(&null_val).is_err());
+    }
+
+    #[test]
+    fn test_normalization_number_returns_err() {
+        let num = Value::from(42_i64);
+        assert!(client().normalize_results(&num).is_err());
+    }
+
+    #[test]
+    fn test_normalization_empty_array_returns_empty_vec() {
+        let empty = json!([]);
+        let results = client().normalize_results(&empty).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── bounding-box coords as arrays (the actual prod failure) ──────────────
+    // The Gemini API returns top_xy/bot_xy as [x, y] integer arrays, NOT as
+    // strings.  Without coerce_to_opt_string this fails with
+    // "invalid type: sequence, expected a string".
+
+    #[test]
+    fn test_normalization_bounding_box_as_array() {
+        // Direct array format from Gemini
+        let arr = json!([{
+            "original": "ちなみに私は",
+            "top_xy": [79, 48],
+            "bot_xy": [167, 181],
+            "furigana": "ちなみに私[わたし]は",
+            "romaji": "chinamini watashi wa",
+            "english": "By the way, I"
+        }]);
+        let results = client().normalize_results(&arr).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "ちなみに私は");
+        // coords coerced to JSON string representation
+        assert_eq!(results[0].top_xy.as_deref(), Some("[79,48]"));
+        assert_eq!(results[0].bot_xy.as_deref(), Some("[167,181]"));
+        assert_eq!(results[0].furigana.as_deref(), Some("ちなみに私[わたし]は"));
+    }
+
+    #[test]
+    fn test_normalization_bounding_box_as_array_stringified() {
+        // Same but content arrives as a JSON *string* (as Gemini/OpenRouter sends it)
+        let stringified = Value::String(serde_json::to_string(&json!([{
+            "original": "生身の硬いのが",
+            "top_xy": [102, 82],
+            "bot_xy": [261, 120],
+            "furigana": "生身[なまみ]の硬[かた]いのが",
+            "romaji": "namaomi no katai no ga",
+            "english": "The toughness of a living body"
+        }])).unwrap());
+        let results = client().normalize_results(&stringified).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "生身の硬いのが");
+        assert_eq!(results[0].top_xy.as_deref(), Some("[102,82]"));
+    }
+
+    #[test]
+    fn test_normalization_bounding_box_as_string_still_works() {
+        // Ensure existing string-format coords aren't broken by the coerce helper
+        let arr = json!([{
+            "original": "test",
+            "top_xy": "10,20",
+            "bot_xy": "100,200"
+        }]);
+        let results = client().normalize_results(&arr).unwrap();
+        assert_eq!(results[0].top_xy.as_deref(), Some("10,20"));
+        assert_eq!(results[0].bot_xy.as_deref(), Some("100,200"));
     }
 }
