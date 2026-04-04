@@ -116,9 +116,20 @@ struct AppState {
     server_process: Option<std::process::Child>,
 }
 
-/// Path to `lenzu_server` next to the `lenzu` crate (repo layout).
+/// Path to `lenzu_server` directory.
+/// Resolved at runtime from the binary location (target/debug/lenzu →
+/// ../../lenzu_server) so both workspaces work without recompiling.
+/// Falls back to the compile-time CARGO_MANIFEST_DIR path if not found.
 fn lenzu_server_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../lenzu_server")
+    let runtime = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            // binary: <repo>/target/debug/lenzu  →  parent×2 = <repo>/target  →  parent×3 = <repo>
+            p.parent()?.parent()?.parent().map(|r| r.join("lenzu_server"))
+        })
+        .filter(|p| p.is_dir());
+
+    runtime.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../lenzu_server"))
 }
 
 /// Spawn the Electron HUD (`lenzu_server`). UDP port is passed via `LENZU_OVERLAY_UDP_PORT`
