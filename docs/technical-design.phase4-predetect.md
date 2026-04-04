@@ -481,7 +481,9 @@ This means:
 
 ### Fallback trigger conditions
 
-The fallback to OpenRouter fires when Gemma's response meets **any** of these conditions:
+There are two paths to the OpenRouter fallback:
+
+**Automatic** — Gemma's response meets any of these conditions:
 
 | Condition | Meaning |
 |---|---|
@@ -490,6 +492,13 @@ The fallback to OpenRouter fires when Gemma's response meets **any** of these co
 | All results have `english: None` or `english: Some("")` | OCR succeeded but translation was skipped or refused |
 
 A partial result (some items have `english`, some don't) does **not** trigger a full fallback — the items without translation are simply presented as-is. The fallback is a per-capture decision, not per-result.
+
+**Manual — `Ctrl+Shift+Click`** — user explicitly forces the remote backend:
+- Skips `DualOcrClient` primary path entirely; calls OpenRouter directly
+- Useful for comparing Gemma vs Gemini output, or when Gemma is slow/unavailable
+- Requires `OPENROUTER_API_KEY` set; displays an error message in the HUD if the key is absent
+- Detected in `main.rs` input handler (around line 438) by adding `CONTROL_MASK` to the existing `SHIFT_MASK + BUTTON1_MASK` check
+- Existing `Shift+Click` (no Ctrl) always uses the primary (Gemma) path as before
 
 ---
 
