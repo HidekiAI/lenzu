@@ -5,10 +5,10 @@
 - **OCR/Translation**: OpenRouter API → Gemini 2.0 Flash (multimodal); returns structured JSON
 - **UI**: GTK3 floating lens window (Cairo + Pango), transparent RGBA
 - **Capture**: X11 root window via `x11rb` (bypasses GPU-accelerated windows correctly)
-- **Overlay HUD**: Separate Tauri 2.x process (`lenzu_server`) — transparent window, UDP IPC
+- **Overlay HUD**: Separate Electron process (`lenzu_server`) — transparent window, UDP IPC
 - **Interpreter**: Removed (was Kakasi); translation now handled entirely by the LLM
 - **Config**: `lenzu_config.json` with `isolang` language codes and `OverlayRenderMode` enum
-- **Workspace**: Cargo workspace at repo root; members: `lenzu` (client), `lenzu_server/src-tauri`
+- **Workspace**: Cargo workspace at repo root; member: `lenzu` (client); `lenzu_server` is a separate Node/Electron project
 
 ## Vision
 Make **Linux the primary platform** with a robust, performant OCR lens that works across Wayland and X11, using open-source tools while maintaining the offline-first, privacy-respecting design.
@@ -24,11 +24,12 @@ Journal Entry (2026-03-28): Starting Phase 2 tasks.
    - Rename package to `lenzu_client`, keep binary name `lenzu`
    **[COMPLETED: 2026-03-28]**
 
-2. **Phase 3 — Migrate Overlay HUD (Tauri → Electron)**
-   - **Rationale**: Tauri's `xfwm4` compositor ghosting issue (alpha-blend accumulation) is persistent despite mitigation; Electron may offer a more robust translucent overlay solution.
+2. **Phase 3 — Migrate Overlay HUD (Tauri → Electron)** **[COMPLETED]**
+   - **Rationale**: Tauri uses WebKit2GTK which does not correctly composite ARGB windows on X11 — alpha pixels vacated by old content are not cleared, causing "ghost text" accumulation. Multiple mitigations were attempted (near-zero background, body-background toggle, synthetic X11 Expose events) but none fully eliminated the artefact under all timing conditions. Electron (Chromium) correctly composites ARGB windows when a compositor is running.
    - [x] Investigate existing Electron translucent overlay projects (e.g., `/home/hidekiai/projects/remote/github/mine/hidekiai/electron-translucent-desktop-overlay`).
-   - [x] Electron `lenzu_server` (`src/main.js` + UDP JSON protocol) wired to `lenzu`: spawn via `npm run start`, `LENZU_OVERLAY_UDP_PORT` syncs with `overlay_udp_port`, `./scripts/run.sh` no longer double-starts the HUD.
-   - [ ] Verify resolution of ghosting and overall functionality on target WM (manual QA).
+   - [x] Electron `lenzu_server` (`src/main.ts` + UDP JSON protocol) wired to `lenzu`: spawned by client, syncs port via `overlay_udp_port`.
+   - [x] Verify ghosting resolved on target WM (manual QA — confirmed).
+   - **Known limitation**: Electron 41+ on X11 shows a thin white titlebar strip at the top of the window despite `frame: false`. Mitigated with `type: 'toolbar'` and `titleBarStyle: 'hidden'` but not fully eliminated on all compositors.
 
 3. **Phase 4 — Local Pre-detection**
    - Use `yolov8n_fp16.onnx` (already in repo) to find text bounding boxes before API call
@@ -145,7 +146,7 @@ End-user and “single command after clone” flows are not fully covered today.
 ### Must-Have (Linux)
 - `tesseract-ocr` (>=5.0) with `jpn_vert` traineddata
 - `libgtk-3-dev` (GTK3 >=3.24 — **not GTK4**)
-- `libwebkit2gtk-4.1-dev` (optional — only if building legacy Tauri experiments in-repo; Electron HUD uses its own Chromium)
+- `libwebkit2gtk-4.1-dev` — **removed from setup.sh**; was required by the deprecated Tauri overlay (`lenzu_client`). Electron bundles its own Chromium — no system WebKit dependency needed.
 - `pkg-config` and `build-essential`
 
 ### Nice-to-Have
@@ -158,7 +159,7 @@ End-user and “single command after clone” flows are not fully covered today.
 
 1. **Tesseract Training**: Investigate manga109s dataset format and training pipeline
 2. **Wayland Portals**: Study `xdg-desktop-portal` API for screen capture permissions
-3. **Tauri overlay positioning**: ArrowUp/Down key cycling (top/center/bottom) already implemented in lenzu_server
+3. **Electron overlay positioning**: ArrowUp/Down key cycling (top/center/bottom) already implemented in lenzu_server
 4. **Performance Profiling**: Profile capture → OCR pipeline to identify bottlenecks
 
 ## Milestones
@@ -166,7 +167,7 @@ End-user and “single command after clone” flows are not fully covered today.
 - [x] **M1**: X11 capture works correctly (bypasses GPU-accelerated windows)
 - [x] **M2**: Structured OCR results via OpenRouter/Gemini multimodal API
 - [x] **M3**: GTK3 lens window with transparent overlay, spinner, flash feedback
-- [x] **M4**: Tauri overlay HUD (`lenzu_server`) integrated into workspace via UDP IPC
+- [x] **M4**: Electron overlay HUD (`lenzu_server`) integrated via UDP IPC (migrated from Tauri/WebKit2GTK due to alpha/transparency bugs)
 - [x] **M5**: Configurable language pair, render mode, and prompt via `lenzu_config.json`
 - [x] **M6**: `lenzu` auto-spawns/kills `lenzu_server` (Phase 2)
 - [ ] **M7**: YOLOv8 pre-detection reduces token cost by 80-90% (Phase 4)
@@ -209,7 +210,7 @@ End-user and “single command after clone” flows are not fully covered today.
 
 ---
 
-**Last Updated**: 2026-03-22
+**Last Updated**: 2026-04-04
 **Maintainer**: Hideki AI
 **Status**: Active development — `RemoteOCR` branch, Phase 2 next
 
