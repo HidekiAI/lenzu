@@ -60,7 +60,13 @@ else
     echo ""
     echo "Setting up Ollama (local LLM backend via Docker)..."
 
-    if ! command -v docker &>/dev/null; then
+    if curl -sf "http://localhost:11434/" &>/dev/null; then
+        # Native ollama (or an already-running container) is up — just ensure the model is present.
+        echo "  Native ollama detected at http://localhost:11434/ — skipping Docker setup."
+        echo "  Pulling model $OLLAMA_MODEL into native ollama (no-op if already present)..."
+        ollama pull "$OLLAMA_MODEL"
+        echo "  Model ready."
+    elif ! command -v docker &>/dev/null; then
         echo "  Docker not found — installing docker.io..."
         sudo apt install -y docker.io
         sudo usermod -aG docker "$USER"
@@ -77,13 +83,25 @@ else
         echo "  Creating persistent volume '$OLLAMA_VOLUME' for model storage..."
         docker volume create "$OLLAMA_VOLUME" &>/dev/null || true
 
-        echo "  Pulling model $OLLAMA_MODEL (this may take several minutes on first run)..."
-        docker run --rm \
+        echo "  Pulling model $OLLAMA_MODEL into Docker volume (may take several minutes on first run)..."
+        # 'ollama pull' is a client command that requires the server to be running.
+        # Start a temporary container, wait for it to be healthy, pull via exec, then stop.
+        docker run -d --name lenzu-ollama-setup --rm \
             -v "${OLLAMA_VOLUME}:/root/.ollama" \
-            "$OLLAMA_IMAGE" \
-            ollama pull "$OLLAMA_MODEL"
+            "$OLLAMA_IMAGE"
+        echo -n "  Waiting for temporary ollama container..."
+        for i in $(seq 1 30); do
+            if curl -sf "http://localhost:11434/" &>/dev/null; then
+                echo " ready."
+                break
+            fi
+            sleep 1
+            echo -n "."
+        done
+        docker exec lenzu-ollama-setup ollama pull "$OLLAMA_MODEL"
+        docker stop lenzu-ollama-setup
 
-        echo "  Ollama + $OLLAMA_MODEL ready."
+        echo "  Ollama Docker image + $OLLAMA_MODEL ready."
     fi
 fi
 
