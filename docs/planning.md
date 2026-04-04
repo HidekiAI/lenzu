@@ -15,28 +15,79 @@ Make **Linux the primary platform** with a robust, performant OCR lens that work
 
 ## Goals
 
-### Short-term (Next 2-4 Weeks)
+### Completed
 
-Journal Entry (2026-03-28): Starting Phase 2 tasks.
+- **Phase 2 — Process Lifecycle** **[COMPLETED: 2026-03-28]**
+  - `lenzu` spawns/kills `lenzu_server` (Electron HUD) automatically
 
-1. **Phase 2 — Process Lifecycle** *(see `lenzu/PLANNINGS.md` for detail)*
-   - `lenzu` (client) spawns `lenzu_client` on startup, kills it on exit
-   - Rename package to `lenzu_client`, keep binary name `lenzu`
-   **[COMPLETED: 2026-03-28]**
+- **Phase 3 — Migrate Overlay HUD (Tauri → Electron)** **[COMPLETED]**
+  - Tauri/WebKit2GTK dropped due to alpha compositing artefacts on X11; Electron confirmed clean
+  - **Known limitation**: thin white titlebar strip on some compositors (mitigated, not eliminated)
 
-2. **Phase 3 — Migrate Overlay HUD (Tauri → Electron)** **[COMPLETED]**
-   - **Rationale**: Tauri uses WebKit2GTK which does not correctly composite ARGB windows on X11 — alpha pixels vacated by old content are not cleared, causing "ghost text" accumulation. Multiple mitigations were attempted (near-zero background, body-background toggle, synthetic X11 Expose events) but none fully eliminated the artefact under all timing conditions. Electron (Chromium) correctly composites ARGB windows when a compositor is running.
-   - [x] Investigate existing Electron translucent overlay projects (e.g., `/home/hidekiai/projects/remote/github/mine/hidekiai/electron-translucent-desktop-overlay`).
-   - [x] Electron `lenzu_server` (`src/main.ts` + UDP JSON protocol) wired to `lenzu`: spawned by client, syncs port via `overlay_udp_port`.
-   - [x] Verify ghosting resolved on target WM (manual QA — confirmed).
-   - **Known limitation**: Electron 41+ on X11 shows a thin white titlebar strip at the top of the window despite `frame: false`. Mitigated with `type: 'toolbar'` and `titleBarStyle: 'hidden'` but not fully eliminated on all compositors.
+---
 
-3. **Phase 4 — Local Pre-detection**
-   - Use `yolov8n_fp16.onnx` (already in repo) to find text bounding boxes before API call
-   - Send only cropped regions → lower token cost, higher accuracy
-   - `top_xy` / `bot_xy` in `TranslationResult` anchor results to screen coords
+### Short-term — Phase 4 (dependency-ordered)
 
-3. **UI/UX**
+> Branch: `feature/ocr-local-remote`  
+> Design spec: `docs/technical-design.phase4-predetect.md`
+
+Each step below depends on the previous being working and tested before moving on.
+
+#### Step 1 — Docker / ollama container lifecycle `[M7b-1]`
+*Unblocks everything else — no point writing OCR code if the server won't start.*
+
+- [ ] `scripts/setup.sh` installs Docker, pulls `ollama/ollama`, pulls `gemma4:e2b` *(scripts written, needs smoke-test on clean machine)*
+- [ ] `scripts/run.sh` starts `lenzu-ollama` container before lenzu, stops on exit via `trap`
+- [ ] Manual test: `docker ps` confirms container running; `curl http://localhost:11434/` returns healthy
+- [ ] Unit test: `start_ollama` idempotent (running twice doesn't create duplicate containers)
+- **Done when**: `./scripts/run.sh` reliably starts and stops the container with no orphans
+
+#### Step 2 — `OcrClient` → ollama (Gemma as sole backend) `[M7b-2]`
+*Validate that Gemma actually produces usable OCR results before wiring fallback logic.*
+
+- [ ] `AppConfig` defaults change: `llm_api_endpoint` → `http://localhost:11434/v1/chat/completions`, `llm_default_model` → `gemma4:e2b`
+- [ ] `OcrClient::call_api` skips `Authorization` header when `api_key` is empty (ollama needs none)
+- [ ] `OPENROUTER_API_KEY` not required to start lenzu (warn only)
+- [ ] Shift+Click capture → Gemma query → result displayed in HUD (happy-path manual QA)
+- [ ] Unit test: empty `api_key` → no `Authorization` header in built request
+- [ ] Unit test: old `lenzu_config.json` without new fields still loads with defaults (backward compat)
+- **Done when**: Shift+Click shows a translation via local Gemma with OpenRouter key unset
+
+#### Step 3 — `DualOcrClient`: automatic fallback + manual override `[M7b-3]`
+*Two trigger paths: automatic (Gemma gave no translation) and manual (user forces remote).*
+
+- [ ] `DualOcrClient` struct wraps primary (`OcrClient` → ollama) + optional fallback (`OcrClient` → OpenRouter)
+- [ ] `needs_fallback(results)`: true when result vec is empty or all `english` fields are blank/whitespace
+- [ ] Automatic fallback: primary fail or no translation → retry with OpenRouter, log to `/dev/shm/api_debug.txt`
+- [ ] **`Ctrl+Shift+Click`** — new hotkey: skips primary entirely, sends directly to OpenRouter
+  - Detected in `main.rs` input handler alongside existing `Shift+Click` (add `CONTROL_MASK` check)
+  - Requires `OPENROUTER_API_KEY` set; shows error in HUD if not configured
+  - Useful for: comparing Gemma vs Gemini output, bypassing local when Gemma is slow
+- [ ] `AppConfig` gains `fallback_llm_api_endpoint` + `fallback_llm_model` with `#[serde(default)]`
+- [ ] Unit tests for `needs_fallback` (empty vec, all-null, whitespace, partial success)
+- [ ] Integration tests: primary no-translation → fallback fires; primary HTTP 503 → fallback fires; both fail → error (wiremock)
+- [ ] Integration test: `Ctrl+Shift+Click` path calls fallback directly, primary mock gets zero calls
+- **Done when**: automatic fallback works silently; Ctrl+Shift+Click forces remote visibly
+
+#### Step 4 — Fallback image preprocessing `[M7b-4]`
+*Only relevant once fallback is confirmed working — polish step.*
+
+- [ ] `raw_to_dynamic_image(raw, w, h) -> DynamicImage` in `utils.rs`
+- [ ] `encode_for_fallback(image, max_dim) -> String`: grayscale + proportional downscale
+- [ ] `DualOcrClient::call_api` signature changes to accept `&DynamicImage`; encodes colour for primary, grayscale+scaled for fallback
+- [ ] `AppConfig` gains `fallback_preprocess_grayscale: bool` (default `true`) + `fallback_max_dimension: u32` (default `800`)
+- [ ] Save preprocessed image to `/dev/shm/debug_lens_fallback.png` for dev comparison
+- [ ] Unit tests: grayscale output confirmed via PNG colour type; downscale preserves aspect ratio; zero max-dim disables resize; fallback b64 smaller than colour b64
+- [ ] Integration test: fallback request body measurably smaller than primary request body
+- **Done when**: fallback image is visibly smaller/grayscale in debug file; token savings confirmed in `api_debug.txt`
+
+---
+
+### Deferred from Phase 4 (not yet started)
+
+- **YOLO pre-detection** (`M7`): find text bounding boxes locally before any API call — further reduces tokens by sending only cropped regions. Deferred until M7b-4 is stable; depends on manga-specific ONNX model (COCO YOLOv8n insufficient).
+
+### Short-term — UI/UX
    - Overlay position: configurable top/bottom via `hud_config.json`
    - Click-through mode for `lenzu_server` window (doesn't steal mouse events)
 
@@ -173,8 +224,11 @@ End-user and “single command after clone” flows are not fully covered today.
 - [x] **M4**: Electron overlay HUD (`lenzu_server`) integrated via UDP IPC (migrated from Tauri/WebKit2GTK due to alpha/transparency bugs)
 - [x] **M5**: Configurable language pair, render mode, and prompt via `lenzu_config.json`
 - [x] **M6**: `lenzu` auto-spawns/kills `lenzu_server` (Phase 2)
-- [ ] **M7**: YOLOv8 pre-detection reduces token cost by 80-90% (Phase 4)
-- [ ] **M7b**: Dual-backend OCR — Gemma 4 E2B (ollama/Docker) as primary, OpenRouter as fallback when Gemma returns no translation; fallback image preprocessed to grayscale + proportional downscale before sending over the wire to cut token cost ~70–80%; `DualOcrClient` + `encode_for_fallback` in `client.rs`/`utils.rs` — see `technical-design.phase4-predetect.md §11–13`
+- [ ] **M7b-1**: Docker/ollama container lifecycle — `scripts/setup.sh` + `scripts/run.sh` start/stop `lenzu-ollama` reliably
+- [ ] **M7b-2**: `OcrClient` → ollama (Gemma 4 E2B as sole backend, no API key required)
+- [ ] **M7b-3**: `DualOcrClient` — automatic fallback to OpenRouter on no-translation; `Ctrl+Shift+Click` manual override to force remote
+- [ ] **M7b-4**: Fallback preprocessing — grayscale + proportional downscale before OpenRouter call (~70–80% token reduction)
+- [ ] **M7**: YOLOv8 pre-detection — find text bounding boxes locally, send only cropped regions (deferred until M7b-4 stable; needs manga-specific ONNX model)
 - [ ] **M8**: Wayland support via portals
 - [ ] **M9**: Flatpak packaging
 - [ ] **M10**: `scripts/install.sh` (or equivalent) — release binary + `lenzu_server` layout, `PATH` / `.desktop`, runtime HUD path (see **Installation** above)
@@ -216,5 +270,5 @@ End-user and “single command after clone” flows are not fully covered today.
 
 **Last Updated**: 2026-04-04
 **Maintainer**: Hideki AI
-**Status**: Active development — `RemoteOCR` branch, Phase 2 next
+**Status**: Active development — `feature/ocr-local-remote` branch, Phase 4 M7b-1 next
 
