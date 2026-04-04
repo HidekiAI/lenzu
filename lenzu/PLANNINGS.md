@@ -26,7 +26,7 @@ All items below are implemented and on the `RemoteOCR` branch.
 - [x] `overlay_enabled` / `overlay_udp_port` — HUD process integration
 
 ### Overlay HUD — UDP Bridge
-- [x] `send_to_overlay(text, port)` — fires a UDP datagram to the Tauri HUD process
+- [x] `send_to_overlay(text, port)` — fires a UDP datagram to the Electron HUD process
 - [x] `format_for_overlay(results, mode)` — formats `Vec<TranslationResult>` according to `OverlayRenderMode`
   - `debug` mode includes bounding boxes and debug_info per result
   - Single-field modes fall back to `original` if the field is absent
@@ -38,36 +38,34 @@ All items below are implemented and on the `RemoteOCR` branch.
 
 ## ✅ Phase 1B — lenzu_server in Workspace (COMPLETE)
 
-The `tauri-translucent-desktop-overlay` project has been brought into this workspace as `lenzu_server`.
+The overlay HUD was originally the `tauri-translucent-desktop-overlay` project (Tauri + WebKit2GTK). It was replaced with an Electron-based implementation (`electron-translucent-desktop-overlay`) due to WebKit2GTK's broken alpha/transparency compositing on X11 — ghost pixels accumulate as text updates because WebKit's dirty-rect optimiser skips repainting transparent-to-transparent regions. Electron (Chromium) composites ARGB windows correctly when a compositor is running.
 
 ### Structure
 ```
-lenzu/                          ← workspace root
-├── Cargo.toml                  ← workspace (members: lenzu, lenzu_server/src-tauri)
+./                              ← workspace root (repository root)
+├── Cargo.toml                  ← workspace manifest (members: lenzu only; lenzu_server is Node/Electron)
 ├── lenzu/                      ← OCR lens client (GTK3)
-└── lenzu_server/
-    ├── package.json            ← @tauri-apps/cli devDep
-    ├── src-tauri/
-    │   ├── Cargo.toml          ← name = "lenzu_server"
-    │   ├── tauri.conf.json     ← productName = "lenzu_server", identifier = com.hidekiai.lenzu-server
-    │   ├── capabilities/
-    │   ├── icons/
-    │   └── src/main.rs         ← UDP listener + Tauri window; accepts --port CLI arg
-    └── ui/
-        ├── index.html
-        ├── app.js              ← listens for "hud-text-changed" Tauri event
-        └── styles.css
+└── lenzu_server/               ← Electron overlay HUD
+    ├── package.json            ← electron, esbuild, vitest devDeps
+    ├── build.mjs               ← esbuild pipeline
+    ├── hud_config.json         ← HUD display settings
+    ├── src/
+    │   ├── main.ts             ← UDP listener + BrowserWindow; transparent, frameless
+    │   ├── preload.ts          ← contextBridge (IPC boundary)
+    │   └── renderer/
+    │       ├── app.ts          ← listens for "hud-text-changed" IPC event
+    │       ├── index.html
+    │       └── styles.css
+    └── scripts/
+        ├── setup.sh            ← Node/pnpm/Electron install + tsc check
+        └── demo.sh             ← build + launch + UDP demo sequence
 ```
-
-### Key change from original overlay
-- `lenzu_server` accepts `--port <N>` CLI argument, which overrides `hud_config.json`.
-  This lets `lenzu_client` pass its configured `overlay_udp_port` at spawn time.
 
 ### Running standalone (for testing)
 ```bash
 cd lenzu_server
-npm install
-npm run tauri dev -- -- --port 7331
+bash scripts/setup.sh   # first time only
+bash scripts/demo.sh    # build, launch, send demo messages
 ```
 
 ---
@@ -131,11 +129,11 @@ Once the client/server lifecycle is stable, revisit the original vision of local
              │ UDP loopback (default :7331)
              ▼
 ┌─────────────────────────────────┐
-│       lenzu_server (Tauri)      │
+│     lenzu_server (Electron)     │
 │  Transparent overlay window     │
-│  UDP listener thread            │
-│  Emits "hud-text-changed" event │
-│  app.js renders text in HUD     │
+│  UDP listener (dgram)           │
+│  IPC: "hud-text-changed"        │
+│  app.ts renders text in HUD     │
 └─────────────────────────────────┘
 ```
 

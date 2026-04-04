@@ -5,10 +5,16 @@ messages received over **UDP** as closed-caption / subtitle lines.  The
 overlay is click-through (does not obstruct any other application), always
 on top, and fully configurable for position, translucency and font size.
 
-> Replacement of
+> Replaces the deprecated
 > [tauri-translucent-desktop-overlay](https://github.com/HidekiAI/tauri-translucent-desktop-overlay)
-> which uses WebKit2GTK — known to be buggy for composited transparency on
-> Linux.
+> (Tauri + WebKit2GTK). WebKit2GTK does not correctly composite ARGB windows on
+> X11 — stale alpha pixels accumulate as "ghost text" on every update, and no
+> workaround fully eliminates it. Electron (Chromium) composites ARGB correctly.
+>
+> **Known limitation (Electron 41+ / X11):** A thin white titlebar strip may
+> appear at the top of the window despite `frame: false`. Mitigated with
+> `type: 'toolbar'` + `titleBarStyle: 'hidden'` but not fully eliminated on all
+> compositor/WM combinations.
 
 ![simplescreenrecorder-2026-03-23_18 57 28](https://github.com/user-attachments/assets/b65d6be5-2592-48b9-858d-998f8c873cd8)
 
