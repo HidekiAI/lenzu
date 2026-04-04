@@ -6,6 +6,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "lib": ["ES2020", "DOM"],
+    "types": ["node", "vitest/globals"],
     "outDir": "dist",
     "rootDir": "src"
   },

@@ -32,6 +32,13 @@ sudo apt install -y \
 
 echo ""
 echo "System dependencies installed."
+
+# ── Rust compile check ────────────────────────────────────────────────────────
+echo "Running cargo check for lenzu..."
+cd "$REPO_ROOT/lenzu"
+cargo check
+cd "$REPO_ROOT"
+
 echo ""
 echo "Setting up Node.js and pnpm for lenzu_server (Electron)..."
 cd "$REPO_ROOT/lenzu_server"
