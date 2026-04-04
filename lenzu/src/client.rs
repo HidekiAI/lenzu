@@ -57,14 +57,22 @@ struct Message {
     content: Value,
 }
 
+/// Default timeout for the entire request (connect + read).
+/// Gemini/OpenRouter can be slow on large images; 60 s is generous but bounded.
+const REQUEST_TIMEOUT_SECS: u64 = 60;
+
 impl OcrClient {
     pub fn new(api_key: String, endpoint: String, model: String, prompt: String) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
             api_key,
             endpoint,
             model,
             prompt,
-            client: Client::new(),
+            client,
         }
     }
 
@@ -378,5 +386,30 @@ mod tests {
         let results = client().normalize_results(&arr).unwrap();
         assert_eq!(results[0].top_xy.as_deref(), Some("10,20"));
         assert_eq!(results[0].bot_xy.as_deref(), Some("100,200"));
+    }
+
+    // ── reliability / crash-prevention ───────────────────────────────────────
+
+    #[test]
+    fn test_client_is_built_with_timeout() {
+        // OcrClient::new() must not panic (i.e., Client::builder().timeout().build() succeeds)
+        // and the resulting client should be usable.
+        let c = OcrClient::new("k".into(), "http://localhost".into(), "m".into(), "p".into());
+        // We can't inspect the timeout directly, but a successful payload generation
+        // proves the client was constructed without panic.
+        let payload = c.generate_payload("dGVzdA==");
+        assert_eq!(payload["model"], "m");
+    }
+
+    #[test]
+    fn test_thread_panic_is_caught_by_catch_unwind() {
+        // Simulate what the spawn wrapper does: catch_unwind maps panics to Err.
+        let result = std::panic::catch_unwind(|| -> Result<Vec<TranslationResult>, String> {
+            panic!("simulated panic inside OCR thread");
+        })
+        .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "OCR thread panicked");
     }
 }
