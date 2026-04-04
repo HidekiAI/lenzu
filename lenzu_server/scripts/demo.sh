@@ -22,22 +22,27 @@ send_hud() {
     printf '%s' "$1" | nc -u -w1 127.0.0.1 "$UDP_PORT"
 }
 
-# Warn if picom is not running
+# Require picom — xfwm4's compositor causes ghost pixels; Electron 36–41 also
+# has an ARGB regression.  Without picom the overlay will not be transparent.
 if ! pgrep -x picom >/dev/null; then
     echo "WARNING: picom is not running. Start it first:"
     echo "  xfconf-query -c xfwm4 -p /general/use_compositing -s false"
     echo "  picom --backend glx --no-use-damage &"
-    echo "Continuing anyway — transparency may not work correctly."
+    echo "EXITING! — transparency will not work correctly."
+    exit 1
 fi
 
-# Kill any existing HUD instances
+# Kill any existing HUD instances and free the UDP port
 pkill -f "electron.*dist/main.js" 2>/dev/null || true
-sleep 1
+fuser -k "${UDP_PORT}/udp" 2>/dev/null || true
+# Wait until the port is actually free before starting fresh
+while ss -ulnp | grep -q ":${UDP_PORT}"; do sleep 0.2; done
 
 # Build and launch the app in the background
 cd "$PROJECT_ROOT"
 pnpm run build
-pnpm exec electron dist/main.js &
+# Launch Electron directly so APP_PID is Electron's PID (not pnpm's)
+GTK_CSD=0 node_modules/.bin/electron dist/main.js &
 APP_PID=$!
 
 # Wait until the UDP port is bound (app is ready to receive messages)
@@ -70,6 +75,6 @@ send_hud "$ORIGINAL_TEXT"
 sleep $DELAY
 
 kill "$APP_PID" 2>/dev/null
-wait "$APP_PID" 2>/dev/null
+wait "$APP_PID" 2>/dev/null || true
 
 echo "Demo complete."
