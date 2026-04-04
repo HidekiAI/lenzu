@@ -42,8 +42,8 @@ The overlay HUD was originally the `tauri-translucent-desktop-overlay` project (
 
 ### Structure
 ```
-lenzu/                          ← workspace root
-├── Cargo.toml                  ← workspace (members: lenzu only; lenzu_server is Node/Electron)
+./                              ← workspace root (repository root)
+├── Cargo.toml                  ← workspace manifest (members: lenzu only; lenzu_server is Node/Electron)
 ├── lenzu/                      ← OCR lens client (GTK3)
 └── lenzu_server/               ← Electron overlay HUD
     ├── package.json            ← electron, esbuild, vitest devDeps

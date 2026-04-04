@@ -146,8 +146,10 @@ End-user and “single command after clone” flows are not fully covered today.
 ### Must-Have (Linux)
 - `tesseract-ocr` (>=5.0) with `jpn_vert` traineddata
 - `libgtk-3-dev` (GTK3 >=3.24 — **not GTK4**)
-- `libwebkit2gtk-4.1-dev` — **removed from setup.sh**; was required by the deprecated Tauri overlay (`lenzu_client`). Electron bundles its own Chromium — no system WebKit dependency needed.
 - `pkg-config` and `build-essential`
+
+### Optional / Legacy
+- `libwebkit2gtk-4.1-dev` — **removed from setup.sh**; was required by the deprecated Tauri overlay (`lenzu_client`). Electron bundles its own Chromium — no system WebKit dependency needed.
 
 ### Nice-to-Have
 - `opencv` (for advanced preprocessing) - but heavy dependency
