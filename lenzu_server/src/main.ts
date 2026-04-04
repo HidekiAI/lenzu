@@ -91,7 +91,22 @@ app.whenReady().then(() => {
 
   socket.on('message', (msg) => {
     const text = msg.toString().trim();
-    if (text && mainWindow) {
+    if (!text) return;
+    console.log('[UDP] Received:', text.substring(0, 200) + (text.length > 200 ? '...' : ''));
+    // Check for JSON command (shutdown, etc.) before treating as display text
+    try {
+      const cmd = JSON.parse(text);
+      if (cmd.type === 'shutdown') {
+        console.log('[UDP] Received shutdown command, quitting...');
+        socket.close();
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+        app.quit();
+        return;
+      }
+    } catch {
+      // Not JSON — fall through and treat as plain display text
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('hud-text-changed', text);
     }
   });

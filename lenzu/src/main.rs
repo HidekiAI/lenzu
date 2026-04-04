@@ -425,6 +425,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s_conf.lens_size as u32,
                 ) {
                     let rgb = utils::raw_to_rgb(&raw);
+                    utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
                     let b64 = utils::encode_to_base64(
                         &rgb,
                         s_conf.lens_size as u32,
