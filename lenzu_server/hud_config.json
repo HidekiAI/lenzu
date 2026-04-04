@@ -1,15 +1,14 @@
 {
-  "udpPort": 7331,
-  "udpBindAddress": "127.0.0.1",
-  "position": "bottom-center",
-  "x": null,
-  "y": null,
-  "opacity": 0.85,
-  "fontSize": 13,
-  "maxLines": 5,
-  "textColor": "#00FFCC",
-  "backgroundColor": "#00000066",
-  "width": 800,
-  "height": 200,
-  "displayDuration": 0
+    "udp_port": 7331,
+    "udp_bind_address": "127.0.0.1",
+    "position": "bottom-center",
+    "background_opacity": 0.85,
+    "font_size_pt": 13,
+    "min_font_size_pt": 0,
+    "default_text": "Hello world, Hello Shiroe!",
+    "text_color": "#00FFCC",
+    "background_color": "#00000066",
+    "width": 800,
+    "height": 200,
+    "display_duration": 0
 }

@@ -1,29 +1,32 @@
 {
-  "name": "electron-translucent-desktop-overlay",
-  "version": "1.0.0",
-  "description": "A transparent HUD-like overlay for Linux desktop displaying UDP text as closed-caption/subtitle",
-  "main": "src/main.js",
-  "scripts": {
-    "start": "electron .",
-    "start:x11": "electron --enable-transparent-visuals .",
-    "test:send": "node test_sender.js"
-  },
-  "keywords": [
-    "electron",
-    "hud",
-    "overlay",
-    "transparent",
-    "udp",
-    "subtitles",
-    "captions",
-    "linux"
-  ],
-  "author": "Hideki A. Ikeda",
-  "license": "MIT",
-  "devDependencies": {
-    "electron": "^41.0.3"
-  },
-  "dependencies": {
-    "esbuild": "^0.27.5"
-  }
+    "name": "electron-translucent-desktop-overlay",
+    "version": "1.0.0",
+    "description": "A transparent HUD-like overlay for Linux desktop displaying UDP text as closed-caption/subtitle",
+    "main": "dist/main.js",
+    "scripts": {
+        "build": "tsc",
+        "start": "electron .",
+        "start:x11": "electron --enable-transparent-visuals ."
+    },
+    "keywords": [
+        "electron",
+        "hud",
+        "overlay",
+        "transparent",
+        "udp",
+        "subtitles",
+        "captions",
+        "linux"
+    ],
+    "author": "Hideki A. Ikeda",
+    "license": "MIT",
+    "devDependencies": {
+        "electron": "^41.0.3",
+        "typescript": "^5.0.0",
+        "vitest": "^4.1.2"
+    },
+    "dependencies": {
+        "dgram": "^1.0.1",
+        "esbuild": "^0.27.5"
+    }
 }

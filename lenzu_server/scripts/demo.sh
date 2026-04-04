@@ -27,7 +27,8 @@ if ! pgrep -x picom >/dev/null; then
     echo "WARNING: picom is not running. Start it first:"
     echo "  xfconf-query -c xfwm4 -p /general/use_compositing -s false"
     echo "  picom --backend glx --no-use-damage &"
-    echo "Continuing anyway — transparency may not work correctly."
+    echo "Exiting — transparency may not work correctly."
+    exit 2
 fi
 
 # Kill any existing HUD instances

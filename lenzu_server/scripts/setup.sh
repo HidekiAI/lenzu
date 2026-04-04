@@ -55,6 +55,13 @@ if [ ! -f "node_modules/esbuild/bin/esbuild" ]; then
     node node_modules/esbuild/install.js
 fi
 
+# Install picom to fix the X11 transparency issues (if not already installed)
+if ! command -v picom >/dev/null 2>&1; then
+    echo "Installing picom for X11 transparency support..."
+    sudo apt install -y picom
+fi  
+picom --backend glx --no-use-damage &
+
 echo ""
 echo "Setup complete."
 echo ""

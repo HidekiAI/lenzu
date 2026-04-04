@@ -4,7 +4,6 @@ import * as dgram from "dgram";
 import { loadConfig, DEFAULT_CONFIG, type HudConfig } from "./config";
 import { computePosition, type WindowPosition } from "./window-position";
 
-console.log("lenzu_server starting");
 // Required for transparent windows on X11
 app.commandLine.appendSwitch("enable-transparent-visuals");
 
@@ -58,19 +57,8 @@ app.whenReady().then(() => {
 
     socket.on("message", (msg) => {
         const text = msg.toString().trim();
-        // Log all incoming UDP messages for debugging
-        console.log("[UDP] Received message:", text.substring(0, 200) + (text.length > 200 ? "..." : ""));
         if (text && mainWindow) {
-            // Check for shutdown command
-            if (text === '{"type":"shutdown"}') {
-                console.log("[UDP] Received shutdown command, closing server...");
-                socket.close();
-                if (mainWindow) {
-                    mainWindow.close();
-                }
-                app.quit();
-                return;
-            }
+            console.log(`[UDP] Sending to HUD: ${text.substring(0, 100)}...`);
             mainWindow.webContents.send("hud-text-changed", text);
         }
     });
