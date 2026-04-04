@@ -13,6 +13,11 @@ if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   exit 1
 fi
 
+echo "==> Building lenzu_server (Electron HUD)..."
+cd "$REPO_ROOT/lenzu_server"
+pnpm install --silent
+pnpm run build
+
 echo "==> Building lenzu client..."
 cd "$REPO_ROOT"
 cargo build -p lenzu
