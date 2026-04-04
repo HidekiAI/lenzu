@@ -201,18 +201,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let cfg_esc = cfg.clone();
     let state_esc = state.clone();
     window.connect_key_press_event(move |_, event| {
         if event.keyval() == gdk::keys::constants::Escape {
-            kill_server(&mut state_esc.borrow_mut().server_process, &cfg);
+            kill_server(&mut state_esc.borrow_mut().server_process, &cfg_esc);
             gtk::main_quit();
         }
         glib::Propagation::Proceed
     });
 
+    let cfg_del = cfg.clone();
     let state_del = state.clone();
     window.connect_delete_event(move |_, _| {
-        kill_server(&mut state_del.borrow_mut().server_process, &cfg);
+        kill_server(&mut state_del.borrow_mut().server_process, &cfg_del);
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 

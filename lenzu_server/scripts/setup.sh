@@ -30,9 +30,18 @@ echo "pnpm: $(pnpm --version)"
 echo "Installing project dependencies..."
 pnpm install
 
+# ── Approve build scripts (pnpm v10 blocks them by default) ───────────────────
+# Run approve-builds so Electron's post-install download script is allowed on
+# subsequent installs. This is interactive — select 'electron' with <space> then
+# press <enter>. If running non-interactively the fallback below handles it.
+if [ -t 0 ]; then
+    echo "Approving pnpm build scripts (select 'electron', press <space> then <enter>)..."
+    pnpm approve-builds || true
+fi
+
 # ── Electron binary ───────────────────────────────────────────────────────────
-# pnpm v10 blocks build scripts by default; run them explicitly so the
-# Electron binary is actually downloaded (not just the npm package metadata).
+# Fallback: if approve-builds was skipped or the binary still isn't present,
+# run the install script directly.
 ELECTRON_BINARY="node_modules/electron/dist/electron"
 
 echo "Checking Electron binary..."
@@ -54,6 +63,10 @@ if [ ! -f "node_modules/esbuild/bin/esbuild" ]; then
     echo "esbuild binary not found — running install script..."
     node node_modules/esbuild/install.js
 fi
+
+# ── TypeScript compile check ──────────────────────────────────────────────────
+echo "Running TypeScript type check..."
+pnpm exec tsc --noEmit
 
 echo ""
 echo "Setup complete."
