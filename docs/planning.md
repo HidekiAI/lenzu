@@ -1,6 +1,7 @@
 # Lenzu Project Planning & Roadmap
 
 ## Current Status (2026-03-22, branch: `RemoteOCR`)
+
 - **Platform**: Linux-primary (X11, GTK3)
 - **OCR/Translation**: OpenRouter API → Gemini 2.0 Flash (multimodal); returns structured JSON
 - **UI**: GTK3 floating lens window (Cairo + Pango), transparent RGBA
@@ -11,6 +12,7 @@
 - **Workspace**: Cargo workspace at repo root; members: `lenzu` (client) and prototypes; `lenzu_server` is a separate Node/Electron project
 
 ## Vision
+
 Make **Linux the primary platform** with a robust, performant OCR lens that works across Wayland and X11, using open-source tools while maintaining the offline-first, privacy-respecting design.
 
 ## Goals
@@ -34,16 +36,18 @@ Make **Linux the primary platform** with a robust, performant OCR lens that work
 Each step below depends on the previous being working and tested before moving on.
 
 #### Step 1 — Docker / ollama container lifecycle `[M7b-1]`
-*Unblocks everything else — no point writing OCR code if the server won't start.*
 
-- [ ] `scripts/setup.sh` installs Docker, pulls `ollama/ollama`, pulls `gemma4:e2b` *(scripts written, needs smoke-test on clean machine)*
+_Unblocks everything else — no point writing OCR code if the server won't start._
+
+- [ ] `scripts/setup.sh` installs Docker, pulls `ollama/ollama`, pulls `gemma4:e2b` _(scripts written, needs smoke-test on clean machine)_
 - [ ] `scripts/run.sh` starts `lenzu-ollama` container before lenzu, stops on exit via `trap`
 - [ ] Manual test: `docker ps` confirms container running; `curl http://localhost:11434/` returns healthy
 - [ ] Unit test: `start_ollama` idempotent (running twice doesn't create duplicate containers)
 - **Done when**: `./scripts/run.sh` reliably starts and stops the container with no orphans
 
 #### Step 2 — `OcrClient` → ollama (Gemma as sole backend) `[M7b-2]`
-*Validate that Gemma actually produces usable OCR results before wiring fallback logic.*
+
+_Validate that Gemma actually produces usable OCR results before wiring fallback logic._
 
 - [ ] `AppConfig` defaults change: `llm_api_endpoint` → `http://localhost:11434/v1/chat/completions`, `llm_default_model` → `gemma4:e2b`
 - [ ] `OcrClient::call_api` skips `Authorization` header when `api_key` is empty (ollama needs none)
@@ -54,7 +58,8 @@ Each step below depends on the previous being working and tested before moving o
 - **Done when**: Shift+Click shows a translation via local Gemma with OpenRouter key unset
 
 #### Step 3 — `DualOcrClient`: automatic fallback + manual override `[M7b-3]`
-*Two trigger paths: automatic (Gemma gave no translation) and manual (user forces remote).*
+
+_Two trigger paths: automatic (Gemma gave no translation) and manual (user forces remote)._
 
 - [ ] `DualOcrClient` struct wraps primary (`OcrClient` → ollama) + optional fallback (`OcrClient` → OpenRouter)
 - [ ] `needs_fallback(results)`: true when result vec is empty or all `english` fields are blank/whitespace
@@ -70,7 +75,8 @@ Each step below depends on the previous being working and tested before moving o
 - **Done when**: automatic fallback works silently; Ctrl+Shift+Click forces remote visibly
 
 #### Step 4 — Image preprocessing `[M7b-4]`
-*Grayscale applies to all captures (local + remote); downscale applies only before remote calls.*
+
+_Grayscale applies to all captures (local + remote); downscale applies only before remote calls._
 
 - [ ] `raw_to_dynamic_image(raw, w, h) -> DynamicImage` in `utils.rs`
 - [ ] `encode_as_grayscale(image) -> String` in `utils.rs`: grayscale PNG, full resolution — used for primary (Gemma) path
@@ -89,11 +95,13 @@ Each step below depends on the previous being working and tested before moving o
 - **YOLO pre-detection** (`M7`): find text bounding boxes locally before any API call — further reduces tokens by sending only cropped regions. Deferred until M7b-4 is stable; depends on manga-specific ONNX model (COCO YOLOv8n insufficient).
 
 ### Short-term — UI/UX
-   - Overlay position: configurable top/bottom via `hud_config.json`
-   - Click-through mode for `lenzu_server` window (doesn't steal mouse events)
-   - **Lens-box resize** (post-YOLO): when YOLO pre-detection is active, allow the user to dynamically resize the lens capture box (click-drag) so text that doesn't fit inside the default box can be included. Box should never shrink below a configurable minimum size. Auto-adjust option: YOLO bounding boxes could be used to suggest an optimal crop size.
+
+- Overlay position: configurable top/bottom via `hud_config.json`
+- Click-through mode for `lenzu_server` window (doesn't steal mouse events)
+- **Lens-box resize** (post-YOLO): when YOLO pre-detection is active, allow the user to dynamically resize the lens capture box (click-drag) so text that doesn't fit inside the default box can be included. Box should never shrink below a configurable minimum size. Auto-adjust option: YOLO bounding boxes could be used to suggest an optimal crop size.
 
 ### Medium-term (1-3 Months)
+
 1. **OCR Engine Diversification**
    - Evaluate EasyOCR (Python) via subprocess for Linux (does NOT handle vertical, discard)
    - Research manga-ocr integration (requires Python/PyTorch, heavy)
@@ -118,6 +126,7 @@ Each step below depends on the previous being working and tested before moving o
    - Request permission for screen capture gracefully
 
 ### Long-term (3-6+ Months)
+
 1. **Alternative OCR Backends**
    - Google Cloud Vision (online, paid) via OAuth2
    - Microsoft Azure Computer Vision (online, paid)
@@ -141,42 +150,51 @@ Each step below depends on the previous being working and tested before moving o
 ### Known Issues & Blockers
 
 ### Overlay HUD (`lenzu_server`)
+
 - **xfwm4 compositor ghosting**: xfwm4's built-in compositor uses alpha-blend accumulation — each frame is blended on top of the previous buffer rather than composited fresh against the desktop, so semi-transparent areas fill with dark ghost pixels over time. The 3-frame erase cycle in `app.js` mitigates this but does not eliminate it. Full fix: disable xfwm4 compositing (`xfconf-query -c xfwm4 -p /general/use_compositing -s false`) and replace with `picom --backend glx --no-use-damage` (`--no-use-damage` forces full-surface redraws). See `lenzu_server/README.md` for complete steps.
 - `lenzu_server` must be started before `lenzu` (Phase 2 fixed this with auto-spawn)
 - Click-through not yet implemented (window intercepts mouse events)
 
 ### Electron Overlay Issues
+
 - **Electron failed to install correctly**: Error `Electron failed to install correctly, please delete node_modules/electron and try installing again`.
   - **Resolution**: Manually delete `lenzu_server/node_modules` and `lenzu_server/pnpm-lock.yaml`, then re-run `lenzu_server/scripts/setup.sh`. This ensures a clean reinstallation of Electron and its dependencies.
 
 ### API / Token Cost
+
 - Full lens image sent on every capture — no pre-filtering yet
 - Gemini 2.0 Flash is cheap (~$0.0006/hr in practice) but Phase 4 YOLOv8 pre-detection will cut costs further
 - **Gemma 4 E2B / E4B** (Google open-weights VLM, `google/gemma-4-E2B-it` / `google/gemma-4-E4B-it`): 140+ language native support, strong OCR and handwriting recognition, runs fully on-device. Ollama: `gemma4:e2b` / `gemma4:e4b`. GGUF (4-bit/8-bit) via Unsloth HuggingFace page. Viable as a zero-cost offline replacement for the remote API. Evaluation tracked in M7b.
 
 ### Linux Capture
+
 - Wayland: not yet supported; X11 only via `x11rb`
 - Multi-monitor: untested with monitors at non-zero offsets
 
 ## Technical Decisions
 
 ### UI toolkit: GTK3 (final decision)
+
 - **Decision**: GTK3 (`gtk-rs` 0.18) — permanent choice, not a stepping stone to GTK4
 - **Rationale**: GTK4 was evaluated and abandoned — graphene/gobject dep complexity, API churn, prototype build failures. GTK3 provides everything needed and is simpler to build against.
 
 ### OCR Backend Selection
+
 - **Linux**: Tesseract CLI (via `rusty-tesseract` or custom wrapper)
 - **Fallback**: If Tesseract fails, try OCR with different PSM or grayscale vs color
 - **Future**: Allow user to switch between engines (Tesseract, manga-ocr, gcloud)
 
 ### Image Preprocessing Pipeline
+
 ```
 Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binarize (adaptive) → OCR
 ```
+
 - Use `imageproc` for filters
 - Benchmark each step to ensure <100ms total overhead
 
 ### Packaging
+
 - **Primary**: Flatpak (Sandboxed, includes all dependencies)
 - **Secondary**: Debian/Ubuntu PPA
 - **Tertiary**: AppImage for universal Linux distribution
@@ -185,17 +203,17 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 
 #### Platform scope
 
-All scripts (`setup.sh`, `build.sh`, `prereqs.sh`, `run.sh`, `install.sh`) target **Debian-family Linux** (`apt`, `dpkg`) as the only supported platform. This covers Ubuntu, Debian, Mint, Pop!_OS, and derivatives. Fedora-family (`dnf`/`rpm`) is a planned future target; no other distros are in scope. Scripts may assert this with a friendly error if `/etc/debian_version` is absent.
+All scripts (`setup.sh`, `build.sh`, `prereqs.sh`, `run.sh`, `install.sh`) target **Debian-family Linux** (`apt`, `dpkg`) as the only supported platform. This covers Ubuntu, Debian, Mint, Pop!\_OS, and derivatives. Fedora-family (`dnf`/`rpm`) is a planned future target; no other distros are in scope. Scripts may assert this with a friendly error if `/etc/debian_version` is absent.
 
 ---
 
 #### What exists today (developer bootstrap only)
 
-| Script | Purpose |
-|---|---|
-| `scripts/setup.sh` | APT packages + debug `cargo build` + calls `lenzu_server/scripts/setup.sh` + ollama/Docker setup |
-| `lenzu_server/scripts/setup.sh` | nvm → Node → pnpm → `pnpm install` → Electron binary |
-| `scripts/run.sh` | ollama lifecycle (start/stop container) + `cargo build -p lenzu` (debug) + run client |
+| Script                          | Purpose                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `scripts/setup.sh`              | APT packages + debug `cargo build` + calls `lenzu_server/scripts/setup.sh` + ollama/Docker setup |
+| `lenzu_server/scripts/setup.sh` | nvm → Node → pnpm → `pnpm install` → Electron binary                                             |
+| `scripts/run.sh`                | ollama lifecycle (start/stop container) + `cargo build -p lenzu` (debug) + run client            |
 
 **Gap:** no release build, no installable package, no `.desktop` entry, and `lenzu` resolves `lenzu_server` via `CARGO_MANIFEST_DIR` at compile time — which breaks outside a git checkout.
 
@@ -232,6 +250,7 @@ run.sh     ──calls──► prereqs.sh  (ollama lifecycle already inline; ma
 Idempotent (skips steps already done). No compiler logic. Shared to avoid duplicating the ollama/Docker decision tree that currently lives in both `setup.sh` and `run.sh`.
 
 Responsibilities:
+
 - **ollama** (developer path — Docker or native, user's choice): same decision tree currently in `setup.sh`/`run.sh` (Docker first, then native install)
 - **ollama model pull**: `gemma4:e2b` against whatever backend is running
 - **Electron binary**: checks `lenzu_server/node_modules/electron/dist/electron`; if absent, runs `node lenzu_server/node_modules/electron/install.js` (Node must already be on PATH from `setup.sh`)
@@ -247,6 +266,7 @@ Flags: `--skip-ollama` (for CI or OpenRouter-only dev), `--skip-electron` (for C
 For developers and CI. Produces a redistributable `dist/` package consumed by `install.sh`.
 
 Steps:
+
 1. Call `scripts/setup.sh` (ensures dev toolchain present; `setup.sh` calls `prereqs.sh`)
 2. `cargo build --release -p lenzu`
 3. `cd lenzu_server && pnpm install --frozen-lockfile && pnpm run build`
@@ -271,6 +291,7 @@ Steps:
 The package is self-contained: no Docker, no Node, no pnpm, no system package manager needed to install.
 
 Flags:
+
 - `--skip-setup` — skip `setup.sh` (CI fast-path, toolchain already present)
 - `--skip-package` — build only, no tarball (for local test runs)
 
@@ -285,6 +306,7 @@ Flags:
 ---
 
 **What install.sh must never do:**
+
 - Ask the user about any software: Docker, ollama, Node, Electron, or anything else
 - Require or request `sudo` (one exception: if a system library is missing, it prints the exact command for the user to run — see step 3 below)
 - Detect or reuse any existing software the user may already have installed; lenzu's install is entirely self-contained
@@ -332,7 +354,7 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
    #!/bin/sh
    export LENZU_SERVER_PATH=”$HOME/.local/share/lenzu/lenzu_server”
    export OLLAMA_MODELS=”$HOME/.local/share/lenzu/ollama-models”
-   export OLLAMA_HOST=”127.0.0.1:11435”   # private port, avoids colliding with user's system ollama
+   export OLLAMA_HOST=”127.0.0.1:11435” # private port, avoids colliding with user's system ollama
    exec “$HOME/.local/share/lenzu/bin/lenzu-core” “$@”
    ```
    (The wrapper is how HUD path resolution and private ollama port are injected — no compile-time baking needed.)
@@ -345,6 +367,7 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 9. Print a single success line: `Lenzu is ready. Type 'lenzu' to start.`
 
 **The lenzu wrapper is also responsible at runtime for:**
+
 - Starting the private ollama before lenzu and stopping it on exit (mirrors what `run.sh` does for dev, but using the private binary and port)
 - This means `lenzu-core` can always assume `OLLAMA_HOST` is running — no Docker, no system-wide service
 
@@ -353,6 +376,7 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 #### Ollama port isolation
 
 `install.sh` uses port `11435` (not `11434`) for lenzu's private ollama. This avoids:
+
 - Conflicts with a developer's own system ollama on `11434`
 - Any interaction with `run.sh`'s Docker container
 - The user needing to know why lenzu is “using” a port they already have occupied
@@ -363,25 +387,28 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 
 #### Open design decisions (resolve before implementing)
 
-| Decision | Options | Status |
-|---|---|---|
-| HUD path resolution | Thin shell wrapper at `~/.local/bin/lenzu` sets `LENZU_SERVER_PATH`; `lenzu-core` reads it at runtime | **Decided** — wrapper approach; no compile-time path baking |
-| Electron bundling size | (A) ship `node_modules/electron/dist/` as-is (~200 MB); (B) `electron-builder` AppImage (~120 MB) | Option A first; Option B when Flatpak packaging begins |
-| System library check | Check `ldconfig -p` for GTK3/Cairo/Pango; if missing, print exact `sudo apt install libgtk-3-0 libcairo2 libpango-1.0-0` and exit | Debian-family only (`apt`); Fedora (`dnf`) is a future target |
-| `run.sh` → `build.sh` refactor | keep `cargo build` inline in `run.sh` (fast dev loop) vs. call `build.sh --debug` | Keep inline; revisit when `build.sh` lands |
-| Model download progress | `ollama pull` prints its own progress; wrap with a friendly preamble explaining the size | Use ollama CLI directly, prepend message |
+| Decision                       | Options                                                                                                                           | Status                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| HUD path resolution            | Thin shell wrapper at `~/.local/bin/lenzu` sets `LENZU_SERVER_PATH`; `lenzu-core` reads it at runtime                             | **Decided** — wrapper approach; no compile-time path baking   |
+| Electron bundling size         | (A) ship `node_modules/electron/dist/` as-is (~200 MB); (B) `electron-builder` AppImage (~120 MB)                                 | Option A first; Option B when Flatpak packaging begins        |
+| System library check           | Check `ldconfig -p` for GTK3/Cairo/Pango; if missing, print exact `sudo apt install libgtk-3-0 libcairo2 libpango-1.0-0` and exit | Debian-family only (`apt`); Fedora (`dnf`) is a future target |
+| `run.sh` → `build.sh` refactor | keep `cargo build` inline in `run.sh` (fast dev loop) vs. call `build.sh --debug`                                                 | Keep inline; revisit when `build.sh` lands                    |
+| Model download progress        | `ollama pull` prints its own progress; wrap with a friendly preamble explaining the size                                          | Use ollama CLI directly, prepend message                      |
 
 ## Dependencies & Tools
 
 ### Must-Have (Linux)
+
 - `tesseract-ocr` (>=5.0) with `jpn_vert` traineddata
 - `libgtk-3-dev` (GTK3 >=3.24 — **not GTK4**)
 - `pkg-config` and `build-essential`
 
 ### Optional / Legacy
+
 - `libwebkit2gtk-4.1-dev` — **removed from setup.sh**; was required by the deprecated Tauri overlay (`lenzu_client`). Electron bundles its own Chromium — no system WebKit dependency needed.
 
 ### Nice-to-Have
+
 - `opencv` (for advanced preprocessing) - but heavy dependency
 - `leptonica` (Tesseract dependency, usually bundled)
 - `mecab` (alternative interpreter)
@@ -414,16 +441,19 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 ## Testing Strategy
 
 ### Unit Tests
+
 - OCR pipeline with sample images (captured from manga)
 - Text reordering algorithm (vertical → horizontal)
 - Image preprocessing filters (verify output quality)
 
 ### Integration Tests
+
 - Full capture → OCR → interpreter → render flow
 - Multi-monitor setup (capture from secondary monitor)
 - Wayland vs X11 backend detection
 
 ### Manual QA
+
 - Test on various manga styles (shonen, shojo, seinen)
 - Different font sizes and qualities (scanned vs digital)
 - Mixed vertical/horizontal text layouts
@@ -432,7 +462,7 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 
 1. **Accuracy**: >90% character recognition on clean manga panels
 2. **Performance**: <3s from capture to display on 1080p
-3. **Usability**: Works out-of-the-box on Debian-family systems (Ubuntu 22.04+, Debian 12+, Mint, Pop!_OS, etc.); Fedora-family (`dnf`) is a planned future target
+3. **Usability**: Works out-of-the-box on Debian-family systems (Ubuntu 22.04+, Debian 12+, Mint, Pop!\_OS, etc.); Fedora-family (`dnf`) is a planned future target
 4. **Accessibility**: Screen reader compatible (Orca)
 5. **Privacy**: No network traffic unless user enables online OCR
 
@@ -450,3 +480,7 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 **Maintainer**: Hideki AI
 **Status**: Active development — `feature/ocr-local-remote` branch, Phase 4 M7b-1 next
 
+Addendum:
+Notes added that should be later updated to other docs (including this doc):
+
+- Q: How do we generate packages of both lenzu_client and lenzu_server, let alone, other dependency such as ollama, docker, etc?

@@ -1,0 +1,18 @@
+[
+  {
+    "label": "image_window_title",
+    "top_xy": [355, 145],
+    "bot_xy": [660, 360],
+    "text": "猿でもわかるOCR",
+    "romaji": "saru demo wakaru OCR",
+    "furigana": "猿[さる]でもわかるOCR"
+  },
+  {
+    "label": "text_window_dialogue",
+    "top_xy": [55, 715],
+    "bot_xy": [965, 920],
+    "text": "「OCR」と言えば「オプチカルキャラクターレコグニション」だよね。。。でも意味分からないな。",
+    "romaji": "「OCR」to ieba「OPUCHIKARU KYARAKUTA- REKOGUNISHON」da yo ne... demo imi wakaranai na.",
+    "furigana": "「OCR」と言[い]えば「OPUCHIKARU KYARAKUTA- REKOGUNISHON」だよね。。。でも意[い]味[み]分[わ]からないな。"
+  }
+]
