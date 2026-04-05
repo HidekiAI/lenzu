@@ -58,50 +58,102 @@ if [[ "$SKIP_OLLAMA" == "true" ]]; then
     echo "Skipping Ollama setup (--skip-ollama)."
 else
     echo ""
-    echo "Setting up Ollama (local LLM backend via Docker)..."
+    echo "Setting up Ollama (local LLM backend)..."
 
-    if curl -sf "http://localhost:11434/" &>/dev/null; then
-        # Native ollama (or an already-running container) is up — just ensure the model is present.
-        echo "  Native ollama detected at http://localhost:11434/ — skipping Docker setup."
-        echo "  Pulling model $OLLAMA_MODEL into native ollama (no-op if already present)..."
+    # ── helpers ───────────────────────────────────────────────────────────────
+    ollama_api_up()      { curl -sf "http://localhost:11434/" &>/dev/null; }
+    ollama_binary_ok()   { command -v ollama &>/dev/null; }
+    docker_ok()          { command -v docker &>/dev/null && docker info &>/dev/null; }
+
+    pull_model_native() {
+        echo "  Pulling $OLLAMA_MODEL (no-op if already present)..."
         ollama pull "$OLLAMA_MODEL"
         echo "  Model ready."
-    elif ! command -v docker &>/dev/null; then
-        echo "  Docker not found — installing docker.io..."
-        sudo apt install -y docker.io
-        sudo usermod -aG docker "$USER"
-        echo ""
-        echo "  IMPORTANT: Docker group membership requires a log-out/log-in to take effect."
-        echo "  After re-login, re-run this script to continue Ollama setup."
-        echo "  Or run the remaining steps as root: sudo docker pull $OLLAMA_IMAGE"
-    else
-        echo "  Docker found: $(docker --version)"
+    }
 
-        echo "  Pulling $OLLAMA_IMAGE image..."
-        docker pull "$OLLAMA_IMAGE"
-
-        echo "  Creating persistent volume '$OLLAMA_VOLUME' for model storage..."
-        docker volume create "$OLLAMA_VOLUME" &>/dev/null || true
-
-        echo "  Pulling model $OLLAMA_MODEL into Docker volume (may take several minutes on first run)..."
-        # 'ollama pull' is a client command that requires the server to be running.
-        # Start a temporary container, wait for it to be healthy, pull via exec, then stop.
-        docker run -d --name lenzu-ollama-setup --rm \
+    pull_model_docker() {
+        # 'ollama pull' is a client command — requires the server running.
+        # Start a temporary container, wait for healthy, pull via exec, stop.
+        local TMP="lenzu-ollama-setup"
+        # Clean up any leftover from a previous interrupted run.
+        docker rm -f "$TMP" &>/dev/null || true
+        docker run -d --name "$TMP" \
+            -p "11434:11434" \
             -v "${OLLAMA_VOLUME}:/root/.ollama" \
             "$OLLAMA_IMAGE"
         echo -n "  Waiting for temporary ollama container..."
         for i in $(seq 1 30); do
-            if curl -sf "http://localhost:11434/" &>/dev/null; then
-                echo " ready."
-                break
-            fi
-            sleep 1
-            echo -n "."
+            if ollama_api_up; then echo " ready."; break; fi
+            sleep 1; echo -n "."
         done
-        docker exec lenzu-ollama-setup ollama pull "$OLLAMA_MODEL"
-        docker stop lenzu-ollama-setup
+        docker exec "$TMP" ollama pull "$OLLAMA_MODEL"
+        docker stop "$TMP"
+        echo "  Model ready."
+    }
 
-        echo "  Ollama Docker image + $OLLAMA_MODEL ready."
+    # ── decision tree ─────────────────────────────────────────────────────────
+    #
+    #  Priority:
+    #   1. ollama API already up (native running or Docker container running)
+    #      → just pull the model, nothing else to install
+    #   2. ollama binary installed but not running
+    #      → start it in the background, pull model
+    #   3. Docker available
+    #      → pull image + model into a named volume
+    #   4. Nothing available
+    #      → install native ollama via the official install script, then pull model
+
+    if ollama_api_up; then
+        echo "  ollama already running at http://localhost:11434/"
+        if ollama_binary_ok; then
+            pull_model_native
+        else
+            # API is up (probably a Docker container someone started manually)
+            # Pull via the REST API using a running container exec if possible,
+            # otherwise just warn — run.sh will still work for whatever model is loaded.
+            echo "  NOTE: ollama binary not in PATH; model pull skipped."
+            echo "        Run 'ollama pull $OLLAMA_MODEL' manually if needed."
+        fi
+
+    elif ollama_binary_ok; then
+        echo "  ollama installed ($(ollama --version)) but not running — starting it..."
+        ollama serve &>/dev/null &
+        echo -n "  Waiting for ollama to start..."
+        for i in $(seq 1 15); do
+            if ollama_api_up; then echo " ready."; break; fi
+            sleep 1; echo -n "."
+        done
+        if ! ollama_api_up; then
+            echo ""
+            echo "  WARNING: ollama did not start in time. Try 'ollama serve' manually, then re-run setup.sh."
+        else
+            pull_model_native
+        fi
+
+    elif docker_ok; then
+        echo "  Docker found — using Docker for ollama."
+        echo "  Pulling $OLLAMA_IMAGE image..."
+        docker pull "$OLLAMA_IMAGE"
+        echo "  Creating persistent volume '$OLLAMA_VOLUME'..."
+        docker volume create "$OLLAMA_VOLUME" &>/dev/null || true
+        pull_model_docker
+
+    else
+        echo "  Neither ollama nor Docker found — installing native ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh
+        echo "  Starting ollama..."
+        ollama serve &>/dev/null &
+        echo -n "  Waiting for ollama to start..."
+        for i in $(seq 1 15); do
+            if ollama_api_up; then echo " ready."; break; fi
+            sleep 1; echo -n "."
+        done
+        if ! ollama_api_up; then
+            echo ""
+            echo "  WARNING: ollama did not start. Try 'ollama serve' manually, then re-run setup.sh."
+        else
+            pull_model_native
+        fi
     fi
 fi
 
