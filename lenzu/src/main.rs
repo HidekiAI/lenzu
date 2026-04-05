@@ -193,8 +193,13 @@ fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENROUTER_API_KEY")
-        .expect("ERROR: OPENROUTER_API_KEY environment variable not set!");
+    // OPENROUTER_API_KEY is optional — ollama (local) is the primary backend.
+    // When the key is absent, the fallback path is disabled; Ctrl+Shift+Click remote
+    // override will show an error in the HUD instead of making a remote call.
+    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| {
+        eprintln!("INFO: OPENROUTER_API_KEY not set — OpenRouter fallback disabled.");
+        String::new()
+    });
 
     let cfg = config::AppConfig::load();
 

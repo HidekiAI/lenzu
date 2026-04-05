@@ -39,12 +39,31 @@ pub struct AppConfig {
     pub show_furigana: bool,
     pub overlay_enabled: bool,
     pub overlay_udp_port: u16,
+    /// Primary backend — ollama (local). No API key required.
     pub llm_api_endpoint: String,
     pub llm_default_model: String,
+    /// Fallback backend — OpenRouter (remote). Requires OPENROUTER_API_KEY.
+    #[serde(default = "default_fallback_endpoint")]
+    pub fallback_llm_api_endpoint: String,
+    #[serde(default = "default_fallback_model")]
+    pub fallback_llm_model: String,
+    /// Longest-edge pixel limit applied to images before the fallback call. 0 = no limit.
+    #[serde(default = "default_fallback_max_dimension")]
+    pub fallback_max_dimension: u32,
     pub translate_src: Language,
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
     pub overlay_render_mode: OverlayRenderMode,
+}
+
+fn default_fallback_endpoint() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+fn default_fallback_model() -> String {
+    "google/gemini-2.0-flash-001".to_string()
+}
+fn default_fallback_max_dimension() -> u32 {
+    800
 }
 
 impl Default for AppConfig {
@@ -58,11 +77,14 @@ impl Default for AppConfig {
             show_furigana: true,
             overlay_enabled: true,
             overlay_udp_port: 7331,
-            // we're defaulting with Openrouter; I've no intention at this time to support other AI
-            // endpoints as my paid service; you'll have to do your own juggling if you want
-            // google, openai, etc as your target (good luck!)
-            llm_api_endpoint: "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            llm_default_model: "google/gemini-2.0-flash-001".to_string(), // I've spent about USD: $0.0006 (less than a penny) per hour
+            // Primary: local Gemma via ollama — no API key needed
+            llm_api_endpoint: "http://localhost:11434/v1/chat/completions".to_string(),
+            llm_default_model: "gemma4:e2b".to_string(),
+            // Fallback: OpenRouter (remote) — only used when Gemma gives no translation
+            // or when Ctrl+Shift+Click forces remote. Requires OPENROUTER_API_KEY.
+            fallback_llm_api_endpoint: default_fallback_endpoint(),
+            fallback_llm_model: default_fallback_model(),
+            fallback_max_dimension: default_fallback_max_dimension(),
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
@@ -103,6 +125,32 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_config_without_fallback_fields_loads_with_defaults() {
+        // Simulate a lenzu_config.json that was saved before the fallback fields existed.
+        // serde(default) must fill them in without returning an error.
+        let json = r##"{
+            "lens_size": 400,
+            "ui_panel_height": 130,
+            "font_size": 13.0,
+            "hud_color_hex": "#00FFCC",
+            "show_romaji": true,
+            "show_furigana": true,
+            "overlay_enabled": true,
+            "overlay_udp_port": 7331,
+            "llm_api_endpoint": "http://localhost:11434/v1/chat/completions",
+            "llm_default_model": "gemma4:e2b",
+            "translate_src": "jpn",
+            "translate_dest": "eng",
+            "translate_extra_prompt": "",
+            "overlay_render_mode": "furigana"
+        }"##;
+        let cfg: AppConfig = serde_json::from_str(json).expect("old config must deserialize");
+        assert_eq!(cfg.fallback_llm_api_endpoint, "https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(cfg.fallback_llm_model, "google/gemini-2.0-flash-001");
+        assert_eq!(cfg.fallback_max_dimension, 800);
+    }
 
     #[test]
     fn test_config_defaults() {
