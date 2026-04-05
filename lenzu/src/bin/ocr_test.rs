@@ -21,6 +21,7 @@
 //!   --timeout N              per-backend timeout in seconds (default: 30)
 //!   --no-timeout             disable timeout (for CPU inference timing)
 //!   --num-ctx N              ollama num_ctx option (default: 2048; 0 = disable)
+//!   --all-local              test full production chain (primary + fallbacks); implies --skip-remote
 //!   --skip-ollama            skip local-ollama test
 //!   --skip-remote            skip remote-OpenRouter test
 //!
@@ -48,7 +49,8 @@ struct SampleEntry {
 struct Config {
     ollama_endpoint: String,
     /// Ordered list of local models to test.  Each is tested independently.
-    /// Populated by one or more --ollama-model flags; defaults to [gemma4:e2b].
+    /// Populated by --ollama-model (repeatable) or --all-local.
+    /// Defaults to [primary model from AppConfig].
     ollama_models: Vec<String>,
     remote_endpoint: String,
     remote_model: String,
@@ -110,6 +112,21 @@ fn parse_args() -> Config {
             }
             "--skip-ollama"  => cfg.skip_ollama = true,
             "--skip-remote"  => cfg.skip_remote = true,
+            // --all-local: expand to the full production fallback chain
+            // (primary model + any local_fallback_models from AppConfig defaults).
+            "--all-local" => {
+                let d = AppConfig::default();
+                let mut models = vec![d.llm_default_model];
+                models.extend(d.local_fallback_models);
+                // If the production config has no fallbacks defined, add the known
+                // OCR-specialist models so the test is still useful.
+                if models.len() == 1 {
+                    models.push("glm-ocr".to_string());
+                    models.push("qwen2.5vl:7b".to_string());
+                }
+                cfg.ollama_models = models;
+                cfg.skip_remote = true; // local-only run
+            }
             other => { eprintln!("Unknown argument: {other}"); std::process::exit(1); }
         }
     }
