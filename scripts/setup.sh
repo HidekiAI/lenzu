@@ -42,9 +42,11 @@ echo ""
 echo "System dependencies installed."
 
 # ── Rust compile check ────────────────────────────────────────────────────────
-echo "Running cargo check for lenzu..."
-cd "$REPO_ROOT/lenzu"
-cargo check
+# Build a debug binary — same as run.sh uses. This pre-warms the compile cache
+# so the first run.sh invocation is fast. Release builds belong in install.sh.
+echo "Building lenzu (debug)..."
+cd "$REPO_ROOT"
+cargo build -p lenzu
 cd "$REPO_ROOT"
 
 echo ""
