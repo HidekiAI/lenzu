@@ -21,7 +21,7 @@
 //!   --timeout N              per-backend timeout in seconds (default: 30)
 //!   --no-timeout             disable timeout (for CPU inference timing)
 //!   --num-ctx N              ollama num_ctx option (default: 2048; 0 = disable)
-//!   --all-local              test full production chain: gemma4 → glm-ocr → qwen2.5vl:3b + remote
+//!   --all-local              test full production chain: gemma4 → glm-ocr + remote
 //!   --skip-ollama            skip local-ollama test
 //!   --skip-remote            skip remote-OpenRouter test
 //!
@@ -121,12 +121,12 @@ fn parse_args() -> Config {
                 // If the production config has no fallbacks defined, add the known
                 // OCR-specialist models so the test is still useful.
                 // Ordered by expected quality/speed: glm-ocr (OCR-specialist),
-                // glm-ocr (OCR-specialist), qwen2.5vl:3b (vision-language).
+                // glm-ocr (OCR-specialist) is the only viable local fallback on 4GB VRAM.
+                // qwen2.5vl:3b excluded: CPU-bound, 2+ min per query on 4GB VRAM.
                 // moondream excluded: captioning model, returns prose not structured JSON.
                 // Florence-2 excluded: not in ollama registry (HuggingFace/Python only).
                 if models.len() == 1 {
                     models.push("glm-ocr".to_string());
-                    models.push("qwen2.5vl:3b".to_string());
                 }
                 cfg.ollama_models = models;
             }
