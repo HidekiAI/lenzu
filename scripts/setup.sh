@@ -161,8 +161,17 @@ else
 
     pull_model_native() {
         for model in "${OLLAMA_MODELS[@]}"; do
-            echo "  Pulling $model (no-op if already present)..."
-            ollama pull "$model" || echo "  WARNING: failed to pull $model — skipping."
+            # Check if model is already fully present before pulling.
+            if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$model"; then
+                echo "  $model already present — skipping."
+                continue
+            fi
+            echo "  Pulling $model..."
+            if ollama pull "$model"; then
+                echo "  $model ready."
+            else
+                echo "  WARNING: failed to pull $model — run 'ollama pull $model' manually to retry."
+            fi
         done
         echo "  All models done."
     }
@@ -183,7 +192,11 @@ else
             sleep 1; echo -n "."
         done
         for model in "${OLLAMA_MODELS[@]}"; do
-            docker exec "$TMP" ollama pull "$model" || echo "  WARNING: failed to pull $model — skipping."
+            if docker exec "$TMP" ollama pull "$model"; then
+                echo "  $model ready."
+            else
+                echo "  WARNING: failed to pull $model — run 'ollama pull $model' manually to retry."
+            fi
         done
         docker stop "$TMP"
         echo "  All models done."
