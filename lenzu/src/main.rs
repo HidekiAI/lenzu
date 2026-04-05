@@ -216,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: cfg.clone(),
         pixels: None,
         ocr_result: String::new(),
-        status: "READY: Shift+Click | ESC to Quit".to_string(),
+        status: "READY: Shift+Click | Ctrl+Shift+Click (remote) | ESC".to_string(),
         last_capture: Instant::now() - Duration::from_secs(2),
         clipboard: Clipboard::new().expect("Failed to init clipboard"),
         api_key,
@@ -440,9 +440,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let win_y = y - (s_conf.lens_size / 2);
         window_main.move_(win_x, win_y);
 
-        if modifier.contains(gdk::ModifierType::SHIFT_MASK)
-            && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
-        {
+        let is_shift_click = modifier.contains(gdk::ModifierType::SHIFT_MASK)
+            && modifier.contains(gdk::ModifierType::BUTTON1_MASK);
+        let force_remote = is_shift_click && modifier.contains(gdk::ModifierType::CONTROL_MASK);
+
+        if is_shift_click {
             // Check debounce + loading flag, then release the borrow immediately.
             // IMPORTANT: do NOT hold borrow_mut() across gtk::main_iteration() —
             // the animation timer also calls borrow_mut() and will panic (BorrowMutError).
@@ -453,16 +455,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if should_capture {
                 // Arm state, extract config values, then DROP borrow before event loop.
-                let (api_key, endpoint, model, prompt) = {
+                let (fallback_api_key, primary_endpoint, primary_model,
+                     fallback_endpoint, fallback_model, prompt) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
-                    s.status = "CAPTURING...".to_string();
+                    s.status = if force_remote {
+                        "CAPTURING (remote)...".to_string()
+                    } else {
+                        "CAPTURING...".to_string()
+                    };
                     s.is_loading = true;
                     s.flash_alpha = 1.0;
                     let vals = (
                         s.api_key.clone(),
                         s.config.llm_api_endpoint.clone(),
                         s.config.llm_default_model.clone(),
+                        s.config.fallback_llm_api_endpoint.clone(),
+                        s.config.fallback_llm_model.clone(),
                         s.config.resolved_prompt(),
                     );
                     vals
@@ -509,8 +518,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::thread::spawn(move || {
                             // Catch any unexpected panic so is_loading is always reset.
                             let result = std::panic::catch_unwind(|| {
-                                let ocr_client = client::OcrClient::new(api_key, endpoint, model, prompt);
-                                ocr_client.call_api(&b64).map_err(|e| e.to_string())
+                                let dual = client::DualOcrClient::new(
+                                    primary_endpoint,
+                                    primary_model,
+                                    fallback_endpoint,
+                                    fallback_model,
+                                    fallback_api_key,
+                                    prompt,
+                                );
+                                if force_remote {
+                                    dual.call_api_force_fallback(&b64)
+                                } else {
+                                    dual.call_api(&b64)
+                                }.map_err(|e| e.to_string())
                             })
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
                             let _ = tx_clone.send_blocking(result);

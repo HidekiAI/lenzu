@@ -190,6 +190,94 @@ impl OcrClient {
     }
 }
 
+// ── DualOcrClient ─────────────────────────────────────────────────────────────
+
+/// Wraps a primary `OcrClient` (ollama/local) and an optional fallback
+/// `OcrClient` (OpenRouter/remote).
+///
+/// Decision flow for `call_api`:
+///   1. Try primary.
+///   2. If primary fails OR returns no translations → try fallback (if configured).
+///   3. If fallback not configured → return primary result as-is.
+///
+/// `call_api_force_fallback` skips primary entirely (Ctrl+Shift+Click path).
+pub struct DualOcrClient {
+    primary: OcrClient,
+    fallback: Option<OcrClient>,
+}
+
+impl DualOcrClient {
+    pub fn new(
+        primary_endpoint: String,
+        primary_model: String,
+        fallback_endpoint: String,
+        fallback_model: String,
+        fallback_api_key: String,
+        prompt: String,
+    ) -> Self {
+        let primary = OcrClient::new(String::new(), primary_endpoint, primary_model, prompt.clone());
+        let fallback = if !fallback_api_key.is_empty() {
+            Some(OcrClient::new(fallback_api_key, fallback_endpoint, fallback_model, prompt))
+        } else {
+            None
+        };
+        Self { primary, fallback }
+    }
+
+    /// Returns `true` when results are empty or every `english` field is absent/blank.
+    pub fn needs_fallback(results: &[TranslationResult]) -> bool {
+        if results.is_empty() {
+            return true;
+        }
+        results.iter().all(|r| {
+            r.english
+                .as_deref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+        })
+    }
+
+    /// Normal path: try primary, fall back automatically if needed.
+    pub fn call_api(&self, b64: &str) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        let primary_result = self.primary.call_api(b64);
+        let needs_fb = match &primary_result {
+            Ok(results) => Self::needs_fallback(results),
+            Err(_) => true,
+        };
+
+        if !needs_fb {
+            return primary_result;
+        }
+
+        match &primary_result {
+            Err(e) => eprintln!("[OCR] primary failed ({e}) — trying fallback"),
+            Ok(_) => eprintln!("[OCR] primary gave no translations — trying fallback"),
+        }
+
+        match &self.fallback {
+            Some(fb) => {
+                // Log to debug file that we're using fallback
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
+                    let _ = std::io::Write::write_fmt(&mut f, format_args!("[fallback] primary gave no translation\n"));
+                }
+                fb.call_api(b64)
+            }
+            None => {
+                eprintln!("[OCR] fallback not configured (OPENROUTER_API_KEY not set)");
+                primary_result
+            }
+        }
+    }
+
+    /// Force-remote path: skip primary entirely (Ctrl+Shift+Click).
+    pub fn call_api_force_fallback(&self, b64: &str) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        match &self.fallback {
+            Some(fb) => fb.call_api(b64),
+            None => Err("Remote override unavailable: OPENROUTER_API_KEY not set".into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +490,84 @@ mod tests {
         // proves the client was constructed without panic.
         let payload = c.generate_payload("dGVzdA==");
         assert_eq!(payload["model"], "m");
+    }
+
+    // ── DualOcrClient::needs_fallback ────────────────────────────────────────
+
+    fn tr(english: Option<&str>) -> TranslationResult {
+        TranslationResult { english: english.map(str::to_string), ..Default::default() }
+    }
+
+    #[test]
+    fn test_needs_fallback_empty_vec() {
+        assert!(DualOcrClient::needs_fallback(&[]));
+    }
+
+    #[test]
+    fn test_needs_fallback_all_none_english() {
+        assert!(DualOcrClient::needs_fallback(&[tr(None), tr(None)]));
+    }
+
+    #[test]
+    fn test_needs_fallback_all_blank_english() {
+        assert!(DualOcrClient::needs_fallback(&[tr(Some("")), tr(Some("  "))]));
+    }
+
+    #[test]
+    fn test_needs_fallback_whitespace_only_english() {
+        assert!(DualOcrClient::needs_fallback(&[tr(Some("\t\n"))]));
+    }
+
+    #[test]
+    fn test_needs_fallback_false_when_any_english_present() {
+        // One result has a real translation — should NOT trigger fallback
+        assert!(!DualOcrClient::needs_fallback(&[tr(None), tr(Some("hello"))]));
+    }
+
+    #[test]
+    fn test_needs_fallback_false_single_result_with_text() {
+        assert!(!DualOcrClient::needs_fallback(&[tr(Some("world"))]));
+    }
+
+    #[test]
+    fn test_dual_client_no_fallback_when_api_key_empty() {
+        // When api_key is empty, fallback OcrClient must NOT be constructed.
+        let dc = DualOcrClient::new(
+            "http://localhost:11434/v1/chat/completions".into(),
+            "gemma4:e2b".into(),
+            "https://openrouter.ai/api/v1/chat/completions".into(),
+            "google/gemini-2.0-flash-001".into(),
+            String::new(), // empty → no fallback
+            "prompt".into(),
+        );
+        assert!(dc.fallback.is_none(), "empty api_key must not create a fallback client");
+    }
+
+    #[test]
+    fn test_dual_client_fallback_created_when_key_present() {
+        let dc = DualOcrClient::new(
+            "http://localhost:11434/v1/chat/completions".into(),
+            "gemma4:e2b".into(),
+            "https://openrouter.ai/api/v1/chat/completions".into(),
+            "google/gemini-2.0-flash-001".into(),
+            "sk-real-key".into(),
+            "prompt".into(),
+        );
+        assert!(dc.fallback.is_some(), "non-empty api_key must create a fallback client");
+    }
+
+    #[test]
+    fn test_force_fallback_errors_when_no_key() {
+        let dc = DualOcrClient::new(
+            "http://localhost:11434/v1/chat/completions".into(),
+            "gemma4:e2b".into(),
+            "https://openrouter.ai/api/v1/chat/completions".into(),
+            "google/gemini-2.0-flash-001".into(),
+            String::new(),
+            "prompt".into(),
+        );
+        let err = dc.call_api_force_fallback("dGVzdA==").unwrap_err();
+        assert!(err.to_string().contains("OPENROUTER_API_KEY"), "error must mention the missing key");
     }
 
     // ── auth header suppression for ollama ───────────────────────────────────
