@@ -181,19 +181,195 @@ Capture → Grayscale → Denoise (median filter) → Contrast stretch → Binar
 - **Secondary**: Debian/Ubuntu PPA
 - **Tertiary**: AppImage for universal Linux distribution
 
-### Installation (`scripts/install.sh`) — planned, not yet in repo
+### Installation — Script Architecture (planned)
 
-End-user and “single command after clone” flows are not fully covered today. **What exists now** is developer bootstrap only:
+#### Platform scope
 
-| Artifact | Purpose |
+All scripts (`setup.sh`, `build.sh`, `prereqs.sh`, `run.sh`, `install.sh`) target **Debian-family Linux** (`apt`, `dpkg`) as the only supported platform. This covers Ubuntu, Debian, Mint, Pop!_OS, and derivatives. Fedora-family (`dnf`/`rpm`) is a planned future target; no other distros are in scope. Scripts may assert this with a friendly error if `/etc/debian_version` is absent.
+
+---
+
+#### What exists today (developer bootstrap only)
+
+| Script | Purpose |
 |---|---|
-| `scripts/setup.sh` | APT packages + runs `lenzu_server/scripts/setup.sh` (Node, pnpm, Electron) |
-| `lenzu_server/scripts/setup.sh` | Node toolchain and `pnpm install` / Electron binary |
-| `scripts/run.sh` | `cargo build -p lenzu` and run the debug client (client auto-spawns the Electron HUD when enabled) |
+| `scripts/setup.sh` | APT packages + debug `cargo build` + calls `lenzu_server/scripts/setup.sh` + ollama/Docker setup |
+| `lenzu_server/scripts/setup.sh` | nvm → Node → pnpm → `pnpm install` → Electron binary |
+| `scripts/run.sh` | ollama lifecycle (start/stop container) + `cargo build -p lenzu` (debug) + run client |
 
-**Gap:** there is no `scripts/install.sh` yet — no release build to `~/.local/bin` (or `/usr/local`), no `.desktop` entry, and no documented layout for a relocatable install. The GTK client resolves `lenzu_server` relative to the `lenzu` crate at compile time (`../lenzu_server`); a real installer must either install both trees under a known prefix, set an environment variable, or change the client to resolve the HUD path at runtime (decision TBD when the script lands).
+**Gap:** no release build, no installable package, no `.desktop` entry, and `lenzu` resolves `lenzu_server` via `CARGO_MANIFEST_DIR` at compile time — which breaks outside a git checkout.
 
-**Planned add:** `scripts/install.sh` (or equivalent) should: optional `setup.sh`, `cargo build --release -p lenzu`, install the `lenzu` binary and ship `lenzu_server` beside it or under a fixed share path, update `PATH` / symlink, and optionally install a desktop file. Formal distribution for non-developers remains **Packaging** above (Flatpak first).
+---
+
+#### Planned script set
+
+The core problem: end users don't want `rustc`, `cargo`, `tsc`, `pnpm`, or `nvm`. But ollama/Electron still need to be present at runtime. Splitting into four scripts keeps each one focused:
+
+```
+scripts/
+├── prereqs.sh    ← NEW: runtime downloader (ollama, model, Electron). No compiler.
+├── setup.sh      ← EXISTING: dev toolchain (APT, rustc, Node, pnpm). Calls prereqs.sh.
+├── build.sh      ← NEW: release builder + packager. Calls setup.sh → produces dist/
+├── run.sh        ← EXISTING: dev loop. Calls prereqs.sh for ollama, then cargo build + run.
+└── install.sh    ← NEW: end-user installer. Calls prereqs.sh, extracts dist package.
+```
+
+**Dependency flow:**
+
+```
+install.sh ──calls──► prereqs.sh
+setup.sh   ──calls──► prereqs.sh
+build.sh   ──calls──► setup.sh ──calls──► prereqs.sh
+run.sh     ──calls──► prereqs.sh  (ollama lifecycle already inline; may refactor to call prereqs.sh)
+```
+
+---
+
+#### `scripts/prereqs.sh` — shared developer downloader
+
+> **Scope: developer scripts only** (`setup.sh`, `build.sh`, `run.sh`). `install.sh` does NOT call this.
+
+Idempotent (skips steps already done). No compiler logic. Shared to avoid duplicating the ollama/Docker decision tree that currently lives in both `setup.sh` and `run.sh`.
+
+Responsibilities:
+- **ollama** (developer path — Docker or native, user's choice): same decision tree currently in `setup.sh`/`run.sh` (Docker first, then native install)
+- **ollama model pull**: `gemma4:e2b` against whatever backend is running
+- **Electron binary**: checks `lenzu_server/node_modules/electron/dist/electron`; if absent, runs `node lenzu_server/node_modules/electron/install.js` (Node must already be on PATH from `setup.sh`)
+
+Does NOT install: `rustc`, `cargo`, `node`, `pnpm`, `nvm`, APT packages.
+
+Flags: `--skip-ollama` (for CI or OpenRouter-only dev), `--skip-electron` (for CI builds where the Electron binary is irrelevant)
+
+---
+
+#### `scripts/build.sh` — release builder + packager
+
+For developers and CI. Produces a redistributable `dist/` package consumed by `install.sh`.
+
+Steps:
+1. Call `scripts/setup.sh` (ensures dev toolchain present; `setup.sh` calls `prereqs.sh`)
+2. `cargo build --release -p lenzu`
+3. `cd lenzu_server && pnpm install --frozen-lockfile && pnpm run build`
+4. Download the ollama Linux binary for `x86_64` and `aarch64` from the ollama GitHub releases page into `dist/` — **these become part of the package** so `install.sh` never needs to figure out where to get ollama
+5. Assemble `dist/lenzu-<version>/` to match the installed layout exactly:
+   ```
+   dist/lenzu-<version>/
+   ├── install.sh                          ← copy of scripts/install.sh (self-contained)
+   ├── bin/
+   │   └── lenzu-core                      ← release binary
+   ├── libexec/
+   │   └── ollama                          ← ollama binary for target arch (bundled, no Docker)
+   └── share/
+       └── overlay/                        ← HUD renderer (Electron app — internal name only)
+           ├── dist/                       ← esbuild output
+           ├── src/                        ← static assets
+           └── node_modules/electron/dist/ ← bundled Electron runtime (~200 MB)
+   ```
+   Note: the directory is named `overlay/` in the dist package, not `lenzu_server/`, so the user-facing concept is "the overlay" not "the server". Internal code and developer docs may still use `lenzu_server` as the project name.
+6. Create `dist/lenzu-<version>-linux-x86_64.tar.gz` (and `aarch64` variant)
+
+The package is self-contained: no Docker, no Node, no pnpm, no system package manager needed to install.
+
+Flags:
+- `--skip-setup` — skip `setup.sh` (CI fast-path, toolchain already present)
+- `--skip-package` — build only, no tarball (for local test runs)
+
+---
+
+#### `scripts/install.sh` — zero-knowledge end-user installer
+
+**Design principle:** the user should not need to know what Docker, ollama, Node, cargo, or pnpm are. If they would have to search the internet to understand an error message, the script has failed. Model this on `brew install` and `snap install`: everything is managed silently, entirely in userspace, no `sudo` required.
+
+**Audience:** anyone who can open a terminal and run a single command. Technical pre-knowledge: none.
+
+---
+
+**What install.sh must never do:**
+- Ask the user about any software: Docker, ollama, Node, Electron, or anything else
+- Require or request `sudo` (one exception: if a system library is missing, it prints the exact command for the user to run — see step 3 below)
+- Detect or reuse any existing software the user may already have installed; lenzu's install is entirely self-contained
+- Expose flags or options whose names require technical knowledge (`--skip-electron`, `--use-docker`, etc.) — the only acceptable flags are human-language options like `--prefix` or `--no-desktop-shortcut`
+- Print error messages containing binary names, paths, or jargon that require interpretation
+- Leave the user at a prompt asking “which option do you want?”
+- Emit more than one screen of output for a successful install
+
+---
+
+**Install layout — fully userspace, fully scoped to lenzu:**
+
+```
+~/.local/
+├── bin/
+│   └── lenzu                           ← launcher (shell wrapper — the only file the user ever touches)
+└── share/
+    └── lenzu/
+        ├── bin/
+        │   └── lenzu-core              ← main application binary
+        ├── libexec/
+        │   └── ollama                  ← bundled AI runtime (private to lenzu)
+        ├── ollama-models/              ← AI model storage (private to lenzu)
+        ├── overlay/                    ← HUD renderer (private to lenzu; user never interacts with this)
+        └── config/
+            └── lenzu_config.json       ← user-editable settings
+```
+
+Everything under `~/.local/share/lenzu/` is implementation detail. The user sees one command: `lenzu`. All sub-processes (AI runtime, overlay renderer) are managed by lenzu itself — invisible to the user.
+
+The AI runtime binary and model storage are private to lenzu. Lenzu does not share, detect, or conflict with anything the user may already have installed.
+
+**Steps:**
+
+1. Detect arch (`uname -m`); abort with a human message if unsupported (e.g. `arm32`)
+2. Locate the release package:
+   - If the script is extracted from a tarball, the package is in the same directory
+   - Otherwise, download `lenzu-<latest>-linux-<arch>.tar.gz` from the GitHub releases API (no auth required for public releases) with a visible progress bar
+3. Check for required system libraries (`libgtk-3.so`, `libcairo.so`, `libpango-1.0.so`):
+   - These are provided by the user's desktop environment — any GNOME, XFCE, or KDE system will have them
+   - If any are missing: print one friendly sentence (“Lenzu needs one system library. Please run the command below, then re-run this installer:”) followed by the exact `apt install` command. Exit cleanly. Do not try to install them automatically (that requires `sudo`).
+4. Extract the package to `~/.local/share/lenzu/`
+5. Write `~/.local/bin/lenzu` as a thin shell wrapper:
+   ```sh
+   #!/bin/sh
+   export LENZU_SERVER_PATH=”$HOME/.local/share/lenzu/lenzu_server”
+   export OLLAMA_MODELS=”$HOME/.local/share/lenzu/ollama-models”
+   export OLLAMA_HOST=”127.0.0.1:11435”   # private port, avoids colliding with user's system ollama
+   exec “$HOME/.local/share/lenzu/bin/lenzu-core” “$@”
+   ```
+   (The wrapper is how HUD path resolution and private ollama port are injected — no compile-time baking needed.)
+6. First-run model download (one time):
+   - Start the private ollama (`libexec/ollama serve`) in the background
+   - Pull `gemma4:e2b` into `ollama-models/` with a human progress message (“Downloading AI model — this is ~2 GB and happens only once…”)
+   - Stop private ollama
+7. Add `~/.local/bin` to PATH if missing: append to `~/.bashrc` and `~/.zshrc` silently; print one note at the end
+8. Optionally install `~/.local/share/applications/lenzu.desktop`
+9. Print a single success line: `Lenzu is ready. Type 'lenzu' to start.`
+
+**The lenzu wrapper is also responsible at runtime for:**
+- Starting the private ollama before lenzu and stopping it on exit (mirrors what `run.sh` does for dev, but using the private binary and port)
+- This means `lenzu-core` can always assume `OLLAMA_HOST` is running — no Docker, no system-wide service
+
+---
+
+#### Ollama port isolation
+
+`install.sh` uses port `11435` (not `11434`) for lenzu's private ollama. This avoids:
+- Conflicts with a developer's own system ollama on `11434`
+- Any interaction with `run.sh`'s Docker container
+- The user needing to know why lenzu is “using” a port they already have occupied
+
+`AppConfig` must support `llm_api_endpoint` pointing to `http://127.0.0.1:11435/v1/chat/completions`. The wrapper script sets `OLLAMA_HOST` and the default config is written to point at port `11435` during install.
+
+---
+
+#### Open design decisions (resolve before implementing)
+
+| Decision | Options | Status |
+|---|---|---|
+| HUD path resolution | Thin shell wrapper at `~/.local/bin/lenzu` sets `LENZU_SERVER_PATH`; `lenzu-core` reads it at runtime | **Decided** — wrapper approach; no compile-time path baking |
+| Electron bundling size | (A) ship `node_modules/electron/dist/` as-is (~200 MB); (B) `electron-builder` AppImage (~120 MB) | Option A first; Option B when Flatpak packaging begins |
+| System library check | Check `ldconfig -p` for GTK3/Cairo/Pango; if missing, print exact `sudo apt install libgtk-3-0 libcairo2 libpango-1.0-0` and exit | Debian-family only (`apt`); Fedora (`dnf`) is a future target |
+| `run.sh` → `build.sh` refactor | keep `cargo build` inline in `run.sh` (fast dev loop) vs. call `build.sh --debug` | Keep inline; revisit when `build.sh` lands |
+| Model download progress | `ollama pull` prints its own progress; wrap with a friendly preamble explaining the size | Use ollama CLI directly, prepend message |
 
 ## Dependencies & Tools
 
@@ -233,7 +409,7 @@ End-user and “single command after clone” flows are not fully covered today.
 - [ ] **M7**: YOLOv8 pre-detection — find text bounding boxes locally, send only cropped regions (deferred until M7b-4 stable; needs manga-specific ONNX model)
 - [ ] **M8**: Wayland support via portals
 - [ ] **M9**: Flatpak packaging
-- [ ] **M10**: `scripts/install.sh` (or equivalent) — release binary + `lenzu_server` layout, `PATH` / `.desktop`, runtime HUD path (see **Installation** above)
+- [ ] **M10**: `scripts/prereqs.sh` + `scripts/build.sh` + `scripts/install.sh` — release binary packaged with bundled Electron, `~/.local` install, `PATH` / `.desktop`, runtime HUD path resolution (see **Installation — Script Architecture** above)
 
 ## Testing Strategy
 
@@ -256,7 +432,7 @@ End-user and “single command after clone” flows are not fully covered today.
 
 1. **Accuracy**: >90% character recognition on clean manga panels
 2. **Performance**: <3s from capture to display on 1080p
-3. **Usability**: Works out-of-the-box on Ubuntu 22.04+ and Fedora 38+
+3. **Usability**: Works out-of-the-box on Debian-family systems (Ubuntu 22.04+, Debian 12+, Mint, Pop!_OS, etc.); Fedora-family (`dnf`) is a planned future target
 4. **Accessibility**: Screen reader compatible (Orca)
 5. **Privacy**: No network traffic unless user enables online OCR
 
@@ -270,7 +446,7 @@ End-user and “single command after clone” flows are not fully covered today.
 
 ---
 
-**Last Updated**: 2026-04-04
+**Last Updated**: 2026-04-05
 **Maintainer**: Hideki AI
 **Status**: Active development — `feature/ocr-local-remote` branch, Phase 4 M7b-1 next
 
