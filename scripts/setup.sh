@@ -36,7 +36,18 @@ done
 
 OLLAMA_IMAGE="ollama/ollama"
 OLLAMA_VOLUME="lenzu-ollama-data"
-OLLAMA_MODEL="gemma4:e2b"
+# All models pulled during setup.  Listed in priority order (primary first).
+#   gemma4:e2b    — primary OCR/translation (large, GPU recommended)
+#   glm-ocr       — OCR specialist, fast, great layout understanding
+#   florence2:large — Microsoft vision-first OCR specialist (OCR/OCR_WITH_REGION tasks)
+#   moondream     — ultra-lightweight vision (moondream2 via :v2 tag)
+OLLAMA_MODELS=(
+    "gemma4:e2b"
+    "glm-ocr"
+    "florence2:large"
+    "moondream"
+)
+OLLAMA_MODEL="${OLLAMA_MODELS[0]}"  # legacy var used by version/CUDA checks
 
 # Unless we can `apt update` in IPv4 ONLY, the IPv6 endpoint is heinously slow, in fact, at times will timeout, so I don't do `update` unless I've not done it in months...
 echo sudo apt update
@@ -148,9 +159,11 @@ else
     }
 
     pull_model_native() {
-        echo "  Pulling $OLLAMA_MODEL (no-op if already present)..."
-        ollama pull "$OLLAMA_MODEL"
-        echo "  Model ready."
+        for model in "${OLLAMA_MODELS[@]}"; do
+            echo "  Pulling $model (no-op if already present)..."
+            ollama pull "$model"
+        done
+        echo "  All models ready."
     }
 
     pull_model_docker() {
@@ -168,9 +181,11 @@ else
             if ollama_api_up; then echo " ready."; break; fi
             sleep 1; echo -n "."
         done
-        docker exec "$TMP" ollama pull "$OLLAMA_MODEL"
+        for model in "${OLLAMA_MODELS[@]}"; do
+            docker exec "$TMP" ollama pull "$model"
+        done
         docker stop "$TMP"
-        echo "  Model ready."
+        echo "  All models ready."
     }
 
     # ── GPU / CPU mode selection ──────────────────────────────────────────────
