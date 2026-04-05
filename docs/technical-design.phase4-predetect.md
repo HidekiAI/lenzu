@@ -672,37 +672,54 @@ When fallback fires, log to `/dev/shm/api_debug.txt` (already used for API respo
 
 ### Rationale
 
-The OpenRouter (remote) call is billed per token, and vision tokens scale with image byte size. Two cheap preprocessing steps applied **only to the fallback image** cut payload size significantly before it goes over the wire:
+OCR does not need colour — text contrast is carried entirely by luminance. Converting to grayscale immediately after capture is essentially free (sub-millisecond) and benefits all backends by removing irrelevant colour information that can confuse VLM attention heads. Two preprocessing steps are applied, but at different scopes:
 
-1. **Grayscale** — OCR does not need colour. Converting RGB → Luma8 and encoding as a single-channel PNG produces roughly **⅓ the bytes** of the equivalent RGB PNG.
-2. **Proportional downscale** — If either dimension exceeds `fallback_max_dimension`, the image is resized (maintaining aspect ratio) before encoding. Fewer pixels = smaller PNG = fewer tokens.
+1. **Grayscale** — applied to **all captures** (both local Gemma and remote OpenRouter). Converting RGB → Luma8 reduces PNG size by roughly **⅓** and focuses the model on luminance contrast only.
+2. **Proportional downscale** — applied **only before fallback (OpenRouter) calls**. The remote call is billed per token and vision tokens scale with image byte size. If either dimension exceeds `fallback_max_dimension`, the image is resized (maintaining aspect ratio) before encoding. Fewer pixels = smaller PNG = fewer tokens.
 
-These steps are **not** applied to the primary (Gemma/ollama) call — local inference has no token cost, and colour + full resolution may help Gemma's accuracy.
+Local inference (Gemma/ollama) receives a **grayscale, full-resolution** image. Remote inference (OpenRouter) receives a **grayscale, downscaled** image.
 
 ### Token impact estimate
 
-| Image | Format | Approx PNG bytes | Approx tokens |
-|---|---|---|---|
-| 400×400 lens capture | RGB colour | ~60 KB | ~800–1,200 |
-| 400×400 lens capture | Grayscale | ~20 KB | ~270–400 |
-| 400×400 scaled to 300×300 | Grayscale | ~12 KB | ~160–240 |
+| Image | Path | Format | Approx PNG bytes | Approx tokens |
+|---|---|---|---|---|
+| 400×400 lens capture | (original) | RGB colour | ~60 KB | ~800–1,200 |
+| 400×400 lens capture | Local (Gemma) | Grayscale, full res | ~20 KB | ~270–400 |
+| 400×400 lens capture | Remote (OpenRouter) | Grayscale + scaled ≤800px | ~12 KB | ~160–240 |
 
-Savings: **70–80%** on the fallback call compared to the current full-colour send.
+Savings on the fallback call: **70–80%** vs. the original full-colour send. Local call benefits from grayscale alone (~66% reduction) at zero token cost.
 
 ### Implementation — `utils.rs`
 
-Two new public functions alongside the existing `encode_to_base64`:
+Three new public functions alongside the existing `encode_to_base64`:
 
 ```rust
 use image::{DynamicImage, ImageFormat, imageops::FilterType};
 
-/// Convert an RGB DynamicImage to grayscale, optionally downscale, encode as PNG → base64.
+/// Convert raw BGRA bytes to a DynamicImage (used at capture time before encoding).
+pub fn raw_to_dynamic_image(raw: &[u8], w: u32, h: u32) -> DynamicImage {
+    let rgb = raw_to_rgb(raw);
+    let buf = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb)
+        .expect("raw_to_dynamic_image: dimensions mismatch");
+    DynamicImage::ImageRgb8(buf)
+}
+
+/// Encode a DynamicImage as grayscale PNG → base64.
+/// Applied to ALL captures (both local and remote) immediately after capture.
+pub fn encode_as_grayscale(image: &DynamicImage) -> String {
+    let gray = image.grayscale();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    gray.write_to(&mut buf, ImageFormat::Png).unwrap();
+    base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
+}
+
+/// Encode a DynamicImage as grayscale + proportionally downscaled PNG → base64.
 /// `max_dim`: longest edge limit in pixels; 0 = no limit.
+/// Applied ONLY before remote (OpenRouter/fallback) calls to reduce token cost.
 pub fn encode_for_fallback(image: &DynamicImage, max_dim: u32) -> String {
-    // 1. Grayscale
     let gray = image.grayscale();
 
-    // 2. Proportional downscale if over the limit
+    // Proportional downscale if over the limit
     let scaled = if max_dim > 0 {
         let (w, h) = gray.dimensions();
         if w > max_dim || h > max_dim {
@@ -714,18 +731,9 @@ pub fn encode_for_fallback(image: &DynamicImage, max_dim: u32) -> String {
         gray
     };
 
-    // 3. PNG encode → base64
     let mut buf = std::io::Cursor::new(Vec::new());
     scaled.write_to(&mut buf, ImageFormat::Png).unwrap();
     base64::engine::general_purpose::STANDARD.encode(buf.into_inner())
-}
-
-/// Convert raw BGRA bytes to a DynamicImage (needed to pass to encode_for_fallback).
-pub fn raw_to_dynamic_image(raw: &[u8], w: u32, h: u32) -> DynamicImage {
-    let rgb = raw_to_rgb(raw);
-    let buf = image::ImageBuffer::<image::Rgb<u8>, _>::from_raw(w, h, rgb)
-        .expect("raw_to_dynamic_image: dimensions mismatch");
-    DynamicImage::ImageRgb8(buf)
 }
 ```
 
@@ -733,14 +741,14 @@ pub fn raw_to_dynamic_image(raw: &[u8], w: u32, h: u32) -> DynamicImage {
 
 ### Interface change for `DualOcrClient`
 
-To apply different encoding for primary vs fallback, `DualOcrClient::call_api` accepts a `&DynamicImage` instead of a pre-encoded `&str`. It encodes internally:
+To apply different encoding for primary vs fallback, `DualOcrClient::call_api` accepts a `&DynamicImage` instead of a pre-encoded `&str`. It encodes internally, applying grayscale to both paths and downscale only to the fallback path:
 
 ```rust
 impl DualOcrClient {
-    /// `image`: the captured lens region as a DynamicImage.
+    /// `image`: the captured lens region as a DynamicImage (raw RGB, full resolution).
     pub fn call_api(&self, image: &DynamicImage) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
-        // Primary: full colour, full resolution
-        let primary_b64 = encode_to_base64_from_dynamic(image);
+        // Primary: grayscale, full resolution — colour info not needed for OCR
+        let primary_b64 = encode_as_grayscale(image);
 
         match self.try_primary(&primary_b64) {
             Ok(results) if !self.needs_fallback(&results) => Ok(results),
@@ -750,7 +758,7 @@ impl DualOcrClient {
                 } else {
                     eprintln!("[OCR] primary gave no translations — trying fallback");
                 }
-                // Fallback: grayscale + downscale to cut token cost
+                // Fallback: grayscale + downscale to cut remote token cost
                 let fallback_b64 = encode_for_fallback(image, self.fallback_preprocess.max_dimension);
                 self.try_fallback(&fallback_b64)
             }
@@ -772,35 +780,38 @@ let results = client.call_api(&dyn_image)?;
 
 ```jsonc
 {
-  // Fallback preprocessing (applied only before OpenRouter calls):
-  "fallback_preprocess_grayscale": true,   // default: true
+  // Preprocessing applied to ALL captures (local + remote):
+  //   grayscale conversion is always-on and has no config knob.
+
+  // Additional preprocessing applied ONLY before fallback (OpenRouter) calls:
   "fallback_max_dimension": 800            // default: 800; set 0 to disable downscaling
 }
 ```
 
 Added to `AppConfig` with `#[serde(default)]`. Default of 800px means the 400×400 lens capture is untouched (already under limit), but large crops from pre-detection (Phase 4 §4) are still bounded.
 
+> **Why remove `fallback_preprocess_grayscale` as a config knob?** Grayscale now applies to all captures, so it is no longer specific to the fallback path. Keeping a toggle would imply it could be disabled for primary too, which is not the intent. If a future use case needs per-path control, this can be re-introduced then.
+
 ### `FallbackPreprocess` struct
 
 ```rust
 #[derive(Debug, Clone)]
 pub struct FallbackPreprocess {
-    pub grayscale: bool,       // always true for now; reserved for future toggle
-    pub max_dimension: u32,    // 0 = no limit
+    pub max_dimension: u32,    // 0 = no limit; applies only to fallback (remote) calls
 }
 
 impl Default for FallbackPreprocess {
     fn default() -> Self {
-        Self { grayscale: true, max_dimension: 800 }
+        Self { max_dimension: 800 }
     }
 }
 ```
 
-Stored in `DualOcrClient`. Read from `AppConfig` at construction time in `main.rs`.
+Grayscale is always applied at capture time (both paths) and is not stored here. `FallbackPreprocess` tracks only the downscale limit, which is fallback-specific. Stored in `DualOcrClient`; read from `AppConfig` at construction time in `main.rs`.
 
 ### Interaction with YOLO pre-detection (§4)
 
-When pre-detection is active, multiple small crops are sent individually. Each crop goes through the same dual-backend path — Gemma first (full colour), then fallback if needed (grayscale + scaled). Since crops are already small (typically 60–200px wide), the `max_dimension` cap rarely triggers, but grayscale still cuts their size by ~⅔.
+When pre-detection is active, multiple small crops are sent individually. Each crop goes through the same dual-backend path — grayscale is applied to all crops before Gemma (local) and before OpenRouter (remote); downscale is applied only for the remote path. Since crops are already small (typically 60–200px wide), the `max_dimension` cap rarely triggers, but grayscale still cuts their size by ~⅔ in both paths.
 
 ### Debug output
 
@@ -812,13 +823,13 @@ Save the preprocessed fallback image to `/dev/shm/debug_lens_fallback.png` along
 
 ### Lesson from Phase 3
 
-The Electron HUD migration (Phase 3) uncovered cascading issues — ghosting artefacts, UDP message timing, IPC race conditions — that were caught late through manual QA. Unit tests on the boundary contracts (message format, port negotiation, lifecycle ordering) would have surfaced these earlier. Phase 4 introduces three new code boundaries (`DualOcrClient`, `encode_for_fallback`, `TextDetector`) that each need tests before integration.
+The Electron HUD migration (Phase 3) uncovered cascading issues — ghosting artefacts, UDP message timing, IPC race conditions — that were caught late through manual QA. Unit tests on the boundary contracts (message format, port negotiation, lifecycle ordering) would have surfaced these earlier. Phase 4 introduces three new code boundaries (`DualOcrClient`, `encode_as_grayscale`/`encode_for_fallback`, `TextDetector`) that each need tests before integration.
 
 ### Coverage map
 
 | Module | New code | Test location |
 |---|---|---|
-| `utils.rs` | `raw_to_dynamic_image`, `encode_for_fallback` | `utils.rs #[cfg(test)]` |
+| `utils.rs` | `raw_to_dynamic_image`, `encode_as_grayscale`, `encode_for_fallback` | `utils.rs #[cfg(test)]` |
 | `client.rs` | `DualOcrClient`, `needs_fallback`, auth header logic | `client.rs #[cfg(test)]` |
 | `config.rs` | new fallback fields + defaults, backward compat | `config.rs #[cfg(test)]` |
 | `ocr/text_detection.rs` | `OcrRect::scale_to`, `OcrRect::padded`, `remap_coords` | `text_detection.rs #[cfg(test)]` |
@@ -857,7 +868,46 @@ mod tests {
         assert_eq!(pixel[2], 10); // B
     }
 
-    // ── encode_for_fallback — grayscale ──────────────────────────────────────
+    // ── encode_as_grayscale — used for ALL captures (local + remote primary) ──
+
+    #[test]
+    fn test_encode_as_grayscale_produces_grayscale_png() {
+        let mut img = image::RgbImage::new(4, 4);
+        for p in img.pixels_mut() { *p = image::Rgb([0, 128, 255]); } // solid blue
+        let dyn_img = DynamicImage::ImageRgb8(img);
+
+        let b64 = encode_as_grayscale(&dyn_img);
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert!(
+            matches!(decoded, DynamicImage::ImageLuma8(_) | DynamicImage::ImageLumaA8(_)),
+            "encode_as_grayscale must produce a grayscale PNG"
+        );
+    }
+
+    #[test]
+    fn test_encode_as_grayscale_preserves_dimensions() {
+        let img = DynamicImage::new_rgb8(100, 80);
+        let b64 = encode_as_grayscale(&img);
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(decoded.width(), 100);
+        assert_eq!(decoded.height(), 80);
+    }
+
+    #[test]
+    fn test_encode_as_grayscale_smaller_than_colour() {
+        let img = DynamicImage::new_rgb8(400, 400);
+        let colour_b64 = encode_to_base64(&img.to_rgb8().into_raw(), 400, 400);
+        let gray_b64 = encode_as_grayscale(&img);
+        assert!(
+            gray_b64.len() < colour_b64.len(),
+            "grayscale b64 ({}) should be smaller than colour b64 ({})",
+            gray_b64.len(), colour_b64.len()
+        );
+    }
+
+    // ── encode_for_fallback — grayscale + downscale (remote only) ────────────
 
     #[test]
     fn test_encode_for_fallback_produces_grayscale_png() {
@@ -878,17 +928,15 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_for_fallback_is_smaller_than_colour() {
-        // 400x400 solid-colour image — fallback should be significantly smaller
+    fn test_encode_for_fallback_is_smaller_than_primary() {
+        // 400x400 image — fallback (grayscale+downscale) must be smaller than primary (grayscale only)
         let img = DynamicImage::new_rgb8(400, 400);
-        let colour_b64 = encode_to_base64(
-            &img.to_rgb8().into_raw(), 400, 400
-        );
-        let fallback_b64 = encode_for_fallback(&img, 0);
+        let primary_b64 = encode_as_grayscale(&img);
+        let fallback_b64 = encode_for_fallback(&img, 300); // force downscale
         assert!(
-            fallback_b64.len() < colour_b64.len(),
-            "grayscale b64 ({}) should be smaller than colour b64 ({})",
-            fallback_b64.len(), colour_b64.len()
+            fallback_b64.len() < primary_b64.len(),
+            "fallback b64 ({}) should be smaller than primary b64 ({}) after downscale",
+            fallback_b64.len(), primary_b64.len()
         );
     }
 
@@ -1315,9 +1363,14 @@ async fn test_fallback_image_sent_is_smaller_than_primary() {
         ResponseTemplate::new(200).set_body_json(openrouter_response())
     ).mount(&fallback_server).await;
 
-    // Use a larger image so the size difference is visible
+    // Use a larger image so the size difference is visible.
+    // primary gets: grayscale, full-resolution (400×400)
+    // fallback gets: grayscale + downscaled to max_dimension (default 800, so 400×400 is
+    //   under the limit here — use fallback_max_dimension=300 via new_for_test to force resize)
     let img = image::DynamicImage::new_rgb8(400, 400);
-    let client = DualOcrClient::new_for_test(&primary_server.uri(), &fallback_server.uri(), "sk");
+    let client = DualOcrClient::new_for_test_with_max_dim(
+        &primary_server.uri(), &fallback_server.uri(), "sk", 300
+    );
     let _ = client.call_api(&img);
 
     let primary_reqs = primary_server.received_requests().await.unwrap();
@@ -1329,7 +1382,8 @@ async fn test_fallback_image_sent_is_smaller_than_primary() {
     let fallback_body_len = fallback_reqs[0].body.len();
     assert!(
         fallback_body_len < primary_body_len,
-        "fallback payload ({fallback_body_len}B) must be smaller than primary ({primary_body_len}B)"
+        "fallback payload ({fallback_body_len}B) must be smaller than primary ({primary_body_len}B) \
+         — both are grayscale; fallback is additionally downscaled"
     );
 }
 ```
@@ -1348,7 +1402,9 @@ async fn test_fallback_image_sent_is_smaller_than_primary() {
 | Whitespace-only translations treated as success | `test_needs_fallback_whitespace_only_english` |
 | Old config files break on upgrade | `test_old_config_without_fallback_fields_loads_with_defaults` |
 | Coord remapping wrong after crop offset | `test_remap_coords_adds_offset` + array format variant |
-| Fallback sends larger image than primary | `test_fallback_image_sent_is_smaller_than_primary` |
-| Grayscale conversion regresses to colour | `test_encode_for_fallback_produces_grayscale_png` |
+| Primary path sends colour instead of grayscale | `test_encode_as_grayscale_produces_grayscale_png` |
+| Grayscale dimensions change unexpectedly | `test_encode_as_grayscale_preserves_dimensions` |
+| Fallback sends larger image than primary | `test_fallback_image_sent_is_smaller_than_primary` (integration) + `test_encode_for_fallback_is_smaller_than_primary` (unit) |
+| Fallback grayscale conversion regresses to colour | `test_encode_for_fallback_produces_grayscale_png` |
 | Aspect ratio broken by downscale | `test_encode_for_fallback_downscales_wide_image` + tall variant |
 | Auth header sent to ollama (local) | `test_ocr_client_empty_key_omits_auth_header` |

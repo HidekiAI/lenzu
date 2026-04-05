@@ -69,17 +69,18 @@ Each step below depends on the previous being working and tested before moving o
 - [ ] Integration test: `Ctrl+Shift+Click` path calls fallback directly, primary mock gets zero calls
 - **Done when**: automatic fallback works silently; Ctrl+Shift+Click forces remote visibly
 
-#### Step 4 — Fallback image preprocessing `[M7b-4]`
-*Only relevant once fallback is confirmed working — polish step.*
+#### Step 4 — Image preprocessing `[M7b-4]`
+*Grayscale applies to all captures (local + remote); downscale applies only before remote calls.*
 
 - [ ] `raw_to_dynamic_image(raw, w, h) -> DynamicImage` in `utils.rs`
-- [ ] `encode_for_fallback(image, max_dim) -> String`: grayscale + proportional downscale
-- [ ] `DualOcrClient::call_api` signature changes to accept `&DynamicImage`; encodes colour for primary, grayscale+scaled for fallback
-- [ ] `AppConfig` gains `fallback_preprocess_grayscale: bool` (default `true`) + `fallback_max_dimension: u32` (default `800`)
-- [ ] Save preprocessed image to `/dev/shm/debug_lens_fallback.png` for dev comparison
-- [ ] Unit tests: grayscale output confirmed via PNG colour type; downscale preserves aspect ratio; zero max-dim disables resize; fallback b64 smaller than colour b64
+- [ ] `encode_as_grayscale(image) -> String` in `utils.rs`: grayscale PNG, full resolution — used for primary (Gemma) path
+- [ ] `encode_for_fallback(image, max_dim) -> String` in `utils.rs`: grayscale + proportional downscale — used for fallback (OpenRouter) path
+- [ ] `DualOcrClient::call_api` signature changes to accept `&DynamicImage`; calls `encode_as_grayscale` for primary, `encode_for_fallback` for fallback
+- [ ] `AppConfig` gains `fallback_max_dimension: u32` (default `800`) — downscale limit for remote calls only
+- [ ] Save preprocessed fallback image to `/dev/shm/debug_lens_fallback.png` for dev comparison
+- [ ] Unit tests: grayscale output confirmed via PNG colour type for both paths; downscale preserves aspect ratio; zero max-dim disables resize; fallback b64 smaller than primary b64 (downscale effect)
 - [ ] Integration test: fallback request body measurably smaller than primary request body
-- **Done when**: fallback image is visibly smaller/grayscale in debug file; token savings confirmed in `api_debug.txt`
+- **Done when**: local path sends grayscale full-res; fallback path sends grayscale downscaled; debug file confirms visually; token savings confirmed in `api_debug.txt`
 
 ---
 
@@ -90,6 +91,7 @@ Each step below depends on the previous being working and tested before moving o
 ### Short-term — UI/UX
    - Overlay position: configurable top/bottom via `hud_config.json`
    - Click-through mode for `lenzu_server` window (doesn't steal mouse events)
+   - **Lens-box resize** (post-YOLO): when YOLO pre-detection is active, allow the user to dynamically resize the lens capture box (click-drag) so text that doesn't fit inside the default box can be included. Box should never shrink below a configurable minimum size. Auto-adjust option: YOLO bounding boxes could be used to suggest an optimal crop size.
 
 ### Medium-term (1-3 Months)
 1. **OCR Engine Diversification**
