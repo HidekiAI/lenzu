@@ -63,9 +63,49 @@ else
     echo "Setting up Ollama (local LLM backend)..."
 
     # ── helpers ───────────────────────────────────────────────────────────────
+    OLLAMA_MIN_VERSION="0.20.0"   # gemma4 requires at least this version
+
     ollama_api_up()      { curl -sf "http://localhost:11434/" &>/dev/null; }
     ollama_binary_ok()   { command -v ollama &>/dev/null; }
     docker_ok()          { command -v docker &>/dev/null && docker info &>/dev/null; }
+
+    # Returns 0 if installed ollama meets the minimum version requirement.
+    ollama_version_ok() {
+        ollama_binary_ok || return 1
+        local ver
+        ver=$(ollama --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        [[ -z "$ver" ]] && return 1
+        # Compare semver: split into parts and compare numerically.
+        local IFS=.
+        read -ra cur  <<< "$ver"
+        read -ra min  <<< "$OLLAMA_MIN_VERSION"
+        for i in 0 1 2; do
+            local c=${cur[$i]:-0} m=${min[$i]:-0}
+            (( c > m )) && return 0
+            (( c < m )) && return 1
+        done
+        return 0   # equal
+    }
+
+    upgrade_ollama_native() {
+        echo "  Upgrading ollama (current: $(ollama --version 2>/dev/null), required: >= $OLLAMA_MIN_VERSION)..."
+        if command -v brew &>/dev/null && brew list ollama &>/dev/null 2>&1; then
+            brew upgrade ollama
+        else
+            curl -fsSL https://ollama.com/install.sh | sh
+        fi
+        # Restart the service so the new binary is used
+        if command -v brew &>/dev/null && brew list ollama &>/dev/null 2>&1; then
+            brew services restart ollama
+        fi
+        echo -n "  Waiting for upgraded ollama to start..."
+        for i in $(seq 1 15); do
+            if ollama_api_up; then echo " ready."; return; fi
+            sleep 1; echo -n "."
+        done
+        echo ""
+        echo "  WARNING: ollama did not start after upgrade. Try 'ollama serve' manually."
+    }
 
     pull_model_native() {
         echo "  Pulling $OLLAMA_MODEL (no-op if already present)..."
@@ -104,6 +144,11 @@ else
     #      → pull image + model into a named volume
     #   4. Nothing available
     #      → install native ollama via the official install script, then pull model
+
+    # Upgrade native ollama if it's installed but below minimum version.
+    if ollama_binary_ok && ! ollama_version_ok; then
+        upgrade_ollama_native
+    fi
 
     if ollama_api_up; then
         echo "  ollama already running at http://localhost:11434/"
