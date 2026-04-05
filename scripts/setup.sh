@@ -280,7 +280,6 @@ else
         fi
     elif [[ "$REQUESTED_MODE" == "gpu" ]] && ollama_binary_ok && ollama_has_cuda; then
         # Binary already has CUDA but the running process might be an old no-CUDA instance.
-        local running_bin
         running_bin=$(ps -eo cmd= | grep "ollama serve" | grep -v grep | awk '{print $1}' | head -1)
         if [[ -n "$running_bin" ]] && ! strings "$running_bin" 2>/dev/null | grep -q "CUDA_VISIBLE_DEVICES"; then
             echo "  Running process ($running_bin) has no CUDA — restarting with CUDA binary..."
