@@ -492,10 +492,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s_conf.lens_size as u32,
                 ) {
                     Ok(raw) => {
-                        let rgb = utils::raw_to_rgb(&raw);
-                        utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
-                        let b64 = utils::encode_to_base64(
-                            &rgb,
+                        let dyn_image = utils::raw_to_dynamic_image(
+                            &raw,
+                            s_conf.lens_size as u32,
+                            s_conf.lens_size as u32,
+                        );
+                        utils::save_debug_image(
+                            &utils::raw_to_rgb(&raw),
                             s_conf.lens_size as u32,
                             s_conf.lens_size as u32,
                         );
@@ -521,15 +524,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let dual = client::DualOcrClient::new(
                                     primary_endpoint,
                                     primary_model,
+                                    s_conf.local_fallback_models.clone(),
                                     fallback_endpoint,
                                     fallback_model,
                                     fallback_api_key,
+                                    s_conf.fallback_max_dimension,
+                                    s_conf.primary_num_ctx,
+                                    s_conf.local_timeout_secs,
+                                    s_conf.remote_timeout_secs,
                                     prompt,
                                 );
                                 if force_remote {
-                                    dual.call_api_force_fallback(&b64)
+                                    dual.call_api_force_fallback(&dyn_image)
                                 } else {
-                                    dual.call_api(&b64)
+                                    dual.call_api(&dyn_image)
                                 }.map_err(|e| e.to_string())
                             })
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));

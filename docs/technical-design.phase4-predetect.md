@@ -1408,3 +1408,177 @@ async fn test_fallback_image_sent_is_smaller_than_primary() {
 | Fallback grayscale conversion regresses to colour | `test_encode_for_fallback_produces_grayscale_png` |
 | Aspect ratio broken by downscale | `test_encode_for_fallback_downscales_wide_image` + tall variant |
 | Auth header sent to ollama (local) | `test_ocr_client_empty_key_omits_auth_header` |
+
+---
+
+## 15. Gemma-Based Detection Pass (YOLO-Free Interim Path)
+
+### Motivation
+
+The YOLO pre-detection path (§2–§4) requires a fine-tuned model for manga speech bubbles — the existing COCO-trained models have no `text` or `bubble` class. Fine-tuning requires training data (Manga109 balloon annotations) and a separate model file to ship with the application. Until that work is done, there is a simpler **interim path** that uses Gemma itself as the text-region detector, without YOLO.
+
+### Design
+
+The pipeline becomes a two-request sequence per capture, both served by `DualOcrClient`:
+
+```
+Shift+Click
+  → capture lens → DynamicImage
+
+  Pass 1 — Region detection (single request):
+    → prompt: "Find all text regions. Return a JSON array of {top_xy, bot_xy} only.
+               Do not read or transcribe the text. Return ONLY the JSON array."
+    → model returns: [{top_xy:"x,y", bot_xy:"x,y"}, ...]
+
+  Pass 2 — OCR per crop (one request per region, parallelizable):
+    → for each rect from pass 1:
+         crop DynamicImage to rect (+padding)
+         encode_as_grayscale(crop)
+         prompt: "Read the Japanese text in this image. Return JSON:
+                  {original, furigana, english, romaji}"
+         model returns: one TranslationResult
+    → remap top_xy / bot_xy from crop-local → lens-local coords (same as §6)
+    → collect all TranslationResults
+```
+
+### Why this is faster than the current single-request approach
+
+| Step | Current | Gemma 2-pass |
+|---|---|---|
+| Images sent | 1 full image | 1 full image (pass 1) + N small crops (pass 2) |
+| Output tokens (pass 1) | — | ~10–20 tokens (just coordinates) |
+| Output tokens (pass 2) | All text + coords in one go | ~20–40 tokens per crop |
+| Vision tokens (pass 2) | Full image × 1 | Crop (~100×50px) × N |
+| VRAM pressure | Full image in KV cache | Tiny crops; short context per call |
+| Parallelism | None | Pass 2 calls are independent → `tokio::spawn` |
+
+The key saving is that each pass-2 crop is a **tiny image with a short output** — the vision encoder processes far fewer pixels, and the model produces fewer tokens. For a capture with 3 text regions, 3 parallel crop requests will typically complete faster than 1 request asking the model to read and locate everything at once.
+
+### Comparison: YOLO vs Gemma for pass 1
+
+| | YOLO/ONNX | Gemma prompt |
+|---|---|---|
+| Latency (pass 1) | ~30–80 ms (local CPU) | ~500ms–2s (LLM inference) |
+| Model accuracy on manga | Low (COCO classes) → needs fine-tune | Reasonable (can reason about visual layout) |
+| Required setup | ONNX model file on disk | Nothing new — already running |
+| Network required | No | No (ollama is local) |
+| Bounding box precision | Tight (pixel-level) | Approximate (model guesses, not measures) |
+| When to prefer | After fine-tuned model is available | Now, as an interim path |
+
+**Interim strategy**: ship Gemma-based detection for the initial release. Add YOLO when a manga-specific model is ready to swap in. The pass-2 crop-and-OCR logic is identical either way — only the source of `Vec<OcrRect>` changes.
+
+### Prompt for pass 1
+
+```
+Find all regions in this image that contain text.
+Return a JSON array of objects, one per text region.
+Each object must have:
+  top_xy  — upper-left corner of the region as string "x,y"
+  bot_xy  — lower-right corner of the region as string "x,y"
+Do NOT read or transcribe the text. Do NOT include any other fields.
+Return ONLY the JSON array, no markdown fences.
+```
+
+This is a simpler task than OCR — the model only needs to draw rectangles, not recognize characters. The shorter output reduces inference time.
+
+### Config knob
+
+```jsonc
+{
+  "detection_pass": "gemma",    // "gemma" | "yolo" | "none"
+                                // "gemma" = two-request pipeline (this section)
+                                // "yolo"  = ONNX pre-detection (§4)
+                                // "none"  = single full-image OCR (current behaviour)
+}
+```
+
+`"gemma"` becomes the default once the two-pass plumbing is in place. `"yolo"` replaces it when a fine-tuned model is available. `"none"` is the fallback for minimal-install scenarios.
+
+### Parallelism
+
+Pass-2 requests are independent and can be dispatched concurrently. In `main.rs` the background thread would use `tokio::task::spawn` or `futures::future::join_all`:
+
+```rust
+let crop_futures: Vec<_> = rects.iter().map(|rect| {
+    let r = rect.padded(8, w, h);
+    let crop = dyn_image.crop_imm(r.x1, r.y1, r.width(), r.height());
+    let client = client.clone();  // Arc<DualOcrClient>
+    tokio::spawn(async move {
+        let b64 = encode_as_grayscale(&crop);
+        let mut results = client.call_api_b64(&b64)?;
+        remap_coords(&mut results, r.x1 as i64, r.y1 as i64);
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(results)
+    })
+}).collect();
+let all_results: Vec<TranslationResult> = futures::future::join_all(crop_futures)
+    .await
+    .into_iter()
+    .flatten()
+    .flatten()
+    .collect();
+```
+
+**Note**: ollama processes requests sequentially (one model, one GPU). Parallel requests will queue internally. The concurrency benefit is real only if a remote backend is used for pass 2 (OpenRouter handles parallel requests). With a local ollama backend, serial dispatch is equivalent.
+
+---
+
+## 16. Smoke Test: Dual-Backend Testing (`scripts/test-ocr.sh`)
+
+### What changed (2026-04-05)
+
+`scripts/test-ocr.sh` was updated to test both the local-ollama and remote-OpenRouter backends in a single run, with separate timing for each.
+
+### Invocation
+
+```bash
+# Test both backends (default):
+./scripts/test-ocr.sh
+
+# Test local only:
+./scripts/test-ocr.sh --skip-remote
+
+# Test remote only:
+./scripts/test-ocr.sh --skip-ollama --remote-key "$OPENROUTER_API_KEY"
+
+# Custom models:
+./scripts/test-ocr.sh --model gemma4:e4b --remote-model google/gemini-2.0-flash-001
+```
+
+If `OPENROUTER_API_KEY` is not set and `--remote-key` is not passed, the remote backend is **skipped with a notice** (not a failure) — local-only setups are not penalized.
+
+### Coordinate checks are informational only
+
+The expected JSON (`assets/Unit-test-sample-texts.json`) stores bounding-box coordinates for the original 2816×1536 source image. The model receives a scaled-down copy (default: 640px longest edge) — a scale factor of ~4.4×. Even at the same scale, VLMs do not reliably reproduce exact pixel coordinates; they approximate spatial layout. Coordinates are therefore printed as `[WARN]` lines and do not contribute to the pass/fail count.
+
+**The only checked assertions are:**
+1. HTTP 200 response
+2. Response parses as a JSON array
+3. Expected text substrings are present in the results
+
+### Performance tuning applied
+
+Two ollama-specific options reduce VRAM pressure on cards with limited headroom:
+
+| Parameter | Previous | Current | Reason |
+|---|---|---|---|
+| `max_dim` (image longest edge) | 896 px | **640 px** | Smaller image = smaller vision encoder activation = less VRAM |
+| `options.num_ctx` | (unset, ~4096) | **2048** | Smaller KV cache = more VRAM free for computation |
+
+These are passed in the `options` block of the ollama API request. OpenRouter ignores unknown `options` fields, so the same request JSON is safe to send to both backends.
+
+### Measured effect (Quadro M4000, 8 GB VRAM, gemma4:e2b)
+
+| Configuration | Inference time |
+|---|---|
+| 896 px, default num_ctx, CPU (linuxbrew) | ~4 minutes |
+| 896 px, default num_ctx, GPU (official binary) | ~28 s |
+| 640 px, num_ctx=2048, GPU | target < 10 s (to be measured) |
+
+The Quadro M4000 has ~389 MB VRAM remaining after the model loads (7.9 GB model in 8 GB VRAM). Vision encoder activations for a 640px image consume less of that headroom than a 896px image.
+
+### Adding a future `--two-pass` flag
+
+Once the Gemma detection pass (§15) is implemented, `test-ocr.sh` should gain a `--two-pass` flag that:
+1. Sends pass-1 (bounding-box only) request and prints detected rects
+2. For each rect, sends a crop and verifies the expected text is present in that crop's response
+3. Reports timing for each pass separately

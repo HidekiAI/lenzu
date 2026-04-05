@@ -50,6 +50,26 @@ pub struct AppConfig {
     /// Longest-edge pixel limit applied to images before the fallback call. 0 = no limit.
     #[serde(default = "default_fallback_max_dimension")]
     pub fallback_max_dimension: u32,
+    /// Timeout in seconds for each local (ollama) backend request.
+    /// If inference doesn't complete within this window the client fails-over to the
+    /// next backend in the chain.  Default: 3 s — fast enough to feel responsive while
+    /// still giving GPU inference a chance to finish on typical hardware.
+    #[serde(default = "default_local_timeout_secs")]
+    pub local_timeout_secs: u64,
+    /// Timeout in seconds for the remote (OpenRouter/VPS) backend.  Longer because
+    /// remote latency is higher and internet can be flaky.  Default: 15 s.
+    #[serde(default = "default_remote_timeout_secs")]
+    pub remote_timeout_secs: u64,
+    /// Ollama KV-cache context size for the primary (local) backend.
+    /// Smaller values (e.g. 2048) free VRAM on cards with < 1 GB headroom after model load.
+    /// `None` = use ollama's default (usually 4096).
+    #[serde(default)]
+    pub primary_num_ctx: Option<u32>,
+    /// Ordered list of local fallback models tried after the primary.  Each uses the same
+    /// ollama endpoint as the primary.  Tried in order; remote fallback is attempted last.
+    /// Example: `["glm-ocr", "qwen2.5vl:7b"]`.  Empty = skip straight to remote.
+    #[serde(default)]
+    pub local_fallback_models: Vec<String>,
     pub translate_src: Language,
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
@@ -64,6 +84,12 @@ fn default_fallback_model() -> String {
 }
 fn default_fallback_max_dimension() -> u32 {
     800
+}
+fn default_local_timeout_secs() -> u64 {
+    3
+}
+fn default_remote_timeout_secs() -> u64 {
+    15
 }
 
 impl Default for AppConfig {
@@ -85,6 +111,10 @@ impl Default for AppConfig {
             fallback_llm_api_endpoint: default_fallback_endpoint(),
             fallback_llm_model: default_fallback_model(),
             fallback_max_dimension: default_fallback_max_dimension(),
+            local_timeout_secs: default_local_timeout_secs(),
+            remote_timeout_secs: default_remote_timeout_secs(),
+            primary_num_ctx: None,
+            local_fallback_models: vec![],
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint

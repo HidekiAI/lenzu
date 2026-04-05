@@ -1,9 +1,12 @@
 use chrono::Local;
+use image::DynamicImage;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
+
+use crate::utils::{encode_as_grayscale, encode_for_fallback};
 
 const API_DEBUG_PATH: &str = "/dev/shm/api_debug.txt";
 
@@ -13,6 +16,13 @@ pub struct OcrClient {
     model: String,
     prompt: String,
     client: Client,
+    /// Ollama-specific: KV-cache context size.  `None` = let ollama use its default.
+    /// Setting this to a small value (e.g. 2048) frees VRAM on cards with limited headroom.
+    num_ctx: Option<u32>,
+    /// When `true`, include `"response_format": {"type": "json_object"}` in the payload.
+    /// OpenAI/OpenRouter models benefit from this; local ollama models (gemma4, glm-ocr)
+    /// may return a single object when constrained to json_object mode — disable it for them.
+    use_json_object_format: bool,
 }
 
 /// Deserialize any JSON value (string, array, object, number) into an
@@ -34,6 +44,7 @@ pub struct TranslationResult {
     pub original: String,
     pub furigana: Option<String>,
     pub romaji: Option<String>,
+    #[serde(alias = "english_translation")]
     pub english: Option<String>,
     #[serde(default, deserialize_with = "coerce_to_opt_string")]
     pub top_xy: Option<String>,  // upper-left bounding box corner (string or [x,y] array)
@@ -42,42 +53,43 @@ pub struct TranslationResult {
     pub debug_info: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
-struct OpenRouterResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Deserialize, Debug)]
-struct Choice {
-    message: Message,
-}
-
-#[derive(Deserialize, Debug)]
-struct Message {
-    content: Value,
-}
 
 /// Default timeout for the entire request (connect + read).
 /// Gemini/OpenRouter can be slow on large images; 60 s is generous but bounded.
 const REQUEST_TIMEOUT_SECS: u64 = 60;
 
 impl OcrClient {
+    /// Standard constructor — default timeout, no `num_ctx` override.
+    /// `api_key` empty → ollama (local); non-empty → remote, enables json_object format.
     pub fn new(api_key: String, endpoint: String, model: String, prompt: String) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-        Self {
-            api_key,
-            endpoint,
-            model,
-            prompt,
-            client,
+        let use_json = !api_key.is_empty(); // remote backends support json_object; local ones may not
+        Self::new_with_options(api_key, endpoint, model, prompt, Some(REQUEST_TIMEOUT_SECS), None, use_json)
+    }
+
+    /// Full constructor — allows overriding the reqwest timeout and setting
+    /// `num_ctx` for ollama (reduces KV-cache VRAM pressure on cards with < 1 GB free).
+    /// `timeout_secs: None` disables the timeout entirely (use for CPU inference timing).
+    /// `use_json_object_format` — set `false` for local ollama models to avoid the
+    /// json_object constraint that causes them to return a single object instead of an array.
+    pub fn new_with_options(
+        api_key: String,
+        endpoint: String,
+        model: String,
+        prompt: String,
+        timeout_secs: Option<u64>,
+        num_ctx: Option<u32>,
+        use_json_object_format: bool,
+    ) -> Self {
+        let mut builder = Client::builder();
+        if let Some(secs) = timeout_secs {
+            builder = builder.timeout(std::time::Duration::from_secs(secs));
         }
+        let client = builder.build().unwrap_or_else(|_| Client::new());
+        Self { api_key, endpoint, model, prompt, client, num_ctx, use_json_object_format }
     }
 
     fn generate_payload(&self, b64: &str) -> Value {
-        json!({
+        let mut payload = json!({
             "model": self.model,
             "messages": [{
                 "role": "user",
@@ -86,9 +98,21 @@ impl OcrClient {
                     {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{}", b64)}}
                 ]
             }],
-            "response_format": { "type": "json_object" },
-            "temperature": 0.1
-        })
+            "temperature": 0.1,
+            "stream": true
+        });
+        // json_object mode helps OpenAI-family models (OpenRouter/Gemini) return valid JSON.
+        // Local ollama models (gemma4, glm-ocr) may return a single object when constrained
+        // to json_object mode, causing multi-block detection to fail — skip it for them.
+        if self.use_json_object_format {
+            payload["response_format"] = json!({"type": "json_object"});
+        }
+        // Ollama-specific: limit KV-cache to free VRAM on cards with limited headroom.
+        // OpenRouter and other remote backends ignore unknown top-level fields.
+        if let Some(ctx) = self.num_ctx {
+            payload["options"] = json!({"num_ctx": ctx});
+        }
+        payload
     }
 
     pub fn call_api(
@@ -106,34 +130,90 @@ impl OcrClient {
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        let res = req.json(&payload).send()?;
+        let res = req.json(&payload).send().map_err(|e| -> Box<dyn std::error::Error> {
+            // Surface the root cause so callers see "operation timed out" or
+            // "connection refused" rather than just "error sending request".
+            use std::error::Error;
+            let root = e.source().map(|s| format!(" — {s}")).unwrap_or_default();
+            format!("{e}{root}").into()
+        })?;
 
         let status = res.status();
-        let raw_response = res.text()?;
-        // Write raw API JSON to a separate debug file — not the user-facing history
-        if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
-            let _ = writeln!(f, "[{}] {}", Local::now().format("%H:%M:%S"), raw_response.trim());
-        }
 
+        // Error responses (4xx/5xx) are plain JSON, not SSE — read them whole.
         if !status.is_success() {
-            let snippet: String = raw_response.chars().take(800).collect();
+            let error_body = res.text().unwrap_or_default();
+            if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
+                let _ = writeln!(f, "[{}] ERROR {}: {}", Local::now().format("%H:%M:%S"), status, error_body.trim());
+            }
+            let snippet: String = error_body.chars().take(800).collect();
             return Err(format!("API HTTP {} — {}", status, snippet).into());
         }
 
-        let response_data: OpenRouterResponse = serde_json::from_str(&raw_response).map_err(|e| {
-            let snippet: String = raw_response.chars().take(400).collect();
-            format!("Invalid API JSON ({}): {}", e, snippet)
-        })?;
+        // Successful responses are SSE streams (stream:true keeps the TCP connection
+        // alive while ollama generates, preventing its 30-second write-timeout from
+        // firing mid-inference).  Accumulate all delta.content tokens into one string.
+        let content = Self::read_sse_content(res)?;
 
-        let content_value = &response_data
-            .choices
-            .get(0)
-            .ok_or("No choices in API response")?
-            .message
-            .content;
+        // Write accumulated content to debug file.
+        if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
+            let _ = writeln!(f, "[{}] {}", Local::now().format("%H:%M:%S"), content.trim());
+        }
 
-        // Normalize the shape: always returns a Vec
-        self.normalize_results(content_value)
+        // The accumulated SSE content is the raw model output (JSON string).
+        // normalize_results already handles the stringified-JSON path.
+        self.normalize_results(&Value::String(content))
+    }
+
+    /// Read an OpenAI-compatible SSE stream and return the accumulated content string.
+    ///
+    /// Each SSE line looks like:
+    ///   `data: {"choices":[{"delta":{"content":"..."},"finish_reason":null}]}`
+    /// Final line: `data: [DONE]`
+    ///
+    /// By reading tokens as they arrive the HTTP connection stays alive,
+    /// preventing ollama's server-side write timeout from firing.
+    fn read_sse_content(res: reqwest::blocking::Response) -> Result<String, Box<dyn std::error::Error>> {
+        use std::io::BufRead;
+        let reader = std::io::BufReader::new(res);
+        let mut content = String::new();
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed == "data: [DONE]" {
+                continue;
+            }
+            if let Some(json_part) = trimmed.strip_prefix("data: ") {
+                if let Ok(chunk) = serde_json::from_str::<Value>(json_part) {
+                    if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+                        content.push_str(delta);
+                    }
+                }
+            }
+        }
+        Ok(content)
+    }
+
+    /// Strip optional markdown code fences that some LLMs add around JSON output.
+    /// Handles ` ```json\n...\n``` ` and ` ```\n...\n``` `.  Returns a slice of the
+    /// inner content (no allocation when fences are absent).
+    fn strip_markdown_fences(raw: &str) -> &str {
+        let s = raw.trim();
+        if s.starts_with("```") {
+            // Skip the opening fence line (which may contain a language tag like "json")
+            if let Some(newline) = s.find('\n') {
+                let inner = s[newline + 1..].trim_end();
+                // Strip the closing fence from the end
+                if inner.ends_with("```") {
+                    return inner[..inner.len() - 3].trim_end();
+                }
+                // Closing fence on its own line
+                if let Some(end) = inner.rfind("\n```") {
+                    return inner[..end].trim();
+                }
+            }
+        }
+        s
     }
 
     fn normalize_results(
@@ -143,9 +223,12 @@ impl OcrClient {
         // 1. Unwrap stringified JSON if necessary
         let actual_json = if val.is_string() {
             let raw = val.as_str().unwrap();
-            eprintln!("[OCR] content is a string, attempting inner parse (first 200 chars): {}", &raw[..raw.len().min(200)]);
+            let raw = Self::strip_markdown_fences(raw);
+            eprintln!("[OCR] content is a string, attempting inner parse (first 200 chars): {}",
+                raw.chars().take(200).collect::<String>());
             serde_json::from_str(raw).map_err(|e| {
-                eprintln!("[OCR] inner JSON parse failed: {e}  raw snippet: {}", &raw[..raw.len().min(400)]);
+                eprintln!("[OCR] inner JSON parse failed: {e}  raw snippet: {}",
+                    raw.chars().take(400).collect::<String>());
                 e
             })?
         } else {
@@ -190,38 +273,90 @@ impl OcrClient {
     }
 }
 
+// ── Coordinate helpers ────────────────────────────────────────────────────────
+
+/// Parse a coordinate string produced by `coerce_to_opt_string` into `(x, y)`.
+///
+/// Accepts both formats the model may return:
+///   - `"79,48"`        (prompt-requested plain string)
+///   - `"[79,48]"`      (array coerced to string by `coerce_to_opt_string`)
+///
+/// Returns `None` if the string is absent or cannot be parsed.
+pub fn parse_xy(s: Option<&str>) -> Option<(i64, i64)> {
+    let s = s?.trim().trim_start_matches('[').trim_end_matches(']');
+    let mut parts = s.splitn(2, ',');
+    let x: i64 = parts.next()?.trim().parse().ok()?;
+    let y: i64 = parts.next()?.trim().parse().ok()?;
+    Some((x, y))
+}
+
+/// Return `true` when both coordinates in `actual` are within `tolerance` pixels
+/// of `expected`.  Either being `None` is treated as "no constraint" (passes).
+pub fn coords_within(actual: Option<&str>, expected: (i64, i64), tolerance: i64) -> bool {
+    match parse_xy(actual) {
+        None => true, // model gave no coord — skip the check
+        Some((ax, ay)) => {
+            (ax - expected.0).abs() <= tolerance && (ay - expected.1).abs() <= tolerance
+        }
+    }
+}
+
 // ── DualOcrClient ─────────────────────────────────────────────────────────────
 
 /// Wraps a primary `OcrClient` (ollama/local) and an optional fallback
 /// `OcrClient` (OpenRouter/remote).
 ///
-/// Decision flow for `call_api`:
-///   1. Try primary.
-///   2. If primary fails OR returns no translations → try fallback (if configured).
-///   3. If fallback not configured → return primary result as-is.
+/// Encoding is handled internally:
+///   - Primary  → grayscale, full resolution
+///   - Fallback → grayscale + proportional downscale to `fallback_max_dimension`
 ///
 /// `call_api_force_fallback` skips primary entirely (Ctrl+Shift+Click path).
 pub struct DualOcrClient {
     primary: OcrClient,
-    fallback: Option<OcrClient>,
+    /// Local fallback chain (e.g. glm-ocr, qwen2.5vl) — tried in order after primary.
+    local_fallbacks: Vec<OcrClient>,
+    remote_fallback: Option<OcrClient>,
+    fallback_max_dimension: u32,
 }
 
 impl DualOcrClient {
+    /// Build the client.
+    ///
+    /// `local_fallback_models` is an ordered list of model names that share the primary
+    /// ollama endpoint.  They are tried in sequence after the primary fails.
     pub fn new(
         primary_endpoint: String,
         primary_model: String,
+        local_fallback_models: Vec<String>,
         fallback_endpoint: String,
         fallback_model: String,
         fallback_api_key: String,
+        fallback_max_dimension: u32,
+        primary_num_ctx: Option<u32>,
+        local_timeout_secs: u64,
+        remote_timeout_secs: u64,
         prompt: String,
     ) -> Self {
-        let primary = OcrClient::new(String::new(), primary_endpoint, primary_model, prompt.clone());
-        let fallback = if !fallback_api_key.is_empty() {
-            Some(OcrClient::new(fallback_api_key, fallback_endpoint, fallback_model, prompt))
+        let primary = OcrClient::new_with_options(
+            String::new(), primary_endpoint.clone(), primary_model, prompt.clone(),
+            Some(local_timeout_secs), primary_num_ctx, false,
+        );
+        let local_fallbacks = local_fallback_models
+            .into_iter()
+            .map(|model| OcrClient::new_with_options(
+                String::new(), primary_endpoint.clone(), model, prompt.clone(),
+                Some(local_timeout_secs), None, false,
+            ))
+            .collect();
+        let remote_fallback = if !fallback_api_key.is_empty() {
+            Some(OcrClient::new_with_options(
+                fallback_api_key, fallback_endpoint, fallback_model, prompt,
+                Some(remote_timeout_secs), None, true,
+            ))
         } else {
             None
         };
-        Self { primary, fallback }
+        Self { primary, local_fallbacks, remote_fallback, fallback_max_dimension }
     }
 
     /// Returns `true` when results are empty or every `english` field is absent/blank.
@@ -237,9 +372,25 @@ impl DualOcrClient {
         })
     }
 
-    /// Normal path: try primary, fall back automatically if needed.
-    pub fn call_api(&self, b64: &str) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
-        let primary_result = self.primary.call_api(b64);
+    /// Kill any lingering ollama runner subprocess.
+    ///
+    /// When the primary client times out or fails, the ollama runner process keeps
+    /// generating in the background, holding VRAM.  Killing it immediately frees the
+    /// GPU and prevents "hundreds of stuck runners" from accumulating over a session.
+    /// Ollama respawns a fresh runner on the next request.
+    fn cancel_primary_runner() {
+        let _ = std::process::Command::new("pkill")
+            .args(["-KILL", "-f", "ollama runner.*--model"])
+            .status();
+    }
+
+    /// Normal path: primary gets grayscale full-res; each fallback (local then remote) is
+    /// tried in order until one succeeds.  Local fallbacks use the same ollama endpoint as
+    /// the primary.  Remote fallback gets grayscale + downscale.
+    pub fn call_api(&self, image: &DynamicImage) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        let primary_b64 = encode_as_grayscale(image);
+        let primary_result = self.primary.call_api(&primary_b64);
+
         let needs_fb = match &primary_result {
             Ok(results) => Self::needs_fallback(results),
             Err(_) => true,
@@ -250,29 +401,57 @@ impl DualOcrClient {
         }
 
         match &primary_result {
-            Err(e) => eprintln!("[OCR] primary failed ({e}) — trying fallback"),
-            Ok(_) => eprintln!("[OCR] primary gave no translations — trying fallback"),
+            Err(e) => {
+                eprintln!("[OCR] primary failed ({e}) — killing stale runner");
+                Self::cancel_primary_runner();
+            }
+            Ok(_) => eprintln!("[OCR] primary gave no translations"),
         }
 
-        match &self.fallback {
-            Some(fb) => {
-                // Log to debug file that we're using fallback
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
-                    let _ = std::io::Write::write_fmt(&mut f, format_args!("[fallback] primary gave no translation\n"));
+        // Walk the local fallback chain (e.g. glm-ocr → qwen2.5vl → …)
+        for (i, local) in self.local_fallbacks.iter().enumerate() {
+            eprintln!("[OCR] trying local fallback #{}", i + 1);
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
+                let _ = std::io::Write::write_fmt(&mut f, format_args!("[local-fallback-{}]\n", i + 1));
+            }
+            let result = local.call_api(&primary_b64);
+            let ok = match &result {
+                Ok(r) => !Self::needs_fallback(r),
+                Err(e) => {
+                    eprintln!("[OCR] local fallback #{} failed ({e}) — killing stale runner", i + 1);
+                    Self::cancel_primary_runner();
+                    false
                 }
-                fb.call_api(b64)
+            };
+            if ok {
+                return result;
+            }
+        }
+
+        // Remote fallback — downscale before sending
+        match &self.remote_fallback {
+            Some(fb) => {
+                eprintln!("[OCR] all local backends failed — trying remote");
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
+                    let _ = std::io::Write::write_fmt(&mut f, format_args!("[remote-fallback]\n"));
+                }
+                let fallback_b64 = encode_for_fallback(image, self.fallback_max_dimension);
+                fb.call_api(&fallback_b64)
             }
             None => {
-                eprintln!("[OCR] fallback not configured (OPENROUTER_API_KEY not set)");
+                eprintln!("[OCR] remote fallback not configured (OPENROUTER_API_KEY not set)");
                 primary_result
             }
         }
     }
 
-    /// Force-remote path: skip primary entirely (Ctrl+Shift+Click).
-    pub fn call_api_force_fallback(&self, b64: &str) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
-        match &self.fallback {
-            Some(fb) => fb.call_api(b64),
+    /// Force-remote path: grayscale + downscale (Ctrl+Shift+Click).
+    pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+        match &self.remote_fallback {
+            Some(fb) => {
+                let b64 = encode_for_fallback(image, self.fallback_max_dimension);
+                fb.call_api(&b64)
+            }
             None => Err("Remote override unavailable: OPENROUTER_API_KEY not set".into()),
         }
     }
@@ -367,14 +546,25 @@ mod tests {
     // them. Currently this is NOT handled, so the test documents the failure
     // and the fix can be added to normalize_results when confirmed in the wild.
     #[test]
-    fn test_normalization_markdown_fenced_array_fails_gracefully() {
+    fn test_normalization_markdown_fenced_array() {
+        // LLMs (especially local ollama models without json_object mode) often wrap
+        // their JSON output in ```json ... ``` fences.  strip_markdown_fences must handle this.
         let fenced = Value::String(
             "```json\n[{\"original\":\"test\",\"english\":\"test\"}]\n```".to_string(),
         );
-        // This is expected to fail until fence-stripping is added.
-        // When it starts passing, the fence-stripping logic is in place.
-        let result = client().normalize_results(&fenced);
-        assert!(result.is_err(), "markdown-fenced JSON should fail (not silently succeed with wrong data)");
+        let results = client().normalize_results(&fenced).expect("fenced JSON must be handled");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "test");
+    }
+
+    #[test]
+    fn test_normalization_markdown_fenced_no_lang_tag() {
+        let fenced = Value::String(
+            "```\n[{\"original\":\"foo\",\"english\":\"bar\"}]\n```".to_string(),
+        );
+        let results = client().normalize_results(&fenced).expect("fence without lang tag must be handled");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "foo");
     }
 
     // ── all known wrapper keys ────────────────────────────────────────────────
@@ -529,44 +719,36 @@ mod tests {
         assert!(!DualOcrClient::needs_fallback(&[tr(Some("world"))]));
     }
 
-    #[test]
-    fn test_dual_client_no_fallback_when_api_key_empty() {
-        // When api_key is empty, fallback OcrClient must NOT be constructed.
-        let dc = DualOcrClient::new(
+    fn dual(api_key: &str) -> DualOcrClient {
+        DualOcrClient::new(
             "http://localhost:11434/v1/chat/completions".into(),
             "gemma4:e2b".into(),
+            vec![],
             "https://openrouter.ai/api/v1/chat/completions".into(),
             "google/gemini-2.0-flash-001".into(),
-            String::new(), // empty → no fallback
+            api_key.to_string(),
+            800,
+            None,
+            3,   // local_timeout_secs
+            15,  // remote_timeout_secs
             "prompt".into(),
-        );
-        assert!(dc.fallback.is_none(), "empty api_key must not create a fallback client");
+        )
+    }
+
+    #[test]
+    fn test_dual_client_no_fallback_when_api_key_empty() {
+        assert!(dual("").remote_fallback.is_none(), "empty api_key must not create a remote fallback client");
     }
 
     #[test]
     fn test_dual_client_fallback_created_when_key_present() {
-        let dc = DualOcrClient::new(
-            "http://localhost:11434/v1/chat/completions".into(),
-            "gemma4:e2b".into(),
-            "https://openrouter.ai/api/v1/chat/completions".into(),
-            "google/gemini-2.0-flash-001".into(),
-            "sk-real-key".into(),
-            "prompt".into(),
-        );
-        assert!(dc.fallback.is_some(), "non-empty api_key must create a fallback client");
+        assert!(dual("sk-real-key").remote_fallback.is_some(), "non-empty api_key must create a remote fallback client");
     }
 
     #[test]
     fn test_force_fallback_errors_when_no_key() {
-        let dc = DualOcrClient::new(
-            "http://localhost:11434/v1/chat/completions".into(),
-            "gemma4:e2b".into(),
-            "https://openrouter.ai/api/v1/chat/completions".into(),
-            "google/gemini-2.0-flash-001".into(),
-            String::new(),
-            "prompt".into(),
-        );
-        let err = dc.call_api_force_fallback("dGVzdA==").unwrap_err();
+        let img = image::DynamicImage::new_rgb8(1, 1);
+        let err = dual("").call_api_force_fallback(&img).unwrap_err();
         assert!(err.to_string().contains("OPENROUTER_API_KEY"), "error must mention the missing key");
     }
 
@@ -606,5 +788,56 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "OCR thread panicked");
+    }
+
+    // ── parse_xy / coords_within ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_xy_plain_string() {
+        assert_eq!(parse_xy(Some("79,48")), Some((79, 48)));
+    }
+
+    #[test]
+    fn test_parse_xy_bracketed_string() {
+        // coerce_to_opt_string turns [79,48] into "[79,48]"
+        assert_eq!(parse_xy(Some("[79,48]")), Some((79, 48)));
+    }
+
+    #[test]
+    fn test_parse_xy_with_spaces() {
+        assert_eq!(parse_xy(Some("[ 102, 82 ]")), Some((102, 82)));
+    }
+
+    #[test]
+    fn test_parse_xy_none_returns_none() {
+        assert_eq!(parse_xy(None), None);
+    }
+
+    #[test]
+    fn test_parse_xy_garbage_returns_none() {
+        assert_eq!(parse_xy(Some("not_a_coord")), None);
+    }
+
+    #[test]
+    fn test_coords_within_exact_match() {
+        assert!(coords_within(Some("79,48"), (79, 48), 0));
+    }
+
+    #[test]
+    fn test_coords_within_tolerance_passes() {
+        // 5 px off — within default tolerance of 10
+        assert!(coords_within(Some("84,53"), (79, 48), 10));
+    }
+
+    #[test]
+    fn test_coords_within_tolerance_fails() {
+        // 11 px off on x — exceeds tolerance of 10
+        assert!(!coords_within(Some("90,48"), (79, 48), 10));
+    }
+
+    #[test]
+    fn test_coords_within_none_passes() {
+        // model returned no coord — treated as "no constraint"
+        assert!(coords_within(None, (79, 48), 0));
     }
 }

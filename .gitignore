@@ -26,6 +26,9 @@ obj/
 tags
 
 *png
+# Intentional demo and test assets — keep tracked despite the *.png rule above
+!assets/OCR-Demo-*.png
+!assets/Unit-test-sample-texts.png
 
 
 .config/
@@ -35,3 +38,5 @@ build*/
 
 .gemini/
 gha-creds-*.json
+.ollama_mode
+
