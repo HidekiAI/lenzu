@@ -3,8 +3,8 @@
 # when `overlay_enabled` is true — do not start a second overlay process here.
 #
 # LLM backend (dual-backend):
-#   Primary:  Gemma 4 E2B via ollama Docker container (always started if Docker is available)
-#   Fallback: OpenRouter (Gemini 2.0 Flash) — only active when OPENROUTER_API_KEY is set
+#   Primary:  glm-ocr via ollama (fast OCR specialist, ~15s)
+#   Fallback: gemma4:e2b (offline/no-API-key), then OpenRouter (Gemini 2.0 Flash)
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ OLLAMA_CONTAINER="lenzu-ollama"
 OLLAMA_IMAGE="ollama/ollama"
 OLLAMA_VOLUME="lenzu-ollama-data"
 OLLAMA_PORT=11434
-OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:e2b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-glm-ocr}"
 
 # GPU/CPU mode written by setup.sh.  Default is cpu — safe on any machine.
 MODE_FILE="$REPO_ROOT/.ollama_mode"
@@ -119,8 +119,10 @@ check_gpu_support() {
     ollama_bin=$(which ollama 2>/dev/null)
 
     if [[ "$OLLAMA_MODE" == "gpu" ]]; then
-        # Verify the binary actually has CUDA support.
-        if [[ -n "$ollama_bin" ]] && ! ldd "$ollama_bin" 2>/dev/null | grep -qi "cuda"; then
+        # Verify the binary has CUDA support by checking for the cuda_v12/v13 runtime
+        # directory that the official installer creates.  ldd is unreliable here because
+        # ollama loads CUDA via dlopen at runtime, not as a linked dependency.
+        if ! [[ -d /usr/local/lib/ollama/cuda_v12 || -d /usr/local/lib/ollama/cuda_v13 ]]; then
             echo "WARNING: GPU mode is configured but ollama has no CUDA support."
             echo "         Re-run to reinstall with the official CUDA build:"
             echo "              scripts/setup.sh --gpu"
