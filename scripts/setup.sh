@@ -39,13 +39,12 @@ OLLAMA_VOLUME="lenzu-ollama-data"
 # All models pulled during setup.  Listed in priority order (primary first).
 #   gemma4:e2b     — primary OCR/translation (large, GPU recommended)
 #   glm-ocr        — OCR specialist, fast, great layout understanding (~2.2 GB)
-#   moondream      — ultra-lightweight vision, moondream2 (~1.1 GB)
 #   qwen2.5vl:3b   — Qwen2.5 Vision-Language 3B, smallest VL variant in ollama (~3.2 GB)
-# Note: qwen2-vl:2b does not exist in ollama; Florence-2 is HuggingFace/Python only.
+# Note: moondream excluded — captioning model, returns prose not structured OCR JSON.
+#       Florence-2 excluded — HuggingFace/Python only, not in ollama registry.
 OLLAMA_MODELS=(
     "gemma4:e2b"
     "glm-ocr"
-    "moondream"
     "qwen2.5vl:3b"
 )
 OLLAMA_MODEL="${OLLAMA_MODELS[0]}"  # legacy var used by version/CUDA checks
