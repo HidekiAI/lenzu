@@ -38,7 +38,9 @@ lenzu (GTK3 client)
 | Mode | Mechanism |
 |---|---|
 | **Developer checkout** | `scripts/setup.sh` then `scripts/run.sh` or `cargo run -p lenzu`. No system install; HUD spawned via `npm run start` inside `lenzu_server` next to the `lenzu` crate (path derived from `CARGO_MANIFEST_DIR` at compile time). |
-| **`scripts/install.sh`** | **Not implemented.** Planned: release install to a user prefix (e.g. `~/.local/bin` + shared `lenzu_server` tree), `PATH`, optional `.desktop`; must define how the client finds `lenzu_server` when not running from a git tree (env var or install prefix). See **Installation** in `docs/planning.md`. |
+| **`scripts/build.sh`** | **Not implemented.** Planned CI/release builder: calls `setup.sh`, `cargo build --release`, `pnpm run build`, bundles Electron, produces `dist/lenzu-<version>.tar.gz`. See **Installation — Script Architecture** in `docs/planning.md`. |
+| **`scripts/prereqs.sh`** | **Not implemented.** Planned shared downloader (no compiler): ollama native/Docker install, model pull, Electron binary check. Sourced by `setup.sh`, `install.sh`, and `run.sh`. |
+| **`scripts/install.sh`** | **Not implemented.** Planned end-user installer: downloads pre-built tarball (or uses `dist/` from `scripts/build.sh`), calls `scripts/prereqs.sh` (ollama + model), extracts to `~/.local`, resolves HUD path via env var or thin wrapper. See **Installation — Script Architecture** in `docs/planning.md`. |
 | **Distribution** | Long-term: Flatpak / PPA / AppImage (see `planning.md` **Packaging**). |
 
 ### `TranslationResult` (client.rs)
@@ -402,7 +404,27 @@ Reflections on the development process including challenges faced and lessons le
 
 Notes on building and compiling the project including dependencies and platform-specific instructions:
 
-- **Windows (MinGW64)**: Use `mingw64` toolchain; install packages via pacman; enable `Media_Ocr` feature.
+- **Target platform**: Debian-family Linux (`apt`/`dpkg`) is the only supported platform — Ubuntu 22.04+, Debian 12+, Mint, Pop!_OS, and derivatives. Fedora-family (`dnf`) is a planned future target. Windows support is historical only (MinGW64 + `Media_Ocr`; no longer maintained).
 - **Linux (Debian)**: Install `kakasi`, `tesseract-ocr`, and `leptonica` via apt; use cargo build commands.
-- **Linux install script**: There is no `scripts/install.sh` yet; developer workflow uses `scripts/setup.sh` and `cargo build`. When `install.sh` is added, it should be documented here (release profile, install prefix, HUD path resolution).
+- **Linux install script**: See `docs/planning.md` — Installation section. `scripts/install.sh` and `scripts/build.sh` are planned but not yet implemented; architecture is documented.
 - **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.
+
+## 12. Comparative Analysis
+
+Performance benchmarks and accuracy assessments across OCR engines:
+
+- **Performance Benchmarks**:
+  - Windows Media OCR: ~2 seconds per image
+  - Tesseract (Linux, default settings): ~34 seconds per image
+  - Tesseract (Linux, optimized PSM 5): ~5 seconds per image
+  - Manga-OCR: ~32 seconds per image (complex installation)
+- **Accuracy Assessments**: Windows Media OCR demonstrated the highest accuracy for manga text; Tesseract performed adequately with preprocessing; Manga-OCR showed strong results but was finicky to install.
+- **Sample Outputs**: Examples of OCR results include raw text, line breakdown, and kakasi conversion outputs.
+
+## 13. windows-rs Integration
+
+Details on integrating Windows Media OCR via the `windows-rs` crate:
+
+- **Setup**: Enable `Media_Ocr` and `Globalization` features in `Cargo.toml`.
+- **Data Flow**: Uses `InMemoryRandomAccessStream` for passing image data to the OCR engine.
+- **Debugging Challenges**: Issues with stream detachment and resource management required careful handling during development.
