@@ -103,18 +103,19 @@ impl Default for AppConfig {
             show_furigana: true,
             overlay_enabled: true,
             overlay_udp_port: 7331,
-            // Primary: local Gemma via ollama — no API key needed
+            // Primary: glm-ocr — fast OCR specialist (~15s), no API key needed
             llm_api_endpoint: "http://localhost:11434/v1/chat/completions".to_string(),
-            llm_default_model: "gemma4:e2b".to_string(),
-            // Fallback: OpenRouter (remote) — only used when Gemma gives no translation
-            // or when Ctrl+Shift+Click forces remote. Requires OPENROUTER_API_KEY.
+            llm_default_model: "glm-ocr".to_string(),
+            // Fallback: OpenRouter (remote) — requires OPENROUTER_API_KEY.
+            // or when Ctrl+Shift+Click forces remote.
             fallback_llm_api_endpoint: default_fallback_endpoint(),
             fallback_llm_model: default_fallback_model(),
             fallback_max_dimension: default_fallback_max_dimension(),
             local_timeout_secs: default_local_timeout_secs(),
             remote_timeout_secs: default_remote_timeout_secs(),
             primary_num_ctx: None,
-            local_fallback_models: vec![],
+            // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
+            local_fallback_models: vec!["gemma4:e2b".to_string()],
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
