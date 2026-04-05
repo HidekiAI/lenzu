@@ -54,6 +54,15 @@ pub struct TranslationResult {
 }
 
 
+/// Metadata about which backend served a successful OCR request.
+#[derive(Debug, Clone)]
+pub struct OcrMeta {
+    /// Human-readable backend label, e.g. "ollama:glm-ocr" or "openrouter:google/gemini-2.0-flash-001".
+    pub backend: String,
+    /// Total round-trip time in milliseconds.
+    pub elapsed_ms: u128,
+}
+
 /// Default timeout for the entire request (connect + read).
 /// Gemini/OpenRouter can be slow on large images; 60 s is generous but bounded.
 const REQUEST_TIMEOUT_SECS: u64 = 60;
@@ -86,6 +95,23 @@ impl OcrClient {
         }
         let client = builder.build().unwrap_or_else(|_| Client::new());
         Self { api_key, endpoint, model, prompt, client, num_ctx, use_json_object_format }
+    }
+
+    /// Returns a short label identifying this backend for logging.
+    /// Local ollama: "ollama:<model>"; remote: "<host>:<model>".
+    pub fn label(&self) -> String {
+        if self.api_key.is_empty() {
+            format!("ollama:{}", self.model)
+        } else {
+            // Extract hostname from endpoint URL (e.g. "openrouter.ai" from full URL).
+            let host = self.endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .split('/')
+                .next()
+                .unwrap_or("remote");
+            format!("{host}:{}", self.model)
+        }
     }
 
     fn generate_payload(&self, b64: &str) -> Value {
@@ -387,7 +413,8 @@ impl DualOcrClient {
     /// Normal path: primary gets grayscale full-res; each fallback (local then remote) is
     /// tried in order until one succeeds.  Local fallbacks use the same ollama endpoint as
     /// the primary.  Remote fallback gets grayscale + downscale.
-    pub fn call_api(&self, image: &DynamicImage) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+    pub fn call_api(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
+        let t0 = std::time::Instant::now();
         let primary_b64 = encode_as_grayscale(image);
         let primary_result = self.primary.call_api(&primary_b64);
 
@@ -397,7 +424,8 @@ impl DualOcrClient {
         };
 
         if !needs_fb {
-            return primary_result;
+            let meta = OcrMeta { backend: self.primary.label(), elapsed_ms: t0.elapsed().as_millis() };
+            return primary_result.map(|r| (r, meta));
         }
 
         match &primary_result {
@@ -408,7 +436,7 @@ impl DualOcrClient {
             Ok(_) => eprintln!("[OCR] primary gave no translations"),
         }
 
-        // Walk the local fallback chain (e.g. glm-ocr → qwen2.5vl → …)
+        // Walk the local fallback chain (e.g. gemma4 → …)
         for (i, local) in self.local_fallbacks.iter().enumerate() {
             eprintln!("[OCR] trying local fallback #{}", i + 1);
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
@@ -424,7 +452,8 @@ impl DualOcrClient {
                 }
             };
             if ok {
-                return result;
+                let meta = OcrMeta { backend: local.label(), elapsed_ms: t0.elapsed().as_millis() };
+                return result.map(|r| (r, meta));
             }
         }
 
@@ -436,21 +465,29 @@ impl DualOcrClient {
                     let _ = std::io::Write::write_fmt(&mut f, format_args!("[remote-fallback]\n"));
                 }
                 let fallback_b64 = encode_for_fallback(image, self.fallback_max_dimension);
-                fb.call_api(&fallback_b64)
+                let meta_label = fb.label();
+                fb.call_api(&fallback_b64).map(|r| {
+                    (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
+                })
             }
             None => {
                 eprintln!("[OCR] remote fallback not configured (OPENROUTER_API_KEY not set)");
-                primary_result
+                let meta = OcrMeta { backend: self.primary.label(), elapsed_ms: t0.elapsed().as_millis() };
+                primary_result.map(|r| (r, meta))
             }
         }
     }
 
     /// Force-remote path: grayscale + downscale (Ctrl+Shift+Click).
-    pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
+    pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
+        let t0 = std::time::Instant::now();
         match &self.remote_fallback {
             Some(fb) => {
                 let b64 = encode_for_fallback(image, self.fallback_max_dimension);
-                fb.call_api(&b64)
+                let meta_label = fb.label();
+                fb.call_api(&b64).map(|r| {
+                    (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
+                })
             }
             None => Err("Remote override unavailable: OPENROUTER_API_KEY not set".into()),
         }

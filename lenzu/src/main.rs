@@ -258,7 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
-    let (tx, rx) = async_channel::bounded::<Result<Vec<client::TranslationResult>, String>>(1);
+    let (tx, rx) = async_channel::bounded::<Result<(Vec<client::TranslationResult>, client::OcrMeta), String>>(1);
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
@@ -347,7 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut s = state_rx.borrow_mut();
         s.is_loading = false;
         match api_result {
-            Ok(results) => {
+            Ok((results, meta)) => {
                 let combined_english = results
                     .iter()
                     .map(|r| r.english.clone().unwrap_or_else(|| r.original.clone()))
@@ -384,8 +384,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .join(" / ");
                         let _ = writeln!(
                             f,
-                            "[{}] {} → {}",
+                            "[{}] ({}, {:.1}s) {} → {}",
                             chrono::Local::now().format("%H:%M:%S"),
+                            meta.backend,
+                            meta.elapsed_ms as f64 / 1000.0,
                             combined_original.trim(),
                             trimmed_english
                         );
