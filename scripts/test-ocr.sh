@@ -12,7 +12,7 @@
 #                            e.g. --ollama-model gemma4:e2b --ollama-model glm-ocr --ollama-model qwen2.5:1.5b
 #   --remote-model NAME      OpenRouter model (default: google/gemini-2.0-flash-001)
 #   --remote-key KEY         OpenRouter API key (default: $OPENROUTER_API_KEY)
-#   --all-local              test full production chain: gemma4 → glm-ocr → moondream → qwen2.5vl:3b + remote
+#   --all-local              test full production chain: gemma4 → glm-ocr → qwen2.5vl:3b + remote
 #   --skip-ollama            skip local-ollama test
 #   --skip-remote            skip remote-OpenRouter test
 #   --timeout N              per-backend timeout in seconds (default: 60)
