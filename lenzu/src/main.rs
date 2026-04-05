@@ -19,7 +19,7 @@ use lenzu::client;
 use lenzu::config;
 use lenzu::utils;
 
-const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
+const HISTORY_PATH: &str = "/dev/shm/lenzu/ocr_history.txt";
 
 fn format_for_overlay(
     results: &[client::TranslationResult],
@@ -194,6 +194,9 @@ fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Ensure /dev/shm/lenzu/ exists for all runtime output files.
+    let _ = std::fs::create_dir_all("/dev/shm/lenzu");
+
     // OPENROUTER_API_KEY is optional — ollama (local) is the primary backend.
     // When the key is absent, the fallback path is disabled; Ctrl+Shift+Click remote
     // override will show an error in the HUD instead of making a remote call.
@@ -367,18 +370,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send_to_overlay(&text, s.config.overlay_udp_port);
                 }
 
-                let trimmed_text = combined_english.trim();
-                if !trimmed_text.is_empty() {
+                let trimmed_english = combined_english.trim();
+                if !trimmed_english.is_empty() {
                     if let Ok(mut f) = OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(HISTORY_PATH)
                     {
+                        let combined_original = results
+                            .iter()
+                            .map(|r| r.original.clone())
+                            .collect::<Vec<_>>()
+                            .join(" / ");
                         let _ = writeln!(
                             f,
-                            "[{}] {}",
+                            "[{}] {} → {}",
                             chrono::Local::now().format("%H:%M:%S"),
-                            trimmed_text
+                            combined_original.trim(),
+                            trimmed_english
                         );
                     } else {
                         eprintln!("[history] failed to open {}", HISTORY_PATH);

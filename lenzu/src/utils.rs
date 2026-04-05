@@ -2,7 +2,7 @@ use base64::{engine::general_purpose, Engine as _};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, ImageFormat, Rgb};
 use std::io::Cursor;
 
-const DEBUG_IMAGE_PATH: &str = "/dev/shm/debug_lens.png";
+const DEBUG_IMAGE_PATH: &str = "/dev/shm/lenzu/debug_lens.png";
 
 pub fn raw_to_rgb(raw: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity((raw.len() / 4) * 3);
