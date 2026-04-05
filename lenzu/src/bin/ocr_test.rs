@@ -10,7 +10,8 @@
 //!
 //! Flags:
 //!   --ollama-endpoint URL    (default: http://localhost:11434/v1/chat/completions)
-//!   --ollama-model NAME      (default: gemma4:e2b)
+//!   --ollama-model NAME      (repeatable — each model is tested in order)
+//!                            (default: gemma4:e2b)
 //!   --remote-endpoint URL    (default: https://openrouter.ai/api/v1/chat/completions)
 //!   --remote-model NAME      (default: google/gemini-2.0-flash-001)
 //!   --remote-key KEY         (default: $OPENROUTER_API_KEY env var)
@@ -46,7 +47,9 @@ struct SampleEntry {
 
 struct Config {
     ollama_endpoint: String,
-    ollama_model: String,
+    /// Ordered list of local models to test.  Each is tested independently.
+    /// Populated by one or more --ollama-model flags; defaults to [gemma4:e2b].
+    ollama_models: Vec<String>,
     remote_endpoint: String,
     remote_model: String,
     remote_key: String,
@@ -64,7 +67,7 @@ fn parse_args() -> Config {
     let defaults = AppConfig::default();
     let mut cfg = Config {
         ollama_endpoint: defaults.llm_api_endpoint,
-        ollama_model: defaults.llm_default_model,
+        ollama_models: vec![defaults.llm_default_model],
         remote_endpoint: defaults.fallback_llm_api_endpoint,
         remote_model: defaults.fallback_llm_model,
         remote_key: std::env::var("OPENROUTER_API_KEY").unwrap_or_default(),
@@ -81,7 +84,15 @@ fn parse_args() -> Config {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--ollama-endpoint" => cfg.ollama_endpoint = args.next().expect("--ollama-endpoint needs a value"),
-            "--ollama-model"    => cfg.ollama_model    = args.next().expect("--ollama-model needs a value"),
+            // --ollama-model may be given multiple times; first use replaces the default.
+            "--ollama-model" => {
+                let m = args.next().expect("--ollama-model needs a value");
+                if cfg.ollama_models == vec![AppConfig::default().llm_default_model] {
+                    cfg.ollama_models = vec![m]; // replace default on first use
+                } else {
+                    cfg.ollama_models.push(m);   // append on subsequent uses
+                }
+            }
             "--remote-endpoint" => cfg.remote_endpoint = args.next().expect("--remote-endpoint needs a value"),
             "--remote-model"    => cfg.remote_model    = args.next().expect("--remote-model needs a value"),
             "--remote-key"      => cfg.remote_key      = args.next().expect("--remote-key needs a value"),
@@ -357,34 +368,36 @@ fn main() -> std::process::ExitCode {
     // ── local ollama ──────────────────────────────────────────────────────────
 
     if !cfg.skip_ollama {
-        // Kill any stale runner from a previous timed-out request before starting.
-        // A stuck runner holds VRAM and blocks the next inference.
-        cancel_ollama_runner();
-
         let client_cfg = AppConfig::default();
         let prompt = client_cfg.resolved_prompt();
 
-        match ollama_preflight(&cfg.ollama_endpoint, &cfg.ollama_model) {
-            Err(msg) => {
-                println!("SKIP [local-ollama] {msg}");
-                total_fail += 1;
-            }
-            Ok(()) => {
-                println!("    endpoint: {}", cfg.ollama_endpoint);
-                println!("    model   : {}", cfg.ollama_model);
-                println!("    timeout : {timeout_display}");
-                let client = OcrClient::new_with_options(
-                    String::new(),
-                    cfg.ollama_endpoint.clone(),
-                    cfg.ollama_model.clone(),
-                    prompt,
-                    cfg.timeout_secs,
-                    cfg.num_ctx,
-                    false,  // local ollama: no json_object constraint
-                );
-                let r = run_backend_test("local-ollama", &client, &b64, &expected, cfg.timeout_secs);
-                total_pass += r.0;
-                total_fail += r.1;
+        for model in &cfg.ollama_models {
+            // Kill any stale runner before each model — prevents VRAM exhaustion.
+            cancel_ollama_runner();
+
+            let label = format!("local-ollama:{model}");
+            match ollama_preflight(&cfg.ollama_endpoint, model) {
+                Err(msg) => {
+                    println!("SKIP [{label}] {msg}");
+                    total_fail += 1;
+                }
+                Ok(()) => {
+                    println!("    endpoint: {}", cfg.ollama_endpoint);
+                    println!("    model   : {model}");
+                    println!("    timeout : {timeout_display}");
+                    let client = OcrClient::new_with_options(
+                        String::new(),
+                        cfg.ollama_endpoint.clone(),
+                        model.clone(),
+                        prompt.clone(),
+                        cfg.timeout_secs,
+                        cfg.num_ctx,
+                        false,  // local ollama: no json_object constraint
+                    );
+                    let r = run_backend_test(&label, &client, &b64, &expected, cfg.timeout_secs);
+                    total_pass += r.0;
+                    total_fail += r.1;
+                }
             }
         }
     }
