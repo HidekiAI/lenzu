@@ -105,18 +105,13 @@ else
         return 1
     }
 
-    # Returns 0 when ANY installed ollama binary has CUDA support.
-    # Prefers /usr/local/bin/ollama (official install location) over the in-PATH
-    # binary — linuxbrew's ollama has no CUDA but the official build does.
+    # Returns 0 when the official ollama install (with CUDA runtime libraries) is present.
+    # The official installer puts CUDA runner libs in /usr/local/lib/ollama/cuda_v12/.
+    # The linuxbrew build has no such directory — it's a CPU-only binary.
+    # Using strings/ldd is unreliable: both binaries contain "cudaMalloc failed" as an
+    # error message string, causing false positives.
     ollama_has_cuda() {
-        local bin
-        # Check official install location first (takes priority over linuxbrew PATH entry)
-        if [[ -x /usr/local/bin/ollama ]]; then
-            bin=/usr/local/bin/ollama
-        else
-            bin=$(command -v ollama 2>/dev/null) || return 1
-        fi
-        strings "$bin" 2>/dev/null | grep -q "CUDA_VISIBLE_DEVICES\|cudaMalloc\|GGML_CUDA"
+        [[ -d /usr/local/lib/ollama/cuda_v12 ]] || [[ -d /usr/local/lib/ollama/cuda_v13 ]]
     }
 
     # Returns 0 if installed ollama meets the minimum version requirement.
