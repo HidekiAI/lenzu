@@ -105,12 +105,17 @@ else
         return 1
     }
 
-    # Returns 0 when the current ollama binary was built with CUDA support.
-    # The official build uses dlopen for CUDA (not visible in ldd); check for
-    # CUDA symbol strings instead.  The linuxbrew build has none of them.
+    # Returns 0 when ANY installed ollama binary has CUDA support.
+    # Prefers /usr/local/bin/ollama (official install location) over the in-PATH
+    # binary — linuxbrew's ollama has no CUDA but the official build does.
     ollama_has_cuda() {
         local bin
-        bin=$(command -v ollama 2>/dev/null) || return 1
+        # Check official install location first (takes priority over linuxbrew PATH entry)
+        if [[ -x /usr/local/bin/ollama ]]; then
+            bin=/usr/local/bin/ollama
+        else
+            bin=$(command -v ollama 2>/dev/null) || return 1
+        fi
         strings "$bin" 2>/dev/null | grep -q "CUDA_VISIBLE_DEVICES\|cudaMalloc\|GGML_CUDA"
     }
 
