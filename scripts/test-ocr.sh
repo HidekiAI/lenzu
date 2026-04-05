@@ -8,7 +8,8 @@
 #   ./scripts/test-ocr.sh [options]
 #
 # Options (passed to ocr-test binary):
-#   --ollama-model NAME      local ollama model (default: gemma4:e2b)
+#   --ollama-model NAME      local ollama model (repeatable; default: gemma4:e2b)
+#                            e.g. --ollama-model gemma4:e2b --ollama-model glm-ocr --ollama-model qwen2.5:1.5b
 #   --remote-model NAME      OpenRouter model (default: google/gemini-2.0-flash-001)
 #   --remote-key KEY         OpenRouter API key (default: $OPENROUTER_API_KEY)
 #   --skip-ollama            skip local-ollama test
