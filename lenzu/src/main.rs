@@ -1,4 +1,5 @@
 use arboard::Clipboard;
+use async_channel;
 use gdk::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
@@ -254,9 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
-    let (tx, rx) = glib::MainContext::channel::<Result<Vec<client::TranslationResult>, String>>(
-        glib::Priority::default(),
-    );
+    let (tx, rx) = async_channel::bounded::<Result<Vec<client::TranslationResult>, String>>(1);
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
@@ -340,7 +339,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_rx = state.clone();
     let window_rx = window.clone();
-    rx.attach(None, move |api_result| {
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(api_result) = rx.recv().await {
         let mut s = state_rx.borrow_mut();
         s.is_loading = false;
         match api_result {
@@ -390,8 +390,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.status = format!("API Error: {}", e);
             }
         }
-        window_rx.queue_draw();
-        glib::ControlFlow::Continue
+            window_rx.queue_draw();
+        }
     });
 
     let window_anim = window.clone();
@@ -513,7 +513,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 ocr_client.call_api(&b64).map_err(|e| e.to_string())
                             })
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
-                            let _ = tx_clone.send(result);
+                            let _ = tx_clone.send_blocking(result);
                         });
                     }
                     Err(_) => {
