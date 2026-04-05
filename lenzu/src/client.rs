@@ -8,7 +8,7 @@ use std::io::Write;
 
 use crate::utils::{encode_as_grayscale, encode_for_fallback};
 
-const API_DEBUG_PATH: &str = "/dev/shm/api_debug.txt";
+const API_DEBUG_PATH: &str = "/dev/shm/lenzu/api_debug.txt";
 
 pub struct OcrClient {
     api_key: String,
