@@ -1,0 +1,18 @@
+[
+  {
+    "label": "image_window_title",
+    "top_xy": [355, 125],
+    "bot_xy": [690, 420],
+    "text": "Monkey See, Monkey Do: Art of OCR",
+    "romaji": "MONKEY SEE, MONKEY DO: ART OF OCR",
+    "furigana": "MONKEY SEE, MONKEY DO: ART OF OCR"
+  },
+  {
+    "label": "text_window_dialogue",
+    "top_xy": [55, 715],
+    "bot_xy": [965, 920],
+    "text": "All your texts, belongs to us!",
+    "romaji": "ALL YOUR TEXTS, BELONGS TO US!",
+    "furigana": "ALL YOUR TEXTS, BELONGS TO US!"
+  }
+]
