@@ -21,7 +21,7 @@
 //!   --timeout N              per-backend timeout in seconds (default: 30)
 //!   --no-timeout             disable timeout (for CPU inference timing)
 //!   --num-ctx N              ollama num_ctx option (default: 2048; 0 = disable)
-//!   --all-local              test full production chain (primary + fallbacks); implies --skip-remote
+//!   --all-local              test full production chain: all local models + remote
 //!   --skip-ollama            skip local-ollama test
 //!   --skip-remote            skip remote-OpenRouter test
 //!
@@ -125,7 +125,6 @@ fn parse_args() -> Config {
                     models.push("qwen2.5vl:7b".to_string());
                 }
                 cfg.ollama_models = models;
-                cfg.skip_remote = true; // local-only run
             }
             other => { eprintln!("Unknown argument: {other}"); std::process::exit(1); }
         }
