@@ -449,11 +449,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let s_conf = state_main.borrow().config.clone();
         let win_x = x - (s_conf.lens_size / 2);
         let win_y = y - (s_conf.lens_size / 2);
-        window_main.move_(win_x, win_y);
 
         let is_shift_click = modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK);
         let force_remote = is_shift_click && modifier.contains(gdk::ModifierType::CONTROL_MASK);
+
+        // Show the lens only while Shift is held (preview), while OCR is running,
+        // or for 5 s after the last capture (so the user can read the result).
+        // Otherwise hide it so the window doesn't follow the cursor everywhere.
+        let shift_held = modifier.contains(gdk::ModifierType::SHIFT_MASK);
+        let show_lens = {
+            let s = state_main.borrow();
+            shift_held || s.is_loading || s.last_capture.elapsed() < Duration::from_secs(5)
+        };
+        if show_lens {
+            window_main.move_(win_x, win_y);
+            if !window_main.is_visible() {
+                window_main.show();
+            }
+        } else if window_main.is_visible() {
+            window_main.hide();
+        }
 
         if is_shift_click {
             // Check debounce + loading flag, then release the borrow immediately.
