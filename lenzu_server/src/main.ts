@@ -88,6 +88,14 @@ app.whenReady().then(() => {
   });
 
   const socket = dgram.createSocket('udp4');
+  let socketClosed = false;
+
+  function closeSocket(): void {
+    if (!socketClosed) {
+      socketClosed = true;
+      socket.close();
+    }
+  }
 
   socket.on('message', (msg) => {
     const text = msg.toString().trim();
@@ -98,7 +106,7 @@ app.whenReady().then(() => {
       const cmd = JSON.parse(text);
       if (cmd.type === 'shutdown') {
         console.log('[UDP] Received shutdown command, quitting...');
-        socket.close();
+        closeSocket();
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
         app.quit();
         return;
@@ -120,7 +128,7 @@ app.whenReady().then(() => {
 
   socket.on('error', (err) => {
     console.error('UDP error:', err);
-    socket.close();
+    closeSocket();
   });
 
   socket.bind(config.udp_port, '127.0.0.1', () => {
@@ -129,7 +137,7 @@ app.whenReady().then(() => {
   });
 
   app.on('before-quit', () => {
-    socket.close();
+    closeSocket();
   });
 
   mainWindow.on('closed', () => {
