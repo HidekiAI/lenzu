@@ -574,6 +574,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.show_all();
+
+    // Make the entire window click-through so mouse events (clicks, scroll wheel)
+    // pass through to whatever is underneath.  Lenzu detects Shift+Click by polling
+    // the root window — it never needed to *receive* mouse events directly.
+    // Note: ESC still works after alt+tabbing to the Lenzu window (or Ctrl+C in terminal).
+    if let Some(gdk_win) = gtk::prelude::WidgetExt::window(&window) {
+        // An empty cairo::Region means no area accepts pointer input → fully click-through.
+        let empty = cairo::Region::create();
+        gdk_win.input_shape_combine_region(&empty, 0, 0);
+    }
+
     gtk::main();
     Ok(())
 }
