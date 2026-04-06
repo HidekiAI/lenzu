@@ -548,6 +548,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     s_conf.primary_num_ctx,
                                     s_conf.local_timeout_secs,
                                     s_conf.remote_timeout_secs,
+                                    s_conf.paid_remote_timeout_secs,
                                     prompt,
                                 );
                                 if force_remote {

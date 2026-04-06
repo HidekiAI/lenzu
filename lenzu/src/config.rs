@@ -63,10 +63,14 @@ pub struct AppConfig {
     /// still giving GPU inference a chance to finish on typical hardware.
     #[serde(default = "default_local_timeout_secs")]
     pub local_timeout_secs: u64,
-    /// Timeout in seconds for the remote (OpenRouter/VPS) backend.  Longer because
-    /// remote latency is higher and internet can be flaky.  Default: 15 s.
+    /// Timeout in seconds for the free remote (openrouter/free) tier.  Default: 15 s.
+    /// If the free tier doesn't respond in this window the paid remote is tried next.
     #[serde(default = "default_remote_timeout_secs")]
     pub remote_timeout_secs: u64,
+    /// Timeout in seconds for the paid remote (OpenRouter/Gemini) backend.  Default: 60 s.
+    /// Higher because paid inference is worth waiting longer for.
+    #[serde(default = "default_paid_remote_timeout_secs")]
+    pub paid_remote_timeout_secs: u64,
     /// Ollama KV-cache context size for the primary (local) backend.
     /// Smaller values (e.g. 2048) free VRAM on cards with < 1 GB headroom after model load.
     /// `None` = use ollama's default (usually 4096).
@@ -104,6 +108,9 @@ fn default_local_timeout_secs() -> u64 {
 fn default_remote_timeout_secs() -> u64 {
     15
 }
+fn default_paid_remote_timeout_secs() -> u64 {
+    60
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -129,6 +136,7 @@ impl Default for AppConfig {
             fallback_max_dimension: default_fallback_max_dimension(),
             local_timeout_secs: default_local_timeout_secs(),
             remote_timeout_secs: default_remote_timeout_secs(),
+            paid_remote_timeout_secs: default_paid_remote_timeout_secs(),
             primary_num_ctx: None,
             // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
             local_fallback_models: vec!["gemma4:e2b".to_string()],

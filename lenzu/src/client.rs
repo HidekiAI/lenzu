@@ -369,7 +369,8 @@ impl DualOcrClient {
         fallback_max_dimension: u32,
         primary_num_ctx: Option<u32>,
         local_timeout_secs: u64,
-        remote_timeout_secs: u64,
+        free_remote_timeout_secs: u64,
+        paid_remote_timeout_secs: u64,
         prompt: String,
     ) -> Self {
         let primary = OcrClient::new_with_options(
@@ -388,12 +389,12 @@ impl DualOcrClient {
         // If no key is set, the request will be unauthenticated and may be rate-limited more aggressively.
         let free_remote_fallback = OcrClient::new_with_options(
             fallback_api_key.clone(), free_remote_endpoint, free_remote_model, prompt.clone(),
-            Some(remote_timeout_secs), None, true,
+            Some(free_remote_timeout_secs), None, true,
         );
         let remote_fallback = if !fallback_api_key.is_empty() {
             Some(OcrClient::new_with_options(
                 fallback_api_key, fallback_endpoint, fallback_model, prompt,
-                Some(remote_timeout_secs), None, true,
+                Some(paid_remote_timeout_secs), None, true,
             ))
         } else {
             None
@@ -819,7 +820,8 @@ mod tests {
             800,
             None,
             3,   // local_timeout_secs
-            15,  // remote_timeout_secs
+            15,  // free_remote_timeout_secs
+            60,  // paid_remote_timeout_secs
             "prompt".into(),
         )
     }
