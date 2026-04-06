@@ -2305,6 +2305,7 @@ name = "lenzu"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "async-channel",
  "base64",
  "cairo-rs 0.18.5",
  "chrono",
