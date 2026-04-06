@@ -460,7 +460,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shift_held = modifier.contains(gdk::ModifierType::SHIFT_MASK);
         let show_lens = {
             let s = state_main.borrow();
-            shift_held || s.is_loading || s.last_capture.elapsed() < Duration::from_secs(5)
+            shift_held || s.is_loading || s.last_capture.elapsed() < Duration::from_secs(s.config.result_display_secs)
         };
         if show_lens {
             window_main.move_(win_x, win_y);

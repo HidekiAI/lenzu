@@ -81,6 +81,10 @@ pub struct AppConfig {
     /// Example: `["glm-ocr", "qwen2.5vl:7b"]`.  Empty = skip straight to remote.
     #[serde(default)]
     pub local_fallback_models: Vec<String>,
+    /// How long (in seconds) to keep the lens visible after a capture result arrives.
+    /// Set to 0 to hide immediately once Shift is released.
+    #[serde(default = "default_result_display_secs")]
+    pub result_display_secs: u64,
     pub translate_src: Language,
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
@@ -111,6 +115,9 @@ fn default_remote_timeout_secs() -> u64 {
 fn default_paid_remote_timeout_secs() -> u64 {
     60
 }
+fn default_result_display_secs() -> u64 {
+    5
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -140,6 +147,7 @@ impl Default for AppConfig {
             primary_num_ctx: None,
             // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
             local_fallback_models: vec!["gemma4:e2b".to_string()],
+            result_display_secs: default_result_display_secs(),
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
