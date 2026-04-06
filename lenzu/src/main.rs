@@ -1,4 +1,5 @@
 use arboard::Clipboard;
+use async_channel;
 use gdk::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
@@ -18,7 +19,7 @@ use lenzu::client;
 use lenzu::config;
 use lenzu::utils;
 
-const HISTORY_PATH: &str = "/dev/shm/ocr_history.txt";
+const HISTORY_PATH: &str = "/dev/shm/lenzu/ocr_history.txt";
 
 fn format_for_overlay(
     results: &[client::TranslationResult],
@@ -193,8 +194,16 @@ fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENROUTER_API_KEY")
-        .expect("ERROR: OPENROUTER_API_KEY environment variable not set!");
+    // Ensure /dev/shm/lenzu/ exists for all runtime output files.
+    let _ = std::fs::create_dir_all("/dev/shm/lenzu");
+
+    // OPENROUTER_API_KEY is optional — ollama (local) is the primary backend.
+    // When the key is absent, the fallback path is disabled; Ctrl+Shift+Click remote
+    // override will show an error in the HUD instead of making a remote call.
+    let api_key = std::env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| {
+        eprintln!("INFO: OPENROUTER_API_KEY not set — OpenRouter fallback disabled.");
+        String::new()
+    });
 
     let cfg = config::AppConfig::load();
 
@@ -210,7 +219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: cfg.clone(),
         pixels: None,
         ocr_result: String::new(),
-        status: "READY: Shift+Click | ESC to Quit".to_string(),
+        status: "READY: Shift+Click | Ctrl+Shift+Click (remote) | ESC".to_string(),
         last_capture: Instant::now() - Duration::from_secs(2),
         clipboard: Clipboard::new().expect("Failed to init clipboard"),
         api_key,
@@ -249,9 +258,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
-    let (tx, rx) = glib::MainContext::channel::<Result<Vec<client::TranslationResult>, String>>(
-        glib::Priority::default(),
-    );
+    let (tx, rx) = async_channel::bounded::<Result<(Vec<client::TranslationResult>, client::OcrMeta), String>>(1);
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
@@ -335,11 +342,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_rx = state.clone();
     let window_rx = window.clone();
-    rx.attach(None, move |api_result| {
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(api_result) = rx.recv().await {
         let mut s = state_rx.borrow_mut();
         s.is_loading = false;
         match api_result {
-            Ok(results) => {
+            Ok((results, meta)) => {
                 let combined_english = results
                     .iter()
                     .map(|r| r.english.clone().unwrap_or_else(|| r.original.clone()))
@@ -362,18 +370,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send_to_overlay(&text, s.config.overlay_udp_port);
                 }
 
-                let trimmed_text = combined_english.trim();
-                if !trimmed_text.is_empty() {
+                let trimmed_english = combined_english.trim();
+                if !trimmed_english.is_empty() {
                     if let Ok(mut f) = OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(HISTORY_PATH)
                     {
+                        let combined_original = results
+                            .iter()
+                            .map(|r| r.original.clone())
+                            .collect::<Vec<_>>()
+                            .join(" / ");
                         let _ = writeln!(
                             f,
-                            "[{}] {}",
+                            "[{}] ({}, {:.1}s) {} → {}",
                             chrono::Local::now().format("%H:%M:%S"),
-                            trimmed_text
+                            meta.backend,
+                            meta.elapsed_ms as f64 / 1000.0,
+                            combined_original.trim(),
+                            trimmed_english
                         );
                     } else {
                         eprintln!("[history] failed to open {}", HISTORY_PATH);
@@ -385,8 +401,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 s.status = format!("API Error: {}", e);
             }
         }
-        window_rx.queue_draw();
-        glib::ControlFlow::Continue
+            window_rx.queue_draw();
+        }
     });
 
     let window_anim = window.clone();
@@ -433,11 +449,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let s_conf = state_main.borrow().config.clone();
         let win_x = x - (s_conf.lens_size / 2);
         let win_y = y - (s_conf.lens_size / 2);
-        window_main.move_(win_x, win_y);
 
-        if modifier.contains(gdk::ModifierType::SHIFT_MASK)
-            && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
-        {
+        let is_shift_click = modifier.contains(gdk::ModifierType::SHIFT_MASK)
+            && modifier.contains(gdk::ModifierType::BUTTON1_MASK);
+        let force_remote = is_shift_click && modifier.contains(gdk::ModifierType::CONTROL_MASK);
+
+        // Show the lens only while Shift is held (preview), while OCR is running,
+        // or for 5 s after the last capture (so the user can read the result).
+        // Otherwise hide it so the window doesn't follow the cursor everywhere.
+        let shift_held = modifier.contains(gdk::ModifierType::SHIFT_MASK);
+        let show_lens = {
+            let s = state_main.borrow();
+            shift_held || s.is_loading || s.last_capture.elapsed() < Duration::from_secs(s.config.result_display_secs)
+        };
+        if show_lens {
+            window_main.move_(win_x, win_y);
+            if !window_main.is_visible() {
+                window_main.show();
+            }
+        } else if window_main.is_visible() {
+            window_main.hide();
+        }
+
+        if is_shift_click {
             // Check debounce + loading flag, then release the borrow immediately.
             // IMPORTANT: do NOT hold borrow_mut() across gtk::main_iteration() —
             // the animation timer also calls borrow_mut() and will panic (BorrowMutError).
@@ -448,16 +482,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if should_capture {
                 // Arm state, extract config values, then DROP borrow before event loop.
-                let (api_key, endpoint, model, prompt) = {
+                let (fallback_api_key, primary_endpoint, primary_model,
+                     free_remote_endpoint, free_remote_model,
+                     fallback_endpoint, fallback_model, prompt) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
-                    s.status = "CAPTURING...".to_string();
+                    s.status = if force_remote {
+                        "CAPTURING (remote)...".to_string()
+                    } else {
+                        "CAPTURING...".to_string()
+                    };
                     s.is_loading = true;
                     s.flash_alpha = 1.0;
                     let vals = (
                         s.api_key.clone(),
                         s.config.llm_api_endpoint.clone(),
                         s.config.llm_default_model.clone(),
+                        s.config.free_remote_endpoint.clone(),
+                        s.config.free_remote_model.clone(),
+                        s.config.fallback_llm_api_endpoint.clone(),
+                        s.config.fallback_llm_model.clone(),
                         s.config.resolved_prompt(),
                     );
                     vals
@@ -478,10 +522,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s_conf.lens_size as u32,
                 ) {
                     Ok(raw) => {
-                        let rgb = utils::raw_to_rgb(&raw);
-                        utils::save_debug_image(&rgb, s_conf.lens_size as u32, s_conf.lens_size as u32);
-                        let b64 = utils::encode_to_base64(
-                            &rgb,
+                        let dyn_image = utils::raw_to_dynamic_image(
+                            &raw,
+                            s_conf.lens_size as u32,
+                            s_conf.lens_size as u32,
+                        );
+                        utils::save_debug_image(
+                            &utils::raw_to_rgb(&raw),
                             s_conf.lens_size as u32,
                             s_conf.lens_size as u32,
                         );
@@ -504,11 +551,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::thread::spawn(move || {
                             // Catch any unexpected panic so is_loading is always reset.
                             let result = std::panic::catch_unwind(|| {
-                                let ocr_client = client::OcrClient::new(api_key, endpoint, model, prompt);
-                                ocr_client.call_api(&b64).map_err(|e| e.to_string())
+                                let dual = client::DualOcrClient::new(
+                                    primary_endpoint,
+                                    primary_model,
+                                    s_conf.local_fallback_models.clone(),
+                                    free_remote_endpoint,
+                                    free_remote_model,
+                                    fallback_endpoint,
+                                    fallback_model,
+                                    fallback_api_key,
+                                    s_conf.fallback_max_dimension,
+                                    s_conf.primary_num_ctx,
+                                    s_conf.local_timeout_secs,
+                                    s_conf.remote_timeout_secs,
+                                    s_conf.paid_remote_timeout_secs,
+                                    prompt,
+                                );
+                                if force_remote {
+                                    dual.call_api_force_fallback(&dyn_image)
+                                } else {
+                                    dual.call_api(&dyn_image)
+                                }.map_err(|e| e.to_string())
                             })
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
-                            let _ = tx_clone.send(result);
+                            let _ = tx_clone.send_blocking(result);
                         });
                     }
                     Err(_) => {
@@ -524,6 +590,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     window.show_all();
+
+    // Make the entire window click-through so mouse events (clicks, scroll wheel)
+    // pass through to whatever is underneath.  Lenzu detects Shift+Click by polling
+    // the root window — it never needed to *receive* mouse events directly.
+    // Note: ESC still works after alt+tabbing to the Lenzu window (or Ctrl+C in terminal).
+    if let Some(gdk_win) = gtk::prelude::WidgetExt::window(&window) {
+        // An empty cairo::Region means no area accepts pointer input → fully click-through.
+        let empty = cairo::Region::create();
+        gdk_win.input_shape_combine_region(&empty, 0, 0);
+    }
+
     gtk::main();
     Ok(())
 }

@@ -39,12 +39,84 @@ pub struct AppConfig {
     pub show_furigana: bool,
     pub overlay_enabled: bool,
     pub overlay_udp_port: u16,
+    /// Primary backend — ollama (local). No API key required.
     pub llm_api_endpoint: String,
     pub llm_default_model: String,
+    /// Free-tier remote backend — OpenRouter free model.
+    /// Available without an API key (30 req/day unauthenticated; 1000/day with key).
+    /// Tried before the paid `fallback_llm_*` backend in the fallback chain.
+    #[serde(default = "default_free_remote_endpoint")]
+    pub free_remote_endpoint: String,
+    #[serde(default = "default_free_remote_model")]
+    pub free_remote_model: String,
+    /// Paid fallback backend — OpenRouter (remote). Requires OPENROUTER_API_KEY.
+    #[serde(default = "default_fallback_endpoint")]
+    pub fallback_llm_api_endpoint: String,
+    #[serde(default = "default_fallback_model")]
+    pub fallback_llm_model: String,
+    /// Longest-edge pixel limit applied to images before the fallback call. 0 = no limit.
+    #[serde(default = "default_fallback_max_dimension")]
+    pub fallback_max_dimension: u32,
+    /// Timeout in seconds for each local (ollama) backend request.
+    /// If inference doesn't complete within this window the client fails-over to the
+    /// next backend in the chain.  Default: 3 s — fast enough to feel responsive while
+    /// still giving GPU inference a chance to finish on typical hardware.
+    #[serde(default = "default_local_timeout_secs")]
+    pub local_timeout_secs: u64,
+    /// Timeout in seconds for the free remote (openrouter/free) tier.  Default: 15 s.
+    /// If the free tier doesn't respond in this window the paid remote is tried next.
+    #[serde(default = "default_remote_timeout_secs")]
+    pub remote_timeout_secs: u64,
+    /// Timeout in seconds for the paid remote (OpenRouter/Gemini) backend.  Default: 60 s.
+    /// Higher because paid inference is worth waiting longer for.
+    #[serde(default = "default_paid_remote_timeout_secs")]
+    pub paid_remote_timeout_secs: u64,
+    /// Ollama KV-cache context size for the primary (local) backend.
+    /// Smaller values (e.g. 2048) free VRAM on cards with < 1 GB headroom after model load.
+    /// `None` = use ollama's default (usually 4096).
+    #[serde(default)]
+    pub primary_num_ctx: Option<u32>,
+    /// Ordered list of local fallback models tried after the primary.  Each uses the same
+    /// ollama endpoint as the primary.  Tried in order; remote fallback is attempted last.
+    /// Example: `["glm-ocr", "qwen2.5vl:7b"]`.  Empty = skip straight to remote.
+    #[serde(default)]
+    pub local_fallback_models: Vec<String>,
+    /// How long (in seconds) to keep the lens visible after a capture result arrives.
+    /// Set to 0 to hide immediately once Shift is released.
+    #[serde(default = "default_result_display_secs")]
+    pub result_display_secs: u64,
     pub translate_src: Language,
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
     pub overlay_render_mode: OverlayRenderMode,
+}
+
+fn default_free_remote_endpoint() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+fn default_free_remote_model() -> String {
+    "openrouter/free".to_string()
+}
+fn default_fallback_endpoint() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+fn default_fallback_model() -> String {
+    "google/gemini-2.0-flash-001".to_string()
+}
+fn default_fallback_max_dimension() -> u32 {
+    800
+}
+fn default_local_timeout_secs() -> u64 {
+    3
+}
+fn default_remote_timeout_secs() -> u64 {
+    15
+}
+fn default_paid_remote_timeout_secs() -> u64 {
+    60
+}
+fn default_result_display_secs() -> u64 {
+    5
 }
 
 impl Default for AppConfig {
@@ -58,11 +130,24 @@ impl Default for AppConfig {
             show_furigana: true,
             overlay_enabled: true,
             overlay_udp_port: 7331,
-            // we're defaulting with Openrouter; I've no intention at this time to support other AI
-            // endpoints as my paid service; you'll have to do your own juggling if you want
-            // google, openai, etc as your target (good luck!)
-            llm_api_endpoint: "https://openrouter.ai/api/v1/chat/completions".to_string(),
-            llm_default_model: "google/gemini-2.0-flash-001".to_string(), // I've spent about USD: $0.0006 (less than a penny) per hour
+            // Primary: glm-ocr — fast OCR specialist (~15s), no API key needed
+            llm_api_endpoint: "http://localhost:11434/v1/chat/completions".to_string(),
+            llm_default_model: "glm-ocr".to_string(),
+            // Free remote: OpenRouter free tier — no API key needed (30 req/day anon; 1000/day with key).
+            free_remote_endpoint: default_free_remote_endpoint(),
+            free_remote_model: default_free_remote_model(),
+            // Paid fallback: OpenRouter (remote) — requires OPENROUTER_API_KEY.
+            // or when Ctrl+Shift+Click forces remote.
+            fallback_llm_api_endpoint: default_fallback_endpoint(),
+            fallback_llm_model: default_fallback_model(),
+            fallback_max_dimension: default_fallback_max_dimension(),
+            local_timeout_secs: default_local_timeout_secs(),
+            remote_timeout_secs: default_remote_timeout_secs(),
+            paid_remote_timeout_secs: default_paid_remote_timeout_secs(),
+            primary_num_ctx: None,
+            // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
+            local_fallback_models: vec!["gemma4:e2b".to_string()],
+            result_display_secs: default_result_display_secs(),
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
@@ -103,6 +188,32 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_config_without_fallback_fields_loads_with_defaults() {
+        // Simulate a lenzu_config.json that was saved before the fallback fields existed.
+        // serde(default) must fill them in without returning an error.
+        let json = r##"{
+            "lens_size": 400,
+            "ui_panel_height": 130,
+            "font_size": 13.0,
+            "hud_color_hex": "#00FFCC",
+            "show_romaji": true,
+            "show_furigana": true,
+            "overlay_enabled": true,
+            "overlay_udp_port": 7331,
+            "llm_api_endpoint": "http://localhost:11434/v1/chat/completions",
+            "llm_default_model": "gemma4:e2b",
+            "translate_src": "jpn",
+            "translate_dest": "eng",
+            "translate_extra_prompt": "",
+            "overlay_render_mode": "furigana"
+        }"##;
+        let cfg: AppConfig = serde_json::from_str(json).expect("old config must deserialize");
+        assert_eq!(cfg.fallback_llm_api_endpoint, "https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(cfg.fallback_llm_model, "google/gemini-2.0-flash-001");
+        assert_eq!(cfg.fallback_max_dimension, 800);
+    }
 
     #[test]
     fn test_config_defaults() {
