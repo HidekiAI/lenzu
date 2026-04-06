@@ -467,6 +467,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if should_capture {
                 // Arm state, extract config values, then DROP borrow before event loop.
                 let (fallback_api_key, primary_endpoint, primary_model,
+                     free_remote_endpoint, free_remote_model,
                      fallback_endpoint, fallback_model, prompt) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
@@ -481,6 +482,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.api_key.clone(),
                         s.config.llm_api_endpoint.clone(),
                         s.config.llm_default_model.clone(),
+                        s.config.free_remote_endpoint.clone(),
+                        s.config.free_remote_model.clone(),
                         s.config.fallback_llm_api_endpoint.clone(),
                         s.config.fallback_llm_model.clone(),
                         s.config.resolved_prompt(),
@@ -536,6 +539,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     primary_endpoint,
                                     primary_model,
                                     s_conf.local_fallback_models.clone(),
+                                    free_remote_endpoint,
+                                    free_remote_model,
                                     fallback_endpoint,
                                     fallback_model,
                                     fallback_api_key,

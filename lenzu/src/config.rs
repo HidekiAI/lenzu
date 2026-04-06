@@ -42,7 +42,14 @@ pub struct AppConfig {
     /// Primary backend — ollama (local). No API key required.
     pub llm_api_endpoint: String,
     pub llm_default_model: String,
-    /// Fallback backend — OpenRouter (remote). Requires OPENROUTER_API_KEY.
+    /// Free-tier remote backend — OpenRouter free model.
+    /// Available without an API key (30 req/day unauthenticated; 1000/day with key).
+    /// Tried before the paid `fallback_llm_*` backend in the fallback chain.
+    #[serde(default = "default_free_remote_endpoint")]
+    pub free_remote_endpoint: String,
+    #[serde(default = "default_free_remote_model")]
+    pub free_remote_model: String,
+    /// Paid fallback backend — OpenRouter (remote). Requires OPENROUTER_API_KEY.
     #[serde(default = "default_fallback_endpoint")]
     pub fallback_llm_api_endpoint: String,
     #[serde(default = "default_fallback_model")]
@@ -76,6 +83,12 @@ pub struct AppConfig {
     pub overlay_render_mode: OverlayRenderMode,
 }
 
+fn default_free_remote_endpoint() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+fn default_free_remote_model() -> String {
+    "openrouter/free".to_string()
+}
 fn default_fallback_endpoint() -> String {
     "https://openrouter.ai/api/v1/chat/completions".to_string()
 }
@@ -106,7 +119,10 @@ impl Default for AppConfig {
             // Primary: glm-ocr — fast OCR specialist (~15s), no API key needed
             llm_api_endpoint: "http://localhost:11434/v1/chat/completions".to_string(),
             llm_default_model: "glm-ocr".to_string(),
-            // Fallback: OpenRouter (remote) — requires OPENROUTER_API_KEY.
+            // Free remote: OpenRouter free tier — no API key needed (30 req/day anon; 1000/day with key).
+            free_remote_endpoint: default_free_remote_endpoint(),
+            free_remote_model: default_free_remote_model(),
+            // Paid fallback: OpenRouter (remote) — requires OPENROUTER_API_KEY.
             // or when Ctrl+Shift+Click forces remote.
             fallback_llm_api_endpoint: default_fallback_endpoint(),
             fallback_llm_model: default_fallback_model(),
