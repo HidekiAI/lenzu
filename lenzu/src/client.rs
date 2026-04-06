@@ -98,9 +98,10 @@ impl OcrClient {
     }
 
     /// Returns a short label identifying this backend for logging.
-    /// Local ollama: "ollama:<model>"; remote: "<host>:<model>".
+    /// Local ollama (localhost/127.0.0.1): "ollama:<model>"; remote: "<host>:<model>".
     pub fn label(&self) -> String {
-        if self.api_key.is_empty() {
+        let is_local = self.endpoint.contains("localhost") || self.endpoint.contains("127.0.0.1");
+        if is_local {
             format!("ollama:{}", self.model)
         } else {
             // Extract hostname from endpoint URL (e.g. "openrouter.ai" from full URL).
@@ -339,8 +340,12 @@ pub fn coords_within(actual: Option<&str>, expected: (i64, i64), tolerance: i64)
 /// `call_api_force_fallback` skips primary entirely (Ctrl+Shift+Click path).
 pub struct DualOcrClient {
     primary: OcrClient,
-    /// Local fallback chain (e.g. glm-ocr, qwen2.5vl) — tried in order after primary.
+    /// Local fallback chain (e.g. gemma4:e2b) — tried in order after primary.
     local_fallbacks: Vec<OcrClient>,
+    /// Free-tier remote (openrouter/free) — always configured; no API key required.
+    /// Tried before the paid remote fallback.
+    free_remote_fallback: OcrClient,
+    /// Paid remote fallback (e.g. Gemini via OpenRouter) — only configured when API key is set.
     remote_fallback: Option<OcrClient>,
     fallback_max_dimension: u32,
 }
@@ -350,10 +355,14 @@ impl DualOcrClient {
     ///
     /// `local_fallback_models` is an ordered list of model names that share the primary
     /// ollama endpoint.  They are tried in sequence after the primary fails.
+    ///
+    /// Fallback chain order: primary → local_fallbacks → free_remote → remote (paid, if key set)
     pub fn new(
         primary_endpoint: String,
         primary_model: String,
         local_fallback_models: Vec<String>,
+        free_remote_endpoint: String,
+        free_remote_model: String,
         fallback_endpoint: String,
         fallback_model: String,
         fallback_api_key: String,
@@ -374,6 +383,13 @@ impl DualOcrClient {
                 Some(local_timeout_secs), None, false,
             ))
             .collect();
+        // Free remote — uses the same API key as the paid remote (OpenRouter requires Bearer auth
+        // even for free models; "free" means zero-cost model, not keyless access).
+        // If no key is set, the request will be unauthenticated and may be rate-limited more aggressively.
+        let free_remote_fallback = OcrClient::new_with_options(
+            fallback_api_key.clone(), free_remote_endpoint, free_remote_model, prompt.clone(),
+            Some(remote_timeout_secs), None, true,
+        );
         let remote_fallback = if !fallback_api_key.is_empty() {
             Some(OcrClient::new_with_options(
                 fallback_api_key, fallback_endpoint, fallback_model, prompt,
@@ -382,7 +398,7 @@ impl DualOcrClient {
         } else {
             None
         };
-        Self { primary, local_fallbacks, remote_fallback, fallback_max_dimension }
+        Self { primary, local_fallbacks, free_remote_fallback, remote_fallback, fallback_max_dimension }
     }
 
     /// Returns `true` when results are empty or every `english` field is absent/blank.
@@ -457,39 +473,73 @@ impl DualOcrClient {
             }
         }
 
-        // Remote fallback — downscale before sending
-        match &self.remote_fallback {
-            Some(fb) => {
-                eprintln!("[OCR] all local backends failed — trying remote");
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
-                    let _ = std::io::Write::write_fmt(&mut f, format_args!("[remote-fallback]\n"));
-                }
-                let fallback_b64 = encode_for_fallback(image, self.fallback_max_dimension);
-                let meta_label = fb.label();
-                fb.call_api(&fallback_b64).map(|r| {
-                    (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
-                })
+        // Free remote fallback — always available (30 req/day without key, 1000/day with key)
+        {
+            let fallback_b64 = encode_for_fallback(image, self.fallback_max_dimension);
+            eprintln!("[OCR] all local backends failed — trying free remote ({})", self.free_remote_fallback.label());
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
+                let _ = std::io::Write::write_fmt(&mut f, format_args!("[free-remote-fallback]\n"));
             }
-            None => {
-                eprintln!("[OCR] remote fallback not configured (OPENROUTER_API_KEY not set)");
-                let meta = OcrMeta { backend: self.primary.label(), elapsed_ms: t0.elapsed().as_millis() };
-                primary_result.map(|r| (r, meta))
+            let meta_label = self.free_remote_fallback.label();
+            let result = self.free_remote_fallback.call_api(&fallback_b64);
+            let ok = match &result {
+                Ok(r) => !Self::needs_fallback(r),
+                Err(e) => { eprintln!("[OCR] free remote failed ({e})"); false }
+            };
+            if ok {
+                return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() }));
+            }
+            // Fall through to paid remote if free remote failed or returned nothing useful.
+            let fallback_b64_paid = encode_for_fallback(image, self.fallback_max_dimension);
+            match &self.remote_fallback {
+                Some(fb) => {
+                    eprintln!("[OCR] free remote gave nothing — trying paid remote");
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
+                        let _ = std::io::Write::write_fmt(&mut f, format_args!("[paid-remote-fallback]\n"));
+                    }
+                    let meta_label = fb.label();
+                    fb.call_api(&fallback_b64_paid).map(|r| {
+                        (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
+                    })
+                }
+                None => {
+                    eprintln!("[OCR] paid remote not configured (OPENROUTER_API_KEY not set) — returning free remote result");
+                    result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis() }))
+                }
             }
         }
     }
 
     /// Force-remote path: grayscale + downscale (Ctrl+Shift+Click).
+    /// Tries free remote first, then paid remote (if API key is set).
     pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
+        let b64 = encode_for_fallback(image, self.fallback_max_dimension);
+
+        // Try free remote first (always available)
+        let meta_label = self.free_remote_fallback.label();
+        let result = self.free_remote_fallback.call_api(&b64);
+        let ok = match &result {
+            Ok(r) => !Self::needs_fallback(r),
+            Err(e) => { eprintln!("[OCR] force-fallback free remote failed ({e})"); false }
+        };
+        if ok {
+            return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() }));
+        }
+
+        // Try paid remote
         match &self.remote_fallback {
             Some(fb) => {
-                let b64 = encode_for_fallback(image, self.fallback_max_dimension);
                 let meta_label = fb.label();
                 fb.call_api(&b64).map(|r| {
                     (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
                 })
             }
-            None => Err("Remote override unavailable: OPENROUTER_API_KEY not set".into()),
+            None => {
+                // Return whatever the free remote gave us (even if empty), or its error
+                result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis() }))
+                    .map_err(|_| "Remote override unavailable: OPENROUTER_API_KEY not set and free remote failed".into())
+            }
         }
     }
 }
@@ -761,6 +811,8 @@ mod tests {
             "http://localhost:11434/v1/chat/completions".into(),
             "gemma4:e2b".into(),
             vec![],
+            "https://openrouter.ai/api/v1/chat/completions".into(), // free_remote_endpoint
+            "openrouter/free".into(),                               // free_remote_model
             "https://openrouter.ai/api/v1/chat/completions".into(),
             "google/gemini-2.0-flash-001".into(),
             api_key.to_string(),
