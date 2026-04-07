@@ -72,9 +72,16 @@ echo "System dependencies installed."
 # ── Rust compile check ────────────────────────────────────────────────────────
 # Build a debug binary — same as run.sh uses. This pre-warms the compile cache
 # so the first run.sh invocation is fast. Release builds belong in install.sh.
-echo "Building lenzu (debug)..."
+#
+# --features onnx: enables DBNet text-detection pre-processing.
+# This causes `ort` (Rust crate) to download the ONNX Runtime shared library from
+# GitHub releases automatically during the build — no apt install needed.
+# OpenCV is NOT required; all image processing is handled by pure-Rust crates
+# (image, imageproc, ndarray).  Requires internet access on first build only
+# (the artefact is cached in ~/.cargo after that).
+echo "Building lenzu (debug, with onnx feature)..."
 cd "$REPO_ROOT"
-cargo build -p lenzu
+cargo build -p lenzu --features onnx
 cd "$REPO_ROOT"
 
 echo ""

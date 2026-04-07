@@ -227,7 +227,7 @@ pnpm run build
 
 echo "==> Building lenzu client..."
 cd "$REPO_ROOT"
-cargo build -p lenzu
+cargo build -p lenzu --features onnx
 
 echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
 # Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
