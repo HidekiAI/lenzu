@@ -9,18 +9,18 @@ Standalone prototype for validating DBNet ONNX inference before integrating into
 cargo run -p dbnet-test -- --test [model] [threshold] [dilation] [pad_x] [pad_y]
 
 # Run on any image
-cargo run -p dbnet-test -- <image_path> [model] [threshold] [dilation] [pad_x] [pad_y]
+cargo run -p dbnet-test -- [threshold] [dilation] [pad_x] [pad_y] <image_path >[model]
 ```
 
 **Defaults**
 
-| param       | default                                          | description |
-|-------------|--------------------------------------------------|-------------|
-| `model`     | `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` | ONNX model; bare filename resolved against `assets/` |
-| `threshold` | `0.2`                                            | Probability map cut-off (lower = more pixels detected) |
-| `dilation`  | `16`                                             | Binary mask expansion radius at 640×640 scale; merges nearby text blobs |
-| `pad_x`     | `32`                                             | Pixels added to each horizontal side of every box, at original-image scale |
-| `pad_y`     | `32`                                             | Pixels added to each vertical side of every box, at original-image scale |
+| param       | default                                                  | description                                                                |
+| ----------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `model`     | `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` | ONNX model; bare filename resolved against `assets/`                       |
+| `threshold` | `0.2`                                                    | Probability map cut-off (lower = more pixels detected)                     |
+| `dilation`  | `16`                                                     | Binary mask expansion radius at 640×640 scale; merges nearby text blobs    |
+| `pad_x`     | `32`                                                     | Pixels added to each horizontal side of every box, at original-image scale |
+| `pad_y`     | `32`                                                     | Pixels added to each vertical side of every box, at original-image scale   |
 
 **Tuned values** that gave the best results on the sample assets (as of prototype):
 
@@ -32,10 +32,10 @@ Output PNGs are written to `/dev/shm/lenzu/`.
 
 ## Built-in test cases (`--test`)
 
-| Case | Image | Simulates |
-|------|-------|-----------|
-| `3-texts` | `assets/Unit-test-sample-texts.png` | Lens-crop: text fills most of the frame |
-| `fullscreen` | `assets/OCR-Demo-JP2EN.png` | Desktop capture: real game screenshot with multiple text regions |
+| Case         | Image                               | Simulates                                                        |
+| ------------ | ----------------------------------- | ---------------------------------------------------------------- |
+| `3-texts`    | `assets/Unit-test-sample-texts.png` | Lens-crop: text fills most of the frame                          |
+| `fullscreen` | `assets/OCR-Demo-JP2EN.png`         | Desktop capture: real game screenshot with multiple text regions |
 
 ## Pipeline
 
@@ -110,9 +110,55 @@ a handful of boxes). The result is re-sorted top-to-bottom.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `src/main.rs` | Full pipeline implementation |
-| `../../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` | DBNet model (~4.7 MB) |
-| `../../assets/Unit-test-sample-texts.png` | 3-texts lens-crop test image |
-| `../../assets/OCR-Demo-JP2EN.png` | Fullscreen game screenshot test image |
+| File                                                           | Purpose                               |
+| -------------------------------------------------------------- | ------------------------------------- |
+| `src/main.rs`                                                  | Full pipeline implementation          |
+| `../../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` | DBNet model (~4.7 MB)                 |
+| `../../assets/Unit-test-sample-texts.png`                      | 3-texts lens-crop test image          |
+| `../../assets/OCR-Demo-JP2EN.png`                              | Fullscreen game screenshot test image |
+
+## Sample run
+
+```text
+./hidekiai/lenzu/prototypes/dbnet-test$ cargo run -p dbnet-test -- --test
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running `hidekiai/lenzu/target/debug/dbnet-test --test`
+Model  : hidekiai/lenzu/prototypes/dbnet-test/../../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx
+3-texts: hidekiai/lenzu/prototypes/dbnet-test/../../assets/Unit-test-sample-texts.png
+Full   : hidekiai/lenzu/prototypes/dbnet-test/../../assets/OCR-Demo-JP2EN.png
+Out dir: /dev/shm/lenzu
+Model input  : "x"
+Model output : "fetch_name_0"
+
+=== 3-texts / native size (lens-crop) (2816×1536) ===
+  threshold=0.20  dilation=16px  pad=32×32px
+  Preprocess : 1.840858989s
+  Inference  : 139.76149ms
+  Out shape  : [1, 1, 640, 640]
+  Prob map   : min=0.0000 max=1.0000 above_thresh=54493/409600
+  Postprocess: 193.448629ms
+  Boxes found: 3
+    [  0] x=122 y=42 w=548 h=1451
+    [  1] x=734 y=213 w=1934 h=227
+    [  2] x=742 y=599 w=1908 h=316
+  Saved : /dev/shm/lenzu/sample_3texts.png
+  → Expected ~3 boxes, got 3
+
+=== fullscreen / OCR-Demo-JP2EN (2816×1536) (2816×1536) ===
+  threshold=0.20  dilation=16px  pad=32×32px
+  Preprocess : 1.819585726s
+  Inference  : 132.142038ms
+  Out shape  : [1, 1, 640, 640]
+  Prob map   : min=0.0000 max=1.0000 above_thresh=25635/409600
+  Postprocess: 186.116371ms
+  Boxes found: 2
+    [  0] x=509 y=0 w=1327 h=608
+    [  1] x=104 y=993 w=2568 h=411
+  Saved : /dev/shm/lenzu/sample_fullscreen.png
+  → Expected 2–4 boxes, got 2
+```
+
+./sample_3texts.png
+./sample_fullscreen.png
+
+Source: https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2
