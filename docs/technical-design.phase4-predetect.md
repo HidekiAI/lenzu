@@ -1,7 +1,8 @@
 # Phase 4 Technical Design: Local Pre-Detection + Dual-Backend OCR
 
-> **Status**: Planning / Pre-implementation  
+> **Status**: Planning / Pre-implementation — model selection finalised (DBNet)
 > **Created**: 2026-04-04  
+> **Updated**: 2026-04-06 — YOLO/COCO dropped in favour of DBNet; TextCropper class added; dependency section added
 > **Related**: `planning.md` M7 / M7b, `technical-design.md` §3, `lenzu/src/ocr/text_detection.rs`
 
 ---
@@ -34,64 +35,138 @@ Shift+Click
   → Vec<TranslationResult> (with top_xy / bot_xy returned by LLM)
 ```
 
-### Phase 4 (with pre-detection)
+### Phase 4 (with pre-detection + per-region OCR)
 
 ```
 Shift+Click
-  → capture_x11(lens_rect) → BGRA bytes
-  → raw_to_rgb → DynamicImage
-  → TextDetector::detect(image)
-      → ONNX inference (local, CPU)
-      → NMS → Vec<OcrRect>  (bounding boxes in lens coords)
-  ├─ if rects found:
-  │    for each rect:
-  │      crop image to rect (+padding)
-  │      encode_to_base64(crop)
-  │      POST crop to Vision-AI
-  │      collect TranslationResult, remap coords to lens space
-  └─ if no rects (fallback):
-       POST full image (current behaviour)
-  → Vec<TranslationResult> → HUD / clipboard (unchanged)
+  ↓
+  adaptive_capture(cursor_pos, lens_size, cfg):
+    → capture_x11(cursor, oversample_size × oversample_size)   ← single X11 call
+    → TextDetector::detect(oversample_image) → primary_boxes  ← N separate regions
+    ├─ if no boxes near cursor: return full lens_size crop (Phase 1 fallback)
+    └─ return oversample_image + primary_boxes + screen_origin
+  ↓
+  TextCropper::crop(oversample_image, primary_boxes)   → N CroppedRegion structs
+  ↓
+  for each CroppedRegion:                        ← N OCR calls
+    OCR(crop, simplified_per_region_prompt)      ← no coord fields needed
+    top_xy / bot_xy = DBNet box (precise)        ← NOT guessed by LLM
+    remap coords to screen space via screen_origin
+  ↓
+  Vec<TranslationResult>  (one entry per DBNet region, N entries total)
+  → HUD / clipboard (unchanged)
+
+  ↑ fallback when N=0: full lens_size crop → full prompt (Phase 1 behaviour)
+
+Ctrl+Shift+Click  (full-desktop mode — see §4.8)
+  ↓
+  hide_lens_window()
+  → capture_x11(0, 0, screen_w, screen_h)
+  show_lens_window()
+  → TextDetector::detect(downscaled_to_640)
+  → find primary_boxes nearest to lens window position
+  → TextCropper::crop → per-region OCR (force-remote backend)
 ```
 
-The HUD and clipboard layers are **unchanged** — the only change is inside the background thread spawned in `main.rs`.
+The HUD and clipboard layers are **unchanged**.
+
+**Why per-region is the primary path (not union crop):**
+
+DBNet detects each text instance independently — a speech bubble, a subtitle line, a vertical character name, and a sound effect each get their own bounding box. Sending them as a union crop still gives the LLM multiple regions at once; it may still:
+- Merge a horizontal subtitle with a nearby vertical name
+- Combine handwritten sound effects with dialogue  
+- Return wrong reading order for mixed vertical/horizontal layouts
+
+Per-region sends one tight crop per DBNet box. The LLM cannot combine what it cannot see.
+
+**Prompt simplification enabled by DBNet:**  
+When the LLM receives a single-region crop, it no longer needs to do spatial reasoning. The prompt loses the coordinate fields entirely — bounding boxes come from DBNet, not from the LLM. See §2.3 below.
+
+### 2.3 DBNet's multi-region capability and what it replaces
+
+DBNet outputs a per-pixel probability map. Every connected region above the threshold becomes a separate contour → separate bounding box. A single capture image containing one speech bubble, one subtitle, and one sound effect produces **three independent bounding boxes** from a single DBNet inference call.
+
+This is the fundamental capability the pipeline relies on:
+
+| Text layout | DBNet output | LLM receives |
+|---|---|---|
+| Single horizontal line | 1 box | 1 crop |
+| Three horizontal lines with gaps | 3 boxes | 3 crops (in order) |
+| Vertical Japanese column | 1 box (tall, narrow) | 1 crop |
+| Mixed: horizontal subtitle + vertical name label | 2 boxes | 2 crops (separate calls) |
+| Handwritten sound effects + dialogue bubble | 2+ boxes | 2+ crops (each isolated) |
+| Single large blob with no gaps | 1 box | 1 crop (union of connected region) |
+
+**What this replaces in the LLM prompt:**
+
+Current full-image prompt asks the LLM to perform three tasks simultaneously:
+1. **Find** all text regions (spatial reasoning — where is the text?)
+2. **Read** each region (OCR)
+3. **Separate** them properly (segmentation — which pixels belong to which text instance?)
+
+With DBNet handling task 1 and task 3, the per-region prompt only asks:
+- Read this one region (OCR)
+- Translate it
+
+**Simplified per-region prompt** (replaces `TRANSLATE_PROMPT` in `config.rs` when `text_detection_model` is set):
+
+```
+"Act as a highly accurate {src}-to-{dest} OCR and translation engine.
+The image contains exactly one text region. Extract the text and translate it.
+Return a JSON object with these fields:
+  'original' (string — the exact text as written),
+  'debug_info' (string or null).
+{extra_prompt}"
+```
+
+The `top_xy` / `bot_xy` fields are **removed from the per-region prompt** — they come from DBNet, not the LLM. `TranslationResult.top_xy` and `bot_xy` are populated in Rust from `CroppedRegion.source_box` remapped to screen coordinates, before the LLM result is even parsed. The `coerce_to_opt_string` deserializer complexity (which exists to handle LLMs returning `[x,y]` arrays instead of `"x,y"` strings) becomes irrelevant for the per-region path.
+
+The `translate_extra_prompt` field (e.g., the furigana/romaji extension for Japanese) continues to be appended as `{extra_prompt}` — no change to config.
+
+**Fallback prompt (N=0, full-image path):** unchanged — the existing `TRANSLATE_PROMPT` with `top_xy`/`bot_xy` coord fields continues to be used when DBNet finds no regions.
 
 ---
 
 ## 3. Model Selection
 
-### 3.1 Models already in the repo
+### 3.1 Models in the repo
 
-| File | Size | Type | Classes |
+| File | Size | Type | Suitable for text detection? |
 |---|---|---|---|
-| `assets/yolov8n_fp16.onnx` | ~6 MB | YOLOv8-nano, fp16 | COCO 80 classes |
-| `assets/yolo11n.onnx` | ~5 MB | YOLO11-nano | COCO 80 classes |
-| `assets/model_fp16.onnx` | ~6 MB | YOLOv8 variant, fp16 | COCO 80 classes |
-| `lenzu/yolov8n_fp16.onnx` | same | same as above | same |
-| `lenzu/yolov8n.onnx` | ~12 MB | YOLOv8-nano, fp32 | COCO 80 classes |
+| `assets/yolov8n_fp16.onnx` | ~6 MB | YOLOv8-nano, fp16 | **No** — COCO 80 classes, no text class |
+| `assets/model_fp16.onnx` | ~6 MB | YOLOv8 variant, fp16 | **No** — COCO 80 classes, no text class |
+| `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` | ~4.7 MB | DBNet text detector | **Yes** — purpose-built for text |
 
-**Critical limitation**: All three are COCO-trained and have no `text`, `speech_bubble`, or `manga_panel` class. They will not reliably detect text regions in manga images.
+**Why COCO YOLOv8 was ruled out**: All YOLO models in the repo are trained on the 80-class COCO dataset, which has no `text`, `speech_bubble`, or `manga_panel` class. Using `book` (id 73) as a proxy was considered and rejected — it fires on background objects, misses inline text and speech bubbles entirely, and produces bounding boxes at the wrong granularity (one box per book spine, not per text region). Fine-tuning YOLOv8 on a manga dataset (Manga109 balloons) would fix this, but that requires a training pipeline and labelled data that doesn't exist yet.
 
-### 3.2 Model options — comparison
+### 3.2 Candidate comparison
 
-| Option | Accuracy on manga | Size | Latency (CPU) | Notes |
+| Option | Accuracy on manga text | Size | Latency (CPU) | Notes |
 |---|---|---|---|---|
-| **YOLOv8n fine-tuned on manga bubbles** | High | ~6 MB | ~30–80 ms | Best fit; requires training data |
-| **CRAFT (ONNX export)** | High | ~30 MB | ~200–400 ms | Character-level regions; overkill for bubbles |
+| **DBNet (ONNX) — chosen** | High | ~5 MB | ~50–120 ms | Purpose-built text detector; model already in assets |
+| **YOLOv8n fine-tuned on manga** | High | ~6 MB | ~30–80 ms | Requires training pipeline; no dataset yet |
+| **CRAFT (ONNX export)** | High | ~30 MB | ~200–400 ms | Character-level; larger and slower than needed |
 | **EAST text detector** | Medium | ~90 MB | ~150–300 ms | Too large for edge deployment |
-| **DBNet (ONNX)** | High | ~5 MB | ~50–120 ms | Good option; less documented in Rust |
-| **manga-ocr detector** | Very high | ~400 MB | slow on CPU | PyTorch-only; not feasible in Rust |
-| **Generic YOLOv8n (COCO)** | Low | 6 MB | ~30 ms | Free but wrong classes |
+| **Generic YOLOv8n (COCO)** | **Low — disqualified** | 6 MB | ~30 ms | Wrong training domain; see above |
 
-### 3.3 Recommended approach
+### 3.3 Decision: DBNet via `stabrise-text_detection_dbnet_ml_v02_model.onnx`
 
-**Phase 4a — Proof of concept** (can start immediately):  
-Use the existing `yolov8n_fp16.onnx` to validate the plumbing. Map COCO class `book` (id 73) as a crude text proxy for testing. Confirm the crop-and-send pipeline works end-to-end even if detection quality is poor.
+[StabRise/text_detection_dbnet_ml_v0.2](https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2) is a DBNet-based model exported to ONNX, specifically trained for multi-language text detection. Key properties:
 
-**Phase 4b — Real accuracy**:  
-Fine-tune YOLOv8n on a manga speech-bubble dataset (Manga109 or similar). Export to ONNX fp16. Drop in as a replacement. The code path is identical.
+- Input: `[1, 3, 640, 640]` float32 tensor, ImageNet-normalized
+- Output: `[1, 1, 640, 640]` probability map — each pixel is the likelihood it belongs to a text region
+- Post-processing: threshold the probability map → binary mask → contour extraction → bounding boxes
+- No NMS required (DBNet produces a smooth probability map, not discrete anchor proposals)
+- The model file is already committed at `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx`
+- The model path is configured in `lenzu_config.json` (`text_detection_model`) — not hard-coded
 
-**Alternative**: Evaluate `DBNet`-based text detector exported to ONNX. DBNet is smaller than CRAFT/EAST and has documented ONNX export paths from the `mmocr` toolkit.
+**ImageNet normalization constants used during inference**:
+
+| Channel | Mean | Std |
+|---|---|---|
+| R | 123.675 | 58.395 |
+| G | 116.28 | 57.12 |
+| B | 103.53 | 57.375 |
 
 ---
 
@@ -155,31 +230,112 @@ impl OcrRect {
 }
 ```
 
-### 4.3 `TextDetector` — complete implementation (`lenzu/src/ocr/text_detection.rs`)
+### 4.3 `TextDetector` trait + `DbNetDetector` (`lenzu/src/ocr/text_detection.rs`)
 
-The prototype at `prototypes/x11-gtk3-lens-test/src/main.rs` already contains a working YOLOv8 fp16 inference loop (`run_inference`). Port and adapt:
+The module exposes a **trait** so the backend can be swapped without changing callers:
 
+```rust
+/// Axis-aligned bounding box in the coordinate space of the *original* captured image.
+pub struct TextBoundingBox {
+    pub x1: u32,  // left edge
+    pub y1: u32,  // top edge
+    pub x2: u32,  // right edge
+    pub y2: u32,  // bottom edge
+}
+
+/// Swappable text-detection backend.
+pub trait TextDetector: Send + Sync {
+    fn detect(&self, image: &DynamicImage) -> Vec<TextBoundingBox>;
+}
 ```
-Key differences from prototype:
-- Return Vec<OcrRect> not Option<Detection>
-- Apply NMS (Non-Maximum Suppression)
-- Scale rects back to original image dimensions
-- Filter by a text-relevant class mask (configurable; default: all classes > threshold)
+
+**`DbNetDetector` — DBNet-specific algorithm**:
+
+1. Record the original `(width, height)` for later scaling.
+2. Resize to 640×640 using `FilterType::Triangle` (bilinear — faster than Lanczos3, adequate for detection).
+3. For each pixel `(x, y)`:  
+   `input[0, c, y, x] = (channel_value − mean[c]) / std[c]`  
+   using ImageNet constants (R/G/B mean `[123.675, 116.28, 103.53]`, std `[58.395, 57.12, 57.375]`).  
+   Shape: `[1, 3, 640, 640]` float32.
+4. Run ONNX session; output is `[1, 1, 640, 640]` probability map (`prob_map[[0, 0, y, x]]`).
+5. Threshold: for each pixel, `if prob > threshold { 255 } else { 0 }` → build a `GrayImage` mask.
+6. `imageproc::contours::find_contours::<u32>(&mask)` → `Vec<Contour<u32>>`.
+7. Filter: skip contours with fewer than 4 points (stray noise).
+8. For each surviving contour, compute `min_x, min_y, max_x, max_y` of its `.points`.
+9. Scale back:  
+   `x_orig = (x_640 as f32 / 640.0 * orig_width as f32) as u32`  
+   (same for y).
+10. Return as `Vec<TextBoundingBox>`, sorted top-to-bottom (`y1` ascending).
+
+**Why axis-aligned AABB from contour min/max?**  
+The downstream consumers (`TextCropper` and the HUD overlay `top_xy`/`bot_xy`) both use axis-aligned rectangles. Computing the convex hull or rotated minimum bounding box would add complexity without benefit here; for dense manga text the AABB is tight enough.
+
+**Factory function** (used by `main.rs`):
+```rust
+/// Returns None if model_path is None (pre-detection disabled).
+/// Returns Err if the model file cannot be loaded.
+pub fn build_text_detector(
+    model_path: Option<&str>,
+    threshold: f32,
+) -> anyhow::Result<Option<Box<dyn TextDetector>>>
+```
+The entire implementation body (including the `ort` import) is `#[cfg(feature = "onnx")]`.  
+When the feature is absent the function always returns `Ok(None)`.
+
+### 4.4 `TextCropper` — per-region crop dispatch (`lenzu/src/ocr/text_cropper.rs`)
+
+**Primary OCR path**: DBNet produces N bounding boxes; `TextCropper` turns them into N individual crops, each of which is sent to the LLM as a separate call with the simplified per-region prompt (§2.3). The LLM receives one region and cannot combine it with anything else.
+
+A separate struct responsible for taking a detected `Vec<TextBoundingBox>` and producing
+padded, validated image crops ready for OCR.  Keeping it separate from `TextDetector` means
+the crop logic can be tested and tuned independently of the detection model.
+
+```rust
+pub struct CroppedRegion {
+    /// The cropped sub-image, ready for base64 encoding and OCR.
+    pub image: DynamicImage,
+    /// Top-left corner of this crop in original image coordinates.
+    /// Used by `remap_coords` to translate LLM-reported positions back to lens space.
+    pub origin_x: u32,
+    pub origin_y: u32,
+    /// The source bounding box *before* padding was applied.
+    pub source_box: TextBoundingBox,
+}
+
+pub struct TextCropper {
+    /// Extra pixels added on all four sides of each bounding box.
+    /// Default: 8 px.  Larger values include more context for the LLM.
+    pub pad: u32,
+    /// Skip crops with area (width × height) below this pixel threshold.
+    /// Default: 256 px² (16×16).  Prevents sending furigana / single-character noise.
+    pub min_area: u32,
+}
+
+impl TextCropper {
+    pub fn new(pad: u32, min_area: u32) -> Self;
+
+    /// Crop `image` at each bounding box, apply padding (clamped to image bounds),
+    /// filter by `min_area`, and return the surviving crops.
+    pub fn crop(&self, image: &DynamicImage, boxes: &[TextBoundingBox]) -> Vec<CroppedRegion>;
+}
 ```
 
-**Core logic outline** (`run_inference` → `TextDetector::detect`):
+**Padding and clamping**:
+```
+padded_x1 = box.x1.saturating_sub(self.pad)
+padded_y1 = box.y1.saturating_sub(self.pad)
+padded_x2 = (box.x2 + self.pad).min(image_width)
+padded_y2 = (box.y2 + self.pad).min(image_height)
+crop_w    = padded_x2 - padded_x1
+crop_h    = padded_y2 - padded_y1
+```
+`image.crop_imm(padded_x1, padded_y1, crop_w, crop_h)` does the actual slice.
 
-1. Resize input image to 640×640 using Lanczos3.
-2. Normalize pixels to `[0.0, 1.0]` fp16, shape `[1, 3, 640, 640]` (CHW).
-3. Run ONNX session; output shape is `[1, 84, 8400]` for YOLOv8 with 80 COCO classes.
-4. Transpose to `[8400, 84]`; columns 0–3 are `[cx, cy, w, h]`, columns 4–83 are class scores.
-5. For each anchor: `conf = max(class_scores[4..])`. Keep anchors where `conf > CONF_THRESHOLD` (default 0.25).
-6. Convert `[cx, cy, w, h]` → `[x1, y1, x2, y2]` in 640-space.
-7. Apply greedy NMS with IoU threshold 0.45.
-8. Scale remaining rects back to original image dimensions via `OcrRect::scale_to`.
-9. Return sorted by `y1` (top-to-bottom reading order).
+**Area filter**: `crop_w * crop_h < self.min_area` → skip.
 
-### 4.4 Crop and multi-call logic (`lenzu/src/main.rs`, background thread)
+**`origin_x` / `origin_y`**: set to `padded_x1` / `padded_y1` (the crop's top-left in original image space), not to `box.x1`/`box.y1`.  The padded origin is what's needed for `remap_coords`.
+
+### 4.5 Crop and multi-call logic (`lenzu/src/main.rs`, background thread)
 
 Current thread (around line 504–520):
 
@@ -188,54 +344,405 @@ Current thread (around line 504–520):
 let results = client.call_api(&b64_full_image)?;
 ```
 
-Phase 4 replacement:
+Phase 4 replacement — using `TextDetector` + `TextCropper`:
 
 ```rust
 // PHASE 4 (feature-gated)
 #[cfg(feature = "onnx")]
 let results = {
-    let img = raw_bytes_to_dynamic_image(&raw, w, h);
-    let rects = detector.detect(&img).unwrap_or_default();
-    if rects.is_empty() {
-        // fallback: full image
-        client.call_api(&encode_to_base64(&rgb, w, h))?
+    let boxes = dual.detect_text(&dyn_image);  // calls TextDetector if configured
+    if boxes.is_empty() {
+        // No regions found — send full image (same as current behaviour)
+        dual.call_api(&dyn_image)?
     } else {
+        let cropper = TextCropper::new(/* pad */ 8, /* min_area */ 256);
+        let crops = cropper.crop(&dyn_image, &boxes);
         let mut all = Vec::new();
-        for rect in &rects {
-            let r = rect.padded(8, w, h);
-            let crop = img.crop_imm(r.x1, r.y1, r.width(), r.height());
-            let b64 = encode_crop_to_base64(&crop);
-            let mut sub = client.call_api(&b64)?;
-            // Remap bounding boxes from crop-local → lens-local coords
-            for t in &mut sub {
-                remap_coords(t, r.x1, r.y1);
+        for crop in crops {
+            let mut sub = dual.call_api(&crop.image)?;
+            // Remap LLM-reported coords from crop-local space → lens space
+            for t in &mut sub.0 {
+                remap_coords(t, crop.origin_x, crop.origin_y);
             }
-            all.extend(sub);
+            all.extend(sub.0);
         }
         all
     }
 };
 #[cfg(not(feature = "onnx"))]
-let results = client.call_api(&encode_to_base64(&rgb, w, h))?;
+let results = dual.call_api(&dyn_image)?;
 ```
 
-### 4.5 `AppState` changes (`lenzu/src/main.rs`)
+`dual.detect_text` is a thin helper on `DualOcrClient` that returns `vec![]` when no detector is configured, keeping the feature-gate at one call site.
 
-Add an `Option<TextDetector>` field, initialized at startup if the model file exists:
+### 4.6 `AppState` / `DualOcrClient` changes
+
+`DualOcrClient` (in `client.rs`) gains an optional detector field:
 
 ```rust
-struct AppState {
+pub struct DualOcrClient {
     // ...existing fields...
-    #[cfg(feature = "onnx")]
-    detector: Option<TextDetector>,
+    text_detector: Option<Box<dyn TextDetector + Send + Sync>>,
 }
 ```
 
-Model path resolution order:
-1. `$LENZU_YOLO_MODEL` env var
-2. `<config_dir>/model_fp16.onnx`
-3. Executable-relative `../assets/yolov8n_fp16.onnx`
-4. No model → disable pre-detection, log at startup
+`DualOcrClient::new` gains one extra parameter:
+```rust
+text_detector: Option<Box<dyn TextDetector + Send + Sync>>
+```
+
+`DualOcrClient::detect_text` is a thin delegate:
+```rust
+pub fn detect_text(&self, image: &DynamicImage) -> Vec<TextBoundingBox> {
+    self.text_detector
+        .as_ref()
+        .map(|d| d.detect(image))
+        .unwrap_or_default()
+}
+```
+
+The detector is constructed in `main.rs` at startup via `build_text_detector`:
+```rust
+let text_detector = ocr::text_detection::build_text_detector(
+    config.text_detection_model.as_deref(),
+    config.text_detection_threshold,
+)?;
+```
+
+Model path resolution: the value comes directly from `lenzu_config.json → text_detection_model`.
+Recommended default value: `"assets/stabrise-text_detection_dbnet_ml_v02_model.onnx"` (relative to CWD).
+`None` / absent field → pre-detection disabled, fall back to full-image OCR.
+
+### 4.7 Adaptive Capture Area — Virtual Lens Stretch (`lenzu/src/adaptive_capture.rs`)
+
+#### The fundamental problem
+
+The lens window displays `lens_size × lens_size` pixels. When the user Shift+Clicks, we capture exactly that area and run DBNet on it. If the text under the cursor extends beyond the lens boundary — a long subtitle, a wide banner, a tall manga page column — DBNet will detect boxes that clip the capture edge. We now know text continues past the boundary, but we do not know by how much.
+
+This is a **chicken-and-egg problem**: to know the full text extent you need to capture it, but to know how much to capture you need to know the extent.
+
+#### Approaches considered
+
+| Approach | How it works | Pros | Cons |
+|---|---|---|---|
+| **Iterative expand** *(previous design, now dropped)* | Detect clipping edges → expand by the overhang amount → re-capture → repeat | Minimal over-capture when text is small | Multiple X11 round-trips; expansion amount is a guess; text may still clip after one expansion |
+| **Full desktop capture** | Capture entire screen; run DBNet at reduced resolution; find text near cursor | Catches text of any size | Heavy X11 bandwidth (≥8 MB per click); DBNet on a downscaled full screen loses detection resolution; privacy concern |
+| **User click-and-drag** *(xfce4-screenshooter style)* | User manually draws the capture rectangle | Exact; no ambiguity | Requires user effort; breaks "just Shift+Click" flow; reference: https://gitlab.xfce.org/apps/xfce4-screenshooter |
+| **Fixed oversample — chosen** | Always capture a larger fixed area; run DBNet once; filter boxes near cursor | Single X11 capture; single DBNet run; simple; configurable ceiling | Over-captures on every click; text larger than the oversample ceiling still clips (handled by fallback) |
+
+#### Chosen approach: fixed oversample, single capture
+
+Always capture `oversample_size × oversample_size` centered on the cursor, **regardless of whether the text looks like it will fit inside the lens**. Run DBNet once on this larger image. The lens window is not shown at this size — the oversample exists only as data for detection.
+
+**Why the oversample size is `max(lens_size × factor, 640)`**:
+DBNet always resizes its input to 640×640 before inference. If we capture at 400×400 (the default lens), we are *upscaling* to 640×640 — which degrades detection quality. Capturing at ≥640 px in each axis means DBNet is downscaling, which is always better. The factor (default 2.0) means the oversample at a 400px lens is 800×800, giving DBNet a slightly downscaled 640×640 input and 2× the spatial context.
+
+**Finding the right text cluster ("primary cluster")**:
+The oversample area may contain multiple unrelated text regions (subtitles from another window, desktop icons, other speech bubbles). We only want the text the user actually clicked on.
+
+Selection rule: keep only boxes that intersect or touch the original `lens_size × lens_size` area centered on the cursor.
+
+```
+lens_rect = { x: (oversample_w - lens_size) / 2,
+              y: (oversample_h - lens_size) / 2,
+              w: lens_size, h: lens_size }
+
+primary_boxes = boxes where box.intersects(lens_rect)
+```
+
+A box "intersects" the lens rect when any part of it overlaps the original lens area — it does not have to be fully contained. This means:
+- Small text fully inside the original lens → selected
+- Text that started inside the lens and extended past the edge → selected (the oversample captured the extension)
+- Unrelated text elsewhere in the oversample area → excluded
+
+If `primary_boxes` is empty (DBNet found nothing near the cursor), fall back to the full lens-sized center crop of the oversample — same as the current no-detection behaviour.
+
+**When text still clips the oversample boundary**:
+If the union of `primary_boxes` still touches the edge of the oversample image, the text is larger than `oversample_size`. This is the case the design cannot automatically handle.
+
+Behaviour: send the union crop (even if text is cut off) and log `[adaptive] text exceeds oversample boundary — partial capture`. The user can increase `text_detection_oversample_factor` in config, or use the deferred manual selection feature (see below).
+
+#### Structs
+
+```rust
+/// The final image + metadata produced by adaptive_capture().
+pub struct AdaptiveCaptureResult {
+    /// Cropped image to send to the OCR backend.
+    /// Sized to the primary text cluster union, padded and clamped.
+    pub image: DynamicImage,
+    /// Top-left corner of `image` in screen coordinates.
+    /// Subtracted from cursor position and added to LLM-reported coords by remap_coords.
+    pub screen_origin_x: i32,
+    pub screen_origin_y: i32,
+    /// Detected text boxes inside `image` (image-local coordinates).
+    /// Empty iff DBNet found nothing near the cursor.
+    pub text_boxes: Vec<TextBoundingBox>,
+    /// True if the union touched the oversample boundary (text may be cut off).
+    pub clipped: bool,
+}
+
+/// Loaded from AppConfig; controls the oversample and crop behaviour.
+pub struct AdaptiveCaptureConfig {
+    /// Oversample multiplier applied to lens_size in each axis.
+    /// The actual capture size is max(lens_size * factor, 640), clamped to max_capture_size.
+    /// Default: 2.0
+    pub oversample_factor: f32,
+    /// Hard ceiling on oversample dimension (width or height).  Default: 1600.
+    pub max_capture_size: u32,
+    /// Padding (px) added around the union crop on all sides.  Default: 16.
+    pub crop_padding: u32,
+}
+```
+
+#### `compute_union_bbox` helper (`ocr/text_detection.rs`)
+
+```rust
+pub fn compute_union_bbox(boxes: &[TextBoundingBox]) -> Option<TextBoundingBox> {
+    let x1 = boxes.iter().map(|b| b.x1).min()?;
+    let y1 = boxes.iter().map(|b| b.y1).min()?;
+    let x2 = boxes.iter().map(|b| b.x2).max()?;
+    let y2 = boxes.iter().map(|b| b.y2).max()?;
+    Some(TextBoundingBox { x1, y1, x2, y2 })
+}
+```
+
+#### `adaptive_capture` algorithm
+
+```
+fn adaptive_capture(
+    detector:        &dyn TextDetector,
+    cursor_screen_x: i32,
+    cursor_screen_y: i32,
+    lens_size:       u32,
+    cfg:             &AdaptiveCaptureConfig,
+) -> AdaptiveCaptureResult
+```
+
+1. Compute `oversample_size = clamp(lens_size as f32 * cfg.oversample_factor, 640.0, cfg.max_capture_size as f32) as u32`
+2. `os_screen_x = cursor_screen_x - (oversample_size / 2) as i32`
+   `os_screen_y = cursor_screen_y - (oversample_size / 2) as i32`
+3. `oversample_image = capture_x11(os_screen_x, os_screen_y, oversample_size, oversample_size)`
+4. `all_boxes = detector.detect(&oversample_image)`
+5. Compute `lens_rect` in oversample-local coords:
+   `lens_x = (oversample_size - lens_size) / 2`
+   `lens_y = (oversample_size - lens_size) / 2`
+6. `primary_boxes = all_boxes.filter(|b| b.intersects(lens_x, lens_y, lens_size, lens_size))`
+7. If `primary_boxes` is empty:
+   → crop oversample to the central `lens_size × lens_size` area (original lens)
+   → return with empty `text_boxes`, `clipped = false`
+8. `union = compute_union_bbox(&primary_boxes)` (always `Some` here)
+9. Detect boundary clip: `clipped = union touches any edge of oversample_image`
+10. Pad and clamp union:
+    ```
+    px1 = union.x1.saturating_sub(cfg.crop_padding)
+    py1 = union.y1.saturating_sub(cfg.crop_padding)
+    px2 = min(union.x2 + cfg.crop_padding, oversample_size)
+    py2 = min(union.y2 + cfg.crop_padding, oversample_size)
+    ```
+11. Minimum size guard: if `(px2 - px1) < 16 || (py2 - py1) < 16` → use central lens_size crop
+12. `crop = oversample_image.crop_imm(px1, py1, px2 - px1, py2 - py1)`
+13. `screen_origin_x = os_screen_x + px1 as i32`
+    `screen_origin_y = os_screen_y + py1 as i32`
+14. Return `AdaptiveCaptureResult { image: crop, screen_origin_x, screen_origin_y, text_boxes: primary_boxes, clipped }`
+
+Note: `adaptive_capture` takes the cursor position and calls `capture_x11` internally. It does **not** receive a pre-captured image — that was a design mistake in the earlier draft. The oversample must be the very first capture; there is no "initial lens capture" anymore when detection is enabled.
+
+#### Deferred: user click-and-drag selection
+
+For text that exceeds `max_capture_size`, the automatic approach cannot help. The correct long-term solution is a manual selection mode, as used by `xfce4-screenshooter` (https://gitlab.xfce.org/apps/xfce4-screenshooter): the user holds Shift and drags a rectangle rather than clicking a point. Lenzu would enter a "selection mode" overlay where the cursor becomes a crosshair, and the capture area is defined by the drag rect.
+
+This is **deferred** — it requires significant GTK3 interaction changes (draw-on-drag, crosshair cursor). Until it is implemented, users with consistently large text should increase `text_detection_oversample_factor` or `text_detection_max_capture_size` in config.
+
+#### Where this lives in the call chain
+
+`adaptive_capture` replaces the `capture_x11` call + DBNet path in the `main.rs` background thread when `text_detection_model` is set:
+
+```rust
+// With detection enabled:
+let result = adaptive_capture(
+    &*detector,
+    cursor_screen_x, cursor_screen_y,
+    config.lens_size as u32,
+    &adaptive_cfg,
+);
+if result.clipped {
+    eprintln!("[adaptive] text exceeds oversample boundary — partial capture");
+}
+let (mut ocr_results, meta) = dual.call_api(&result.image)?;
+for t in &mut ocr_results {
+    remap_coords(t, result.screen_origin_x, result.screen_origin_y);
+}
+
+// Without detection (text_detection_model = null):
+// capture_x11 at lens_size as before, no adaptive logic.
+```
+
+No change to `DualOcrClient::call_api` signature.
+
+### 4.8 Ctrl+Shift+Click — Full-Desktop DBNet Mode
+
+#### Motivation
+
+The oversample approach (§4.7) has a hard ceiling (`max_capture_size`, default 1600 px). Text blocks larger than that — long subtitles running the full screen width, multi-panel manga spreads — cannot be auto-sized. The user needs a way to say "go wider than the normal oversample and find the text yourself".
+
+Ctrl+Shift+Click currently forces the remote OCR backend (`call_api_force_fallback`). That behaviour is **retained and stacked**: Ctrl+Shift+Click = full-desktop DBNet capture **and** force-remote OCR.
+
+#### Why full desktop is feasible here
+
+DBNet always resizes its input to 640×640 before inference. Whether the input image is 800×800 or 1920×1080, inference time is the same (~50–120 ms CPU). The extra cost is only in the X11 `GetImage` call (typically 20–60 ms for a full 1080p desktop). This is acceptable for a deliberate Ctrl+Shift+Click; it would be too slow for every Shift+Click.
+
+#### The lens-window obstruction problem
+
+At the moment of Ctrl+Shift+Click, the lens window is visible on screen. X11 `GetImage` on the root window captures the composited display — including the lens window's own pixels. If the lens is sitting over the text the user wants to OCR, the captured image will contain the lens frame, the spinner, or the previous OCR result, **not** the text underneath.
+
+**Solution: hide the lens window before the full-desktop capture, show it again immediately after.**
+
+GTK3 provides `widget.hide()` / `widget.show()`. Between `hide()` and the X11 `GetImage` there must be a compositor sync — at minimum one `gdk::flush()` + a brief yield — so the compositor has time to re-paint the desktop without the lens overlay before we snapshot it.
+
+Timing requirement: two frames (at 60 Hz, ~33 ms) is enough for most compositors. A `std::thread::sleep(Duration::from_millis(50))` before capture is a simple and reliable guard.
+
+#### Algorithm
+
+```
+on Ctrl+Shift+Click:
+  1. Record current lens position (screen_center_x, screen_center_y)
+  2. hide_lens_window()                    // GTK: window.hide(); gdk::flush()
+  3. sleep(50ms)                           // allow compositor to repaint
+  4. full_capture = capture_x11(0, 0, screen_w, screen_h)
+  5. show_lens_window()                    // GTK: window.show()
+  6. downscale full_capture to 640×640 for DBNet input
+     (keep the full-res copy; DBNet receives the downscaled version)
+  7. boxes = detector.detect(&downscaled)  // returns boxes in 640×640 space
+  8. scale boxes back to full-screen coordinates:
+       box_screen.x1 = (box_640.x1 as f32 / 640.0 * screen_w as f32) as u32
+       (same for y, x2, y2)
+  9. primary_boxes = boxes where centroid distance to lens center < selection_radius
+     (selection_radius default: lens_size / 2; configurable)
+ 10. if primary_boxes empty → use lens_size crop centered on cursor (fallback)
+ 11. union = compute_union_bbox(&primary_boxes)
+ 12. crop full_capture to union + crop_padding (clamp to screen bounds)
+ 13. screen_origin = (union.x1 - crop_padding, union.y1 - crop_padding)
+ 14. call_api_force_fallback(&crop)        // force remote OCR, existing behaviour
+ 15. remap_coords(results, screen_origin_x - screen_center_x + lens_size/2,
+                           screen_origin_y - screen_center_y + lens_size/2)
+```
+
+Step 6 is a new `downscale_for_detection(image: &DynamicImage) -> DynamicImage` helper in `utils.rs` — it resizes to 640×640 using `FilterType::Triangle` (same as DBNet preprocessing), producing the image the detector should see. The full-res image is kept in a separate binding for the final crop in step 12.
+
+#### Screen dimensions
+
+`screen_w` and `screen_h` are available at startup from GTK's default screen:
+```rust
+let screen = gdk::Screen::default().expect("no default screen");
+let screen_w = screen.width() as u32;
+let screen_h = screen.height() as u32;
+```
+
+Multi-monitor note: `gdk::Screen::width()` returns the combined virtual desktop width. On a dual-monitor setup this captures both monitors. This is correct behaviour — text may be on either monitor.
+
+#### Open question: what happens to old Ctrl+Shift+Click "force remote" shortcut?
+
+Before this change, Ctrl+Shift+Click was the only way to force the remote backend when the local ollama is slow or wrong. With this change, Ctrl+Shift+Click implies full-desktop capture **plus** force-remote. If the user wants force-remote **without** the full-desktop capture (e.g., text is small and they just want a better LLM), they have no dedicated shortcut.
+
+Options (decide before implementing):
+- **A**: Ctrl+Shift+Click = full-desktop + force-remote (as designed here). Old force-remote-only behaviour is gone or merged.
+- **B**: Ctrl+Shift+Click = full-desktop; Ctrl+Alt+Shift+Click = force-remote-only (adds a third chord).
+- **C**: Ctrl+Shift+Click = full-desktop (force-remote is always implied when the result needs it, via the fallback chain — so the user doesn't need a dedicated force-remote shortcut).
+
+Option C is the cleanest: the existing automatic fallback chain already tries remote when local fails. The manual "force remote" shortcut was a debug convenience. Full-desktop mode for Ctrl+Shift+Click is a more useful assignment.
+
+### 4.9 Detection Debug Visualization
+
+When `text_detection_debug: true` is set in config, detected bounding boxes are rendered visually so the developer can verify DBNet is finding the right regions.
+
+#### Why not a live on-screen overlay?
+
+A transparent full-screen GTK3 window with drawn rectangles would be the most interactive option but carries the same alpha-compositing / ghosting risk that caused the Tauri→Electron migration (see `planning.md` — Overlay HUD history). The compositor layer is not a safe place to invest in for a debug-only feature.
+
+The Electron `lenzu_server` overlay is pinned to the bottom of the screen as a subtitle band — it is not positioned or sized for full-screen annotation.
+
+#### Chosen approach: two complementary outputs
+
+**1. Annotated debug PNG** — covers Ctrl+Shift+Click (full-desktop) and Shift+Click alike
+
+After every detection run (regardless of whether boxes were found), save an annotated copy of the detection image:
+
+```
+/dev/shm/lenzu/debug_detection.png
+```
+
+- For **Shift+Click**: the annotated image is the `oversample_size × oversample_size` capture with a yellow rectangle marking the original lens region and green rectangles for each detected box.
+- For **Ctrl+Shift+Click**: the annotated image is the full desktop capture (downscaled to 640×640, since that is what DBNet actually saw) with green boxes drawn.
+
+Implementation:
+```rust
+// imageproc is already a planned dep (--features onnx)
+use imageproc::drawing::draw_hollow_rect_mut;
+use imageproc::rect::Rect;
+use image::Rgb;
+
+fn save_debug_image(
+    detection_input: &DynamicImage,   // the image DBNet received (640×640 for full-desktop)
+    boxes: &[TextBoundingBox],
+    lens_rect: Option<(u32, u32, u32, u32)>,  // Some((x,y,w,h)) for Shift+Click only
+) {
+    let mut annotated = detection_input.to_rgb8();
+    // Yellow rectangle = original lens area (Shift+Click only)
+    if let Some((x, y, w, h)) = lens_rect {
+        draw_hollow_rect_mut(&mut annotated, Rect::at(x as i32, y as i32).of_size(w, h), Rgb([255, 255, 0]));
+    }
+    // Green rectangles = detected text boxes
+    for b in boxes {
+        draw_hollow_rect_mut(&mut annotated, Rect::at(b.x1 as i32, b.y1 as i32).of_size(b.x2 - b.x1, b.y2 - b.y1), Rgb([0, 255, 0]));
+    }
+    let _ = std::fs::create_dir_all("/dev/shm/lenzu");
+    let _ = DynamicImage::ImageRgb8(annotated).save("/dev/shm/lenzu/debug_detection.png");
+    eprintln!("[debug] detection image saved → /dev/shm/lenzu/debug_detection.png  ({} boxes)", boxes.len());
+}
+```
+
+**2. Cairo box overlays on the lens window** — covers Shift+Click only
+
+For Shift+Click, after DBNet detects boxes, scale the `primary_boxes` from oversample space to lens display space and draw them as colored outlines in the lens window's `connect_draw` callback using the existing Cairo context:
+
+```rust
+// In the lens window draw callback (main.rs), when debug mode is on:
+if config.text_detection_debug {
+    cr.set_source_rgba(0.0, 1.0, 0.2, 0.8);  // green, 80% opacity
+    cr.set_line_width(2.0);
+    let scale_x = lens_size as f64 / oversample_size as f64;
+    let scale_y = scale_x;
+    let lens_offset_x = (oversample_size - lens_size) / 2;
+    let lens_offset_y = (oversample_size - lens_size) / 2;
+    for b in &state.last_detection_boxes {
+        // Transform: oversample coords → lens-display coords
+        let x = (b.x1 as i32 - lens_offset_x as i32) as f64 * scale_x;
+        let y = (b.y1 as i32 - lens_offset_y as i32) as f64 * scale_y;
+        let w = (b.x2 - b.x1) as f64 * scale_x;
+        let h = (b.y2 - b.y1) as f64 * scale_y;
+        cr.rectangle(x, y, w, h);
+        cr.stroke().unwrap_or(());
+    }
+}
+```
+
+`state.last_detection_boxes` is a `Vec<TextBoundingBox>` stored in `AppState`, updated after each Shift+Click detection. Boxes fully outside the original lens rect appear outside the lens window boundary (clipped by GTK).
+
+For Ctrl+Shift+Click: the boxes are in full-screen space and the lens is 400×400 — scaling a 1920×1080 scene into 400×400 makes individual boxes 1–2 px tall. The debug PNG is the right tool here; the Cairo overlay is not added for the full-desktop path.
+
+#### Summary
+
+The **annotated debug PNG is the primary debug tool** — it works for both Shift+Click and Ctrl+Shift+Click, requires no GTK interaction changes, and gives a complete picture of what DBNet saw and detected. The Cairo overlay in the lens window is a lightweight bonus for Shift+Click; it is not added for the full-desktop path where the scale is impractical.
+
+A real-time transparent overlay drawn over the live screen was considered and rejected: it carries the same alpha-compositing / compositor ghosting risk that caused the Tauri→Electron migration, and the debug PNG already provides all the information needed.
+
+| Debug tool | Shift+Click | Ctrl+Shift+Click | Effort | Status |
+|---|---|---|---|---|
+| **Annotated PNG** `/dev/shm/lenzu/debug_detection.png` | Yes (oversample image + box outlines) | Yes (640×640 DBNet input + box outlines) | ~20 lines; `imageproc` already a dep | **Primary; implement first** |
+| Cairo box overlay on lens window | Yes (boxes scaled to lens display) | No (1920→400 scale makes boxes 1–2 px) | ~15 lines; existing Cairo context | Secondary; easy add-on |
+| Transparent full-screen GTK3 overlay | Possible | Possible | High effort; compositor risk | **Deferred indefinitely** |
+
+Config flag: `text_detection_debug: bool` (default `false`). All debug outputs disabled when `false`.
 
 ---
 
@@ -244,28 +751,190 @@ Model path resolution order:
 ```jsonc
 {
   // ... existing fields ...
-  "predetect_enabled": true,          // default: false until model proven
-  "predetect_model_path": "",         // empty = auto-resolve
-  "predetect_conf_threshold": 0.25,   // YOLO confidence threshold
-  "predetect_iou_threshold": 0.45,    // NMS IoU threshold
-  "predetect_padding": 8              // extra pixels around each detected rect
+
+  // Path to the text-detection ONNX model (relative to CWD or absolute).
+  // Omit or set to null to disable pre-detection and adaptive capture entirely.
+  // Default: null
+  "text_detection_model": "assets/stabrise-text_detection_dbnet_ml_v02_model.onnx",
+
+  // DBNet probability-map binarization threshold (0.0–1.0).
+  // Pixels with probability > threshold are marked as text.
+  // Lower = more sensitive (more regions detected, more noise); higher = stricter.
+  // Default: 0.3
+  "text_detection_threshold": 0.3,
+
+  // ── Adaptive capture (virtual lens stretch) ───────────────────────────────
+  // Multiplier applied to lens_size to compute the oversample capture area.
+  // The oversample is always taken at max(lens_size * factor, 640) to ensure
+  // DBNet gets at least native-resolution input.  Higher values catch larger
+  // text at the cost of more X11 bandwidth per click.  Default: 2.0
+  "text_detection_oversample_factor": 2.0,
+
+  // Hard ceiling on the oversample dimension (width or height) in pixels.
+  // Text larger than this cannot be auto-detected; use manual selection.
+  // Default: 1600
+  "text_detection_max_capture_size": 1600,
+
+  // Padding (px) added around the detected text union on all four sides
+  // before sending the crop to OCR.  Provides context for the LLM.  Default: 16.
+  "text_detection_crop_padding": 16,
+
+  // When true: saves an annotated detection image to /dev/shm/lenzu/debug_detection.png
+  // after every Shift+Click or Ctrl+Shift+Click, and draws green box outlines on the
+  // lens window for Shift+Click detections.  Default: false.
+  "text_detection_debug": false
 }
 ```
 
-`AppConfig` in `config.rs` gains corresponding fields with `#[serde(default)]` so existing config files remain valid.
+Note: there is no `predetect_iou_threshold` for DBNet (IoU/NMS is a YOLO concept — DBNet outputs a smooth probability map, not anchor boxes, so NMS is not needed).
+
+`AppConfig` in `config.rs` gains all new fields with `#[serde(default)]` so existing config files remain valid without any migration.
+
+**Prompt changes in `config.rs`**: a second prompt constant is added alongside `TRANSLATE_PROMPT`:
+
+```rust
+/// Used when text_detection_model is set and DBNet has found a region.
+/// Bounding box is already known from DBNet — coordinates are NOT requested from the LLM.
+const PER_REGION_PROMPT: &str =
+    "Act as a highly accurate {src}-to-{dest} OCR and translation engine. \
+    The image contains exactly one isolated text region. \
+    Extract the text and translate it. \
+    Return a JSON object with EXACTLY these fields: \
+    'original' (string), \
+    'debug_info' (string or null). \
+    Do NOT include top_xy or bot_xy — they are determined externally.";
+```
+
+`AppConfig::resolved_prompt()` gains a boolean parameter (or separate method `resolved_per_region_prompt()`). When `text_detection_model` is `Some`, the per-region prompt is used for individual crop calls; the full `TRANSLATE_PROMPT` is used only for the fallback full-image path.
+
+`translate_extra_prompt` (e.g., `"…furigana and romaji fields…"`) is still appended to both prompts.
 
 ---
 
-## 6. Coordinate Remapping
+## 6. Coordinate Systems and Scaling
 
-`top_xy` / `bot_xy` in `TranslationResult` are reported relative to the **lens capture rectangle** (not the full screen). When a crop is sent, the LLM returns coords relative to the crop. Remap:
+### 6.1 The four coordinate spaces
+
+Every bounding box in the pipeline lives in exactly one of these spaces. Getting the space wrong silently produces off-by-N-× errors that are hard to spot without the debug PNG.
+
+| Space | Size | Origin | Lifetime |
+|---|---|---|---|
+| **DBNet input space** | always 640×640 | top-left of resized image | Internal to `DbNetDetector::detect()` only — never escapes |
+| **Capture space** | oversample size (square) or full desktop (non-square) | top-left of `capture_x11` rect | Output of `detect()`; input to `TextCropper` |
+| **Screen space** | full desktop (e.g. 1920×1080) | (0,0) = monitor top-left | `AdaptiveCaptureResult.screen_origin_*`; `remap_coords` offset |
+| **Crop space** | individual `CroppedRegion` dimensions | top-left of padded crop | LLM input; LLM-reported `top_xy`/`bot_xy` before remapping |
+
+### 6.2 The cardinal rule: `detect()` returns boxes in input-image space
+
+`TextDetector::detect(image: &DynamicImage) -> Vec<TextBoundingBox>` **always returns boxes in the coordinate space of `image`**, regardless of the internal 640×640 resize. The caller never needs to know the model's input resolution.
+
+This is enforced inside `DbNetDetector`: after computing contours in 640×640 space, every point is scaled back before returning:
+
+```rust
+// Inside DbNetDetector::detect, at the end of post-processing:
+let scale_x = orig_width  as f32 / 640.0;
+let scale_y = orig_height as f32 / 640.0;
+
+TextBoundingBox {
+    x1: (box_640.x1 as f32 * scale_x) as u32,
+    y1: (box_640.y1 as f32 * scale_y) as u32,
+    x2: ((box_640.x2 as f32 * scale_x) as u32).min(orig_width),
+    y2: ((box_640.y2 as f32 * scale_y) as u32).min(orig_height),
+}
+```
+
+**Why separate `scale_x` and `scale_y`**: for the square oversample capture `scale_x == scale_y`, so they are interchangeable. For the full-desktop Ctrl+Shift+Click capture (e.g. 1920×1080), `scale_x = 3.0` but `scale_y = 1.6875`. Using a single scale factor here would shift boxes sideways or vertically. The scaling must always use the per-axis ratio.
+
+**Aspect ratio distortion**: DBNet's `resize_exact(640, 640)` distorts non-square images. On a 1920×1080 desktop the horizontal axis is compressed more than vertical (ratio 3.0 vs 1.6875). Detection quality may degrade on very wide/narrow text. If this proves problematic, letterboxing can be added: pad the shorter axis to make the image square before resize, then subtract the pad offset when scaling back. For now, accept the distortion — it rarely matters for axis-aligned Latin/CJK text.
+
+### 6.3 Coordinate chain: Shift+Click (oversample path)
 
 ```
-lens_x = crop_origin_x + crop_local_x
-lens_y = crop_origin_y + crop_local_y
+capture_x11(os_screen_x, os_screen_y, OS, OS)   → oversample image (OS×OS)
+  └─ OS = max(lens_size × factor, 640), e.g. 800
+
+detector.detect(&oversample_image)               → boxes in OS×OS space
+  └─ internally: resize to 640×640 → contours → scale back by OS/640
+
+TextCropper::crop(oversample_image, boxes)        → CroppedRegion
+  └─ origin_x, origin_y in OS×OS space
+
+screen_origin_x = os_screen_x + origin_x         → screen space
+screen_origin_y = os_screen_y + origin_y
+
+LLM receives crop image (crop space)
+  LLM-reported top_xy "cx,cy" is in crop space
+  remap: screen_x = screen_origin_x + cx          → screen space
+         screen_y = screen_origin_y + cy
+
+DBNet-provided top_xy (primary path, §2.3):
+  box in OS space → subtract origin_x/y → crop space
+  "cx,cy" = (box.x1 - origin_x, box.y1 - origin_y)
+  (no LLM coordinate guessing needed)
 ```
 
-The existing `top_xy`/`bot_xy` string format is `"x,y"` (from `client.rs`). Implement `remap_coords(result, offset_x, offset_y)` in `utils.rs`.
+### 6.4 Coordinate chain: Ctrl+Shift+Click (full-desktop path)
+
+```
+capture_x11(0, 0, screen_w, screen_h)            → full desktop image (W×H, e.g. 1920×1080)
+
+detector.detect(&full_desktop_image)              → boxes in W×H space
+  └─ internally: resize to 640×640 → contours → scale back by W/640, H/640
+
+Filter: keep boxes where centroid is within selection_radius of cursor
+
+TextCropper::crop(full_desktop_image, boxes)      → CroppedRegion
+  └─ origin_x, origin_y in W×H space = screen space (capture origin is (0,0))
+
+screen_origin_x = 0 + origin_x = origin_x        → screen space
+screen_origin_y = 0 + origin_y = origin_y
+
+LLM receives crop (crop space); remap same as above
+```
+
+Because the full-desktop capture starts at (0,0), capture space == screen space for Ctrl+Shift+Click. No extra offset addition.
+
+### 6.5 Cairo overlay scaling (debug, Shift+Click only)
+
+The lens window displays the captured area at `lens_size × lens_size` pixels, but the underlying data is `OS × OS`. To draw DBNet boxes on the lens window:
+
+```rust
+let scale    = lens_size as f64 / oversample_size as f64;  // e.g. 400/800 = 0.5
+let offset_x = (oversample_size - lens_size) / 2;          // center of oversample
+let offset_y = (oversample_size - lens_size) / 2;
+
+// For each box (in OS space):
+let display_x = (box.x1 as i32 - offset_x as i32) as f64 * scale;
+let display_y = (box.y1 as i32 - offset_y as i32) as f64 * scale;
+let display_w = (box.x2 - box.x1) as f64 * scale;
+let display_h = (box.y2 - box.y1) as f64 * scale;
+```
+
+Boxes outside the original lens area produce negative `display_x`/`display_y` — they are clipped by the lens window boundary automatically. This correctly shows that part of a text region extended past the lens edge.
+
+### 6.6 `remap_coords` — fallback path only
+
+**When DBNet is active (per-region path)**: the LLM receives a single tight crop and is not asked for coordinates at all (§2.3 prompt has no `top_xy`/`bot_xy` fields). Bounding boxes are set in Rust directly from the DBNet box scaled to screen space. `remap_coords` is **not called** on this path.
+
+**When DBNet is not active (fallback full-image path)**: the LLM receives the full lens image and is asked to report `top_xy`/`bot_xy` in crop space. `remap_coords` translates those to screen space.
+
+```rust
+/// Translate LLM-reported top_xy / bot_xy from crop space to screen space.
+/// offset_x = screen_origin_x, offset_y = screen_origin_y of the crop.
+/// Only called on the fallback full-image path — NOT on the per-region DBNet path.
+pub fn remap_coords(result: &mut TranslationResult, offset_x: i32, offset_y: i32) {
+    result.top_xy = add_offset(&result.top_xy, offset_x, offset_y);
+    result.bot_xy = add_offset(&result.bot_xy, offset_x, offset_y);
+}
+
+fn add_offset(xy: &Option<String>, dx: i32, dy: i32) -> Option<String> {
+    let s = xy.as_deref()?;
+    let (x, y) = parse_xy(s)?;       // reuse existing parse_xy from client.rs
+    Some(format!("{},{}", x + dx, y + dy))
+}
+```
+
+`remap_coords` is only called on the **fallback full-image path** (when DBNet finds nothing and the LLM reports its own coordinate guesses). On the per-region path, `top_xy`/`bot_xy` are populated directly in Rust from the DBNet box, already in screen space — `remap_coords` is skipped.
 
 ---
 
@@ -273,31 +942,35 @@ The existing `top_xy`/`bot_xy` string format is `"x,y"` (from `client.rs`). Impl
 
 | Condition | Behaviour |
 |---|---|
-| `onnx` feature not compiled | Always send full image (current behaviour) |
-| `predetect_enabled = false` in config | Always send full image |
-| Model file not found at startup | Warn to stderr, disable pre-detection |
-| `detect()` returns error | Log warning, fall back to full image for this capture |
-| `detect()` returns empty `Vec` | Fall back to full image for this capture |
-| Crop is smaller than 16×16 | Skip that rect (too small to OCR reliably) |
+| `onnx` feature not compiled | Capture at `lens_size`; send full image (current behaviour) |
+| `text_detection_model` is `null` / absent in config | Same as above — no adaptive capture |
+| Model file not found at startup | Warn to stderr; disable adaptive capture for the session; fall back to lens_size |
+| `detect()` returns an error | Log warning; send central `lens_size` crop of the oversample image |
+| No boxes intersect the original lens rect | No text detected near cursor; send central `lens_size` crop |
+| Union crop smaller than 16×16 px | Degenerate box (noise); send central `lens_size` crop |
+| `oversample_size` clamped to `max_capture_size` | Text may extend past the oversample; log `[adaptive] clipped`; send best-effort union crop |
+| Ctrl+Shift+Click (full-desktop mode); `detect()` finds nothing near lens | Send full `lens_size` crop centered on cursor; still force-remote backend |
 
 ---
 
 ## 8. Open Questions
 
-1. **Model for manga text** — The COCO YOLOv8n will not detect manga speech bubbles reliably. Options:
-   - Fine-tune on Manga109 balloon annotations (requires training pipeline)
-   - Use `model_fp16.onnx` in assets — unclear what it was trained on; needs evaluation
-   - Evaluate DBNet ONNX exports (smaller than CRAFT, designed for text)
+1. **Model accuracy on manga** — DBNet (`stabrise-text_detection_dbnet_ml_v02_model.onnx`) is
+   trained on multi-language printed text; its accuracy on manga-style hand-lettered text and
+   vertical Japanese columns is unproven.  Manual QA is required: enable detection, capture a
+   representative manga page, and verify that detected bounding boxes align with speech bubbles
+   and inline text.  If quality is poor, fine-tuning DBNet on Manga109 annotations is the
+   next option.
 
 2. **Multiple crops vs one merged request** — Sending N crops = N API calls = N round trips. Alternative: pack multiple crops into a single request as a multi-image message (check Gemini API multi-image support). Could reduce latency at the cost of more complex parsing.
 
-3. **Vertical text direction** — YOLOv8 bbox orientation is axis-aligned; vertical Japanese columns may be merged into one tall narrow box. Verify this works well with how Gemini handles narrow vertical crops.
+3. **Vertical text direction** — DBNet bbox orientation is axis-aligned; vertical Japanese columns may be merged into one tall narrow box. Verify this works well with how Gemini handles narrow vertical crops.
 
-4. **Minimum crop size threshold** — Very small rects (furigana, small kanji) may produce worse results than the full image. Tune `predetect_padding` and min-size filter empirically.
+4. **Minimum crop size threshold** — Very small rects (furigana, single kanji) may produce worse results than the full image. Tune `text_detection_threshold` and `TextCropper::min_area` empirically.
 
 5. **Gemma 4 E2B / E4B as on-device OCR backend** — See §11 below.
 
-6. **`text_detection.rs` is in `ocr/` submodule** — The `ocr/` submodule currently isn't declared in `lib.rs` or `main.rs`. Decide: move to top-level `src/detect.rs` or properly wire the `ocr` submodule into the build. The `ocr/mod.rs` currently declares `image_handling`, `ocr_gcloud`, `ocr_tesseract`, `ocr_traits`, `ocr_winmedia` but NOT `text_detection`.
+6. **`ocr/mod.rs` currently declares non-existent modules** — `image_handling`, `ocr_gcloud`, `ocr_tesseract`, `ocr_traits`, `ocr_winmedia` are all listed but the files don't exist on disk. This causes compile errors. The fix (remove stubs, add `text_detection` and `text_cropper`) is tracked in §10.
 
 ---
 
@@ -305,37 +978,119 @@ The existing `top_xy`/`bot_xy` string format is `"x,y"` (from `client.rs`). Impl
 
 ### Unit tests
 
-- `OcrRect::scale_to` — verify coordinate math at known values
-- `OcrRect::padded` — verify clamping at image edges
-- `remap_coords` — round-trip remap with known offsets
+**`text_detection.rs`**
+- `compute_union_bbox` — empty input returns `None`; single box returns itself; overlapping boxes return their union; non-overlapping boxes span all four extremes
+
+**`text_cropper.rs`** (primary OCR dispatch path)
+- `TextCropper::crop`: empty `boxes` → empty vec; padding applied correctly; clamped at image boundary; boxes below `min_area` filtered
+
+**`adaptive_capture.rs`** (oversample approach)
+- `text_fits_in_lens`: oversample captures text; union well inside the central `lens_size` rect; crop is tight; `screen_origin` equals oversample top-left + padded union position
+- `text_larger_than_lens`: white rect spans from center to right edge of oversample; union.x2 < oversample edge → included; `clipped = false`; crop is wider than `lens_size`
+- `text_clips_oversample_edge`: white rect touches right edge of oversample image; `clipped = true`; crop is still returned (best-effort, text is cut off)
+- `no_boxes_near_cursor`: all detected boxes are in corners, outside the `lens_size` filter rect; `primary_boxes` is empty; returns central `lens_size` crop
+- `degenerate_union (< 16×16)`: falls back to central `lens_size` crop
+- `oversample_size_formula`: `lens_size=400, factor=2.0` → `oversample=800`; `lens_size=200, factor=2.0` → `oversample=640` (clamped to DBNet min); `lens_size=900, factor=2.0` → `oversample=1600` (clamped to max)
+
+**`remap_coords`**
+- Positive offset: `"10,20"` + origin `(50, 30)` → `"60,50"`
+- Zero offset: coords unchanged
+- Negative offset (crop origin left/above cursor center): correct subtraction
+- `None` top_xy / bot_xy: not modified (no panic)
+
+**`config.rs`**
+- Old config without any `text_detection_*` fields deserializes with all defaults
+- `text_detection_model: null` → `Option::None` in Rust
+- Three new adaptive capture fields default to `2.0` / `1600` / `16`
 
 ### Integration tests
 
-- Load `yolov8n_fp16.onnx` + a test capture PNG; verify `detect()` returns without panic
-- Run full pipeline with `predetect_enabled: true` against `wiremock` stub; verify cropped image is smaller than original
+- Load `stabrise-text_detection_dbnet_ml_v02_model.onnx` + a real capture PNG; verify `DbNetDetector::detect()` returns `Vec<TextBoundingBox>` without panic
+- `adaptive_capture` with a synthetic 800×800 image containing a white rectangle at center: confirm `primary_boxes` contains the box; confirm returned crop is tighter than the full 800×800
+- End-to-end with `wiremock` stub: `text_detection_model` set → union crop posted; size smaller than `lens_size × lens_size`; `screen_origin` correct
 
 ### Manual QA
 
-- Enable `predetect_enabled` with existing COCO model; confirm fallback triggers on manga captures (expected: no detections → full image sent)
-- After plugging in a manga-specific model: confirm detected rects align visually with speech bubbles (compare against `/dev/shm/debug_lens.png`)
+- Shift+Click on a single kanji: confirm OCR receives a tight crop (log shows `[adaptive] crop: WxH`)
+- Shift+Click on a long subtitle that extends beyond the lens but within the oversample: confirm crop is wider than `lens_size`, `clipped = false`
+- Shift+Click where text exceeds the oversample ceiling: confirm `[adaptive] clipped` log line appears
+- Shift+Click on empty area: confirm `[adaptive] no text near cursor — using lens crop` log line
+- **Ctrl+Shift+Click**: confirm lens window hides before capture, full desktop captured, nearest text found, window reappears
 
 ---
 
 ## 10. Implementation Sequence
 
-1. **Wire the `ocr` module** — add `text_detection` to `ocr/mod.rs`; fix the broken closing brace in current `text_detection.rs` (line 33 `}` is inside the `for y` loop; the `run` call and output parse are unreachable)
-2. **Add `ort`, `ndarray`, `half` deps** under `[features] onnx` in `Cargo.toml`
-3. **Implement `OcrRect`** in `ocr_traits.rs` (or new `detect_types.rs`)
-4. **Rewrite `TextDetector::detect`** using prototype's `run_inference` as reference, returning `Vec<OcrRect>`
-5. **Add config fields** to `AppConfig` with `serde` defaults
-6. **Integrate into background thread** in `main.rs` behind `#[cfg(feature = "onnx")]`
+1. **Fix `ocr/mod.rs`** — remove the five non-existent stub module declarations; replace with `pub mod text_detection;` and `pub mod text_cropper;`
+2. **Add deps to `Cargo.toml`**:
+   - Always: `anyhow = "1.0"`
+   - Under `[features] onnx`: `ort = { version = "2.0.0-rc.12", features = ["ndarray"] }`, `ndarray = "0.15"`, `imageproc = "0.25"`
+   - Build: `cargo build -p lenzu --features onnx` (see §11 for why no system libs needed)
+3. **Write `text_detection.rs`** — `TextBoundingBox`, `compute_union_bbox`, `TextDetector` trait, `DbNetDetector`, `build_text_detector`; unit tests for `compute_union_bbox`
+4. **Write `text_cropper.rs`** — `CroppedRegion`, `TextCropper`; unit tests; this is the primary OCR dispatch path (one crop per DBNet box)
+5. **Write `adaptive_capture.rs`** — `AdaptiveCaptureResult`, `AdaptiveCaptureConfig`, `adaptive_capture()`; unit tests per §9
+6. **Add config fields** — five fields to `AppConfig` with `#[serde(default)]` per §5
 7. **Implement `remap_coords`** in `utils.rs`
-8. **Test with COCO model** — confirm plumbing works; fallback triggers
-9. **Decide on final detection model** — fine-tune YOLOv8n on manga speech-bubble data (Manga109) or adopt a dedicated text detector (DBNet)
+8. **Wire Shift+Click path in `main.rs`** — replace `capture_x11` + encode with `adaptive_capture()`; add `remap_coords` call; handle `result.clipped` log
+9. **Wire Ctrl+Shift+Click path in `main.rs`** — hide lens → full-desktop `capture_x11` → DBNet nearest-box → show lens → force-remote OCR (per §4.8)
+10. **Implement `save_debug_image` in `utils.rs`** — annotated PNG to `/dev/shm/lenzu/debug_detection.png`; gated on `text_detection_debug`; ~20 lines using `imageproc::drawing` (already a planned dep)
+11. **Wire Cairo box overlay in `main.rs` draw callback** — store `last_detection_boxes: Vec<TextBoundingBox>` in `AppState`; draw green outlines when `text_detection_debug = true` (per §4.9)
+12. **Remove `detect_text()` from `DualOcrClient`** — detection now lives in `adaptive_capture.rs`; simplify `DualOcrClient::new` signature
+13. **Manual QA** — set `text_detection_debug: true`; Shift+Click a manga panel; inspect `/dev/shm/lenzu/debug_detection.png` and lens window overlays; tune `text_detection_threshold` and `oversample_factor`
 
 ---
 
-## 11. Gemma 4 E2B / E4B — On-Device OCR Backend
+## 11. Dependencies and System Libraries
+
+### Is OpenCV required?
+
+**No.** The DBNet inference pipeline uses only pure-Rust crates:
+
+| Task | Library | Installed how |
+|---|---|---|
+| ONNX model inference | `ort` (Rust crate wrapping ONNX Runtime C API) | Cargo downloads ONNX Runtime binaries automatically at build time |
+| N-dimensional arrays | `ndarray` | Cargo (pure Rust) |
+| Resize / pixel access | `image` | Cargo (already a dep, pure Rust) |
+| Contour finding on binary mask | `imageproc` | Cargo (pure Rust) |
+
+OpenCV is a C++ library that provides all of the above plus much more. Since we only need
+the ONNX inference + image manipulation subset, and Rust crates cover it, OpenCV is not a
+dependency and does not need to be installed.
+
+### `ort` and ONNX Runtime
+
+The `ort` crate v2.0.0-rc.12 (same version already used in `prototypes/x11-gtk3-lens-test`)
+downloads the pre-built ONNX Runtime shared library from GitHub releases during the
+`cargo build` step. No `apt install` is required.
+
+Required for the download to succeed at build time:
+- Internet access (for first build; artefact is cached by Cargo after that)
+- `libstdc++` / `glibc` — already present on any Debian/Ubuntu system
+
+### `setup.sh` changes needed
+
+The `cargo build -p lenzu` line in `setup.sh` must pass `--features onnx` to compile the
+detection code.  Since the DBNet model is already committed to `assets/`, we always enable
+the feature:
+
+```bash
+# Was:
+cargo build -p lenzu
+
+# Becomes:
+cargo build -p lenzu --features onnx
+```
+
+The `run.sh` script (and any CI build commands) need the same update.
+
+### Summary: no new `apt` packages needed for ONNX/DBNet
+
+The existing `apt install` block in `setup.sh` already covers all system deps.  The only
+change is the `--features onnx` flag on the Cargo build invocation.
+
+---
+
+## 12. Gemma 4 E2B / E4B — On-Device OCR Backend
 
 ### What it is
 
@@ -361,8 +1116,8 @@ The `-it` suffix denotes the instruction-tuned variant — this is the one to us
 Gemma 4 E2B/E4B is not just a cheaper remote API — it enables a **fully offline pipeline**:
 
 ```
-Current:    YOLO (local) → crop → OpenRouter/Gemini (remote, paid)
-With Gemma: YOLO (local) → crop → Gemma 4 E2B (local, free after download)
+Current:     DBNet (local) → crop → OpenRouter/Gemini (remote, paid)
+With Gemma:  DBNet (local) → crop → Gemma 4 E2B (local, free after download)
 ```
 
 This satisfies the project's offline-first / privacy-first design goal at the OCR+translation layer, not just the detection layer.
@@ -400,7 +1155,7 @@ Gemma 4 can be served in two ways compatible with the existing `client.rs` archi
 
 **Option C — ONNX export** (consistent with YOLO pipeline)
 - Export Gemma 4 E2B to ONNX via `optimum` and run via `ort`
-- Same `ort` dependency already planned for the YOLO detector
+- Same `ort` dependency already used for the DBNet text detector
 - ONNX VLMs are less mature; multimodal (image) input support varies by export toolchain
 - Worth revisiting once the ONNX ecosystem matures, but not the near-term path
 - **Note**: the export step itself requires Python (`optimum`), but the resulting `.onnx` file is consumed entirely by Rust (`ort`). The model file can be pre-exported and shipped; no Python needed at runtime or build time.
