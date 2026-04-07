@@ -1,6 +1,6 @@
 # Lenzu: OCR Screen Lens
 
-Lenzu is a high-performance, real-time screen-capture and OCR utility written in Rust. It provides a "magnifying lens" that follows the mouse cursor, allowing the user to capture and translate text from any window (including browsers and hardware-accelerated apps) using a configurable LLM API (default: Gemini 2.0 Flash via OpenRouter).
+Lenzu is a high-performance, real-time screen-capture and OCR utility written in Rust. It provides a "magnifying lens" that follows the mouse cursor, allowing the user to capture and translate text from any window (including browsers and hardware-accelerated apps) using a multi-tier LLM backend chain: local Ollama (primary, free) → free OpenRouter tier → paid remote (Gemini 2.0 Flash).
 
 Lenzu is two processes:
 - **`lenzu`** — the GTK3 lens window; does capture, OCR, and manages the overlay lifecycle
@@ -35,20 +35,75 @@ Lenzu is two processes:
 - **Automated Clipboard**: OCR results copied to system clipboard on success.
 - **Persistent Logging**: Every transcription logged with timestamp to `/dev/shm/ocr_history.txt`.
 
-## 🛠 Technical Stack
+## 🛠 Technology Dependencies
 
-- **Language**: Rust (Edition 2021)
-- **UI Toolkit**: GTK 0.18 (gtk-rs), Cairo & Pango
-- **Capture**: x11rb (X11 Rust Bindings)
-- **AI Model**: `google/gemini-2.0-flash-001` (via OpenRouter, configurable)
-- **Overlay**: Electron (`lenzu_server`), Vanilla JS/HTML/CSS
-- **Language Codes**: `isolang` (ISO 639-3)
+### Core runtime
+
+| Technology | Role | Notes |
+|---|---|---|
+| **Rust** (Edition 2021) | Primary language — client binary | All runtime code; no Python |
+| **GTK 3** (`gtk-rs` 0.18) | Lens window UI | Fixed at GTK3; GTK4 evaluated and rejected |
+| **Cairo** (`cairo-rs`) | 2D drawing, transparency | Flash effect, capture border |
+| **Pango** | CJK text layout and rendering | Prevents "tofu" boxes for Japanese |
+| **x11rb** | X11 screen capture | Captures GPU-accelerated windows correctly; root-window pixel-read approach inspired by [xfce4-screenshooter](https://gitlab.xfce.org/apps/xfce4-screenshooter) |
+| **Electron** (`lenzu_server`) | Transparent HUD overlay | Separate Node.js process |
+
+### OCR / AI backends (multi-tier fallback chain)
+
+| Technology | Role | Requires |
+|---|---|---|
+| **Ollama** | Local LLM runtime | Running daemon at `localhost:11434` |
+| **glm-ocr** (via Ollama) | Primary OCR model — fast, specialist | ~2.2 GB VRAM |
+| **Gemma 4 E2B** (via Ollama) | Local fallback OCR model | ~1.5 GB quantized |
+| **OpenRouter** | Remote API gateway | `OPENROUTER_API_KEY` env var |
+| **Google Gemini 2.0 Flash** (via OpenRouter) | Paid remote fallback | OpenRouter key |
+| `openrouter/free` | Free remote fallback | Optional key (rate-limited without) |
+
+### Text pre-detection (Phase 4 — `--features onnx`)
+
+| Technology | Role | Notes |
+|---|---|---|
+| **DBNet** (`stabrise-text_detection_dbnet_ml_v02_model.onnx`) | Locate text bounding boxes before OCR | Reduces LLM token cost ~80–93% per capture |
+| **ONNX Runtime** | Run the DBNet ONNX model | Downloaded automatically by `ort` crate at build time — no `apt install` needed |
+| **`ort`** (Rust crate, v2.0.0-rc.12) | Rust bindings for ONNX Runtime | |
+| **`ndarray`** | N-dimensional input tensor | |
+| **`imageproc`** | Binary mask contour extraction | Pure Rust — no OpenCV needed |
+
+### Serialization / networking
+
+| Technology | Role |
+|---|---|
+| **`serde` + `serde_json`** | Config and API JSON |
+| **`reqwest`** (blocking) | HTTP client for all LLM backends |
+| **`base64`** | Image encoding for API payloads |
+| **`isolang`** | ISO 639-3 language code handling |
+
+### Build / system
+
+| Technology | Role |
+|---|---|
+| **Cargo** | Build system; manages all Rust deps |
+| **pnpm** | Node package manager for `lenzu_server` |
+| **`libgtk-3-dev`**, `libcairo2-dev`, `libpango1.0-dev` | System headers (Debian/Ubuntu) |
+| `fonts-noto-cjk`, `fonts-ipafont-gothic` | CJK font rendering |
+
+> **OpenCV is NOT required.** All image processing (resize, normalize, contour detection) is
+> handled by pure-Rust crates. The ONNX Runtime is downloaded automatically at `cargo build`
+> time by the `ort` crate — no system-level installation needed.
 
 ## ⌨️ Controls
 
-- **Mouse Move**: Lens follows cursor.
-- **Shift + Left Click**: Capture, flash, and OCR.
-- **Esc / Window Close**: Quit (also kills `lenzu_server`).
+| Shortcut | Action |
+|---|---|
+| **Mouse Move** | Lens follows cursor |
+| **Shift + Left Click** | Capture and OCR. When DBNet detection is enabled: takes an oversample capture, finds text near the cursor, crops to the detected text bounds (shrinks when text is small, expands when text extends past the lens edge), then sends the crop to the OCR backend chain. |
+| **Ctrl + Shift + Left Click** | Full-desktop capture mode. Hides the lens window, grabs the entire desktop, runs DBNet to find text nearest the lens position, sends the best crop directly to the remote OCR backend. Use this for text that is too large or too spread out for the lens window. |
+| **Esc / Window Close** | Quit (also kills `lenzu_server`) |
+
+> **Screen capture approach** inspired by `xfce4-screenshooter`'s method of reading pixels
+> directly from the X11 root window, which correctly captures GPU-accelerated and
+> hardware-composited windows that traditional screenshot tools miss.
+> Source: https://gitlab.xfce.org/apps/xfce4-screenshooter
 
 ## 🚀 Running
 
@@ -102,22 +157,48 @@ cargo run -p lenzu
 
 Optional file in the working directory. All fields have defaults if the file is absent or a field is omitted. This is the client-side config; the Electron HUD reads `lenzu_server/src/config.json` for window styling and UDP bind defaults — when the client spawns the HUD it sets `LENZU_OVERLAY_UDP_PORT` so the port matches `overlay_udp_port`.
 
-```json
+```jsonc
 {
+  // UI
   "lens_size": 400,
   "ui_panel_height": 130,
   "font_size": 13.0,
   "hud_color_hex": "#00FFCC",
   "show_romaji": true,
   "show_furigana": true,
+  "result_display_secs": 5,
+
+  // Overlay HUD
   "overlay_enabled": true,
   "overlay_udp_port": 7331,
   "overlay_render_mode": "furigana",
-  "llm_api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
-  "llm_default_model": "google/gemini-2.0-flash-001",
+
+  // Primary backend — local Ollama (no API key needed)
+  "llm_api_endpoint": "http://localhost:11434/v1/chat/completions",
+  "llm_default_model": "glm-ocr",
+  "local_timeout_secs": 3,
+  "local_fallback_models": ["gemma4:e2b"],
+
+  // Free remote fallback — OpenRouter free tier (rate-limited without key)
+  "free_remote_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "free_remote_model": "openrouter/free",
+  "remote_timeout_secs": 15,
+
+  // Paid remote fallback — requires OPENROUTER_API_KEY env var
+  "fallback_llm_api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "fallback_llm_model": "google/gemini-2.0-flash-001",
+  "fallback_max_dimension": 800,
+  "paid_remote_timeout_secs": 60,
+
+  // Text pre-detection (Phase 4 — requires --features onnx build)
+  // Set to null to disable; path is relative to working directory
+  "text_detection_model": "assets/stabrise-text_detection_dbnet_ml_v02_model.onnx",
+  "text_detection_threshold": 0.3,
+
+  // Translation
   "translate_src": "jpn",
   "translate_dest": "eng",
-  "translate_extra_prompt": "Each object must also include: 'furigana' (format: 漢字[かんじ]) and 'romaji'."
+  "translate_extra_prompt": "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation."
 }
 ```
 
@@ -125,10 +206,21 @@ Optional file in the working directory. All fields have defaults if the file is 
 |---|---|---|
 | `lens_size` | Capture window size in px (square) | `400` |
 | `overlay_enabled` | Auto-spawn `lenzu_server` and send results to it | `true` |
-| `overlay_udp_port` | UDP port; must match `lenzu_server`'s `--port` | `7331` |
+| `overlay_udp_port` | UDP port; must match `lenzu_server`'s bind port | `7331` |
 | `overlay_render_mode` | What to show in HUD: `original`, `english`, `furigana`, `romaji`, `all`, `debug` | `"furigana"` |
-| `translate_src` / `translate_dest` | ISO 639-3 language codes (e.g. `"jpn"`, `"eng"`, `"kor"`, `"cmn"`) | `"jpn"` / `"eng"` |
-| `translate_extra_prompt` | Appended to base prompt for language-specific fields. Empty string = no extension. | furigana/romaji hint |
+| `llm_default_model` | Primary Ollama model | `"glm-ocr"` |
+| `local_fallback_models` | Ordered list of Ollama fallback models | `["gemma4:e2b"]` |
+| `local_timeout_secs` | Timeout for each local Ollama call | `3` |
+| `remote_timeout_secs` | Timeout for free remote tier | `15` |
+| `paid_remote_timeout_secs` | Timeout for paid remote | `60` |
+| `text_detection_model` | Path to DBNet ONNX model; `null` disables pre-detection | `null` |
+| `text_detection_threshold` | DBNet probability threshold (0–1) | `0.3` |
+| `text_detection_oversample_factor` | Capture multiplier for Shift+Click detection (≥1.0; floor at 640 px) | `2.0` |
+| `text_detection_max_capture_size` | Hard ceiling on oversample dimension in px | `1600` |
+| `text_detection_crop_padding` | Padding px added around detected text union before sending to OCR | `16` |
+| `text_detection_debug` | Write annotated debug PNG to `/dev/shm/lenzu/debug_detection.png` after each capture; draw box outlines on lens window | `false` |
+| `translate_src` / `translate_dest` | ISO 639-3 language codes (`"jpn"`, `"eng"`, `"kor"`, `"cmn"` …) | `"jpn"` / `"eng"` |
+| `translate_extra_prompt` | Appended to base prompt for language-specific fields | furigana/romaji hint |
 
 ### How the prompt is built
 
