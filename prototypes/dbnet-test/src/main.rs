@@ -7,9 +7,9 @@
 /// Defaults:
 ///   model      = ../../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx
 ///   threshold  = 0.2
-///   dilation   = 4    (mask expansion radius at 640×640 scale — merges nearby blobs)
-///   pad_x      = 2    (extra pixels added to each side horizontally, at original-image scale)
-///   pad_y      = 8    (extra pixels added to each side vertically,   at original-image scale)
+///   dilation   = 16   (mask expansion radius at 640×640 scale — merges nearby blobs)
+///   pad_x      = 32   (extra pixels added to each side horizontally, at original-image scale)
+///   pad_y      = 32   (extra pixels added to each side vertically,   at original-image scale)
 ///
 /// --test runs two cases:
 ///   1. Unit-test-sample-texts.png  — 3 distinct text regions (lens-crop simulation)
