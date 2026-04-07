@@ -158,7 +158,31 @@ Model output : "fetch_name_0"
   → Expected 2–4 boxes, got 2
 ```
 
-./sample_3texts.png
-./sample_fullscreen.png
+![Sample 3-Texts](./sample_3texts.png)
 
-Source: https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2
+![Sample Fullscreen](./sample_fullscreen.png)
+
+# 📜 Credits & Citations
+
+## 1. Text Detection Model (Local)
+
+The real-time bounding box detection is powered by the DBNet Mobile-Lite model.
+
+Model Variant: [text_detection_dbnet_ml_v0.2](https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2)
+
+Optimized by: StabRise
+
+Source: Hugging Face Repository
+
+## 2. Original DBNet Research
+
+This project utilizes the Differentiable Binarization (DB) method for scene text detection as proposed by Liao et al.
+
+```Code snippet
+@inproceedings{liao2020real,
+  title={Real-time Scene Text Detection with Differentiable Binarization},
+  author={Liao, Minghui and Wan, Zhaoyi and Yao, Cong and Chen, Kai and Bai, Xiang},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  year={2020}
+}
+```
