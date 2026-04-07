@@ -92,13 +92,13 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
 
 ### Deferred from Phase 4 (not yet started)
 
-- **YOLO pre-detection** (`M7`): find text bounding boxes locally before any API call — further reduces tokens by sending only cropped regions. Deferred until M7b-4 is stable; depends on manga-specific ONNX model (COCO YOLOv8n insufficient).
+- **DBNet pre-detection + adaptive capture** (`M7`): find text bounding boxes locally before any API call. On every **Shift+Click** the capture area is an oversample (`max(lens_size × 2, 640)` px); DBNet finds text within the original lens region; the union bounding box of the detected text is the actual crop sent to OCR — smaller than the lens when text is small (token savings ~80–93%), larger than the lens when text extends past it. On **Ctrl+Shift+Click** the entire desktop is captured (lens window is hidden first to avoid obstruction), DBNet finds text nearest to the lens position, and the remote OCR backend is forced. Model: `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` (already committed). COCO YOLOv8n ruled out — no text/speech-bubble class. Design: `docs/technical-design.phase4-predetect.md` §3–4.
 
 ### Short-term — UI/UX
 
 - Overlay position: configurable top/bottom via `hud_config.json`
 - Click-through mode for `lenzu_server` window (doesn't steal mouse events)
-- **Lens-box resize** (post-YOLO): when YOLO pre-detection is active, allow the user to dynamically resize the lens capture box (click-drag) so text that doesn't fit inside the default box can be included. Box should never shrink below a configurable minimum size. Auto-adjust option: YOLO bounding boxes could be used to suggest an optimal crop size.
+- **Lens-box resize** (manual): allow the user to dynamically resize the lens capture box (click-drag) so they can manually control the initial capture area. Box should never shrink below a configurable minimum. Note: automatic adaptive sizing (shrink/expand to detected text) is already part of Phase 4 DBNet design (`technical-design.phase4-predetect.md` §4.7) — this item covers the *manual* resize UX on top of that.
 
 ### Medium-term (1-3 Months)
 
@@ -134,7 +134,7 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
 
 2. **Machine Learning Integration**
    - On-device manga-specific model (tiny, fast)
-   - Text bubble detection with YOLO/ONNX Runtime
+   - Text bubble detection with DBNet/ONNX Runtime (Phase 4; model already in assets)
    - Preprocessing CNN for denoising and binarization
 
 3. **Accessibility Features**
@@ -163,7 +163,7 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
 ### API / Token Cost
 
 - Full lens image sent on every capture — no pre-filtering yet
-- Gemini 2.0 Flash is cheap (~$0.0006/hr in practice) but Phase 4 YOLOv8 pre-detection will cut costs further
+- Gemini 2.0 Flash is cheap (~$0.0006/hr in practice) but Phase 4 DBNet pre-detection will cut costs further (~80–93% token reduction per cropped region)
 - **Gemma 4 E2B / E4B** (Google open-weights VLM, `google/gemma-4-E2B-it` / `google/gemma-4-E4B-it`): 140+ language native support, strong OCR and handwriting recognition, runs fully on-device. Ollama: `gemma4:e2b` / `gemma4:e4b`. GGUF (4-bit/8-bit) via Unsloth HuggingFace page. Viable as a zero-cost offline replacement for the remote API. Evaluation tracked in M7b.
 
 ### Linux Capture
