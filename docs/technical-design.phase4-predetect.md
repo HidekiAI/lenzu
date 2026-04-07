@@ -506,6 +506,63 @@ pub fn compute_union_bbox(boxes: &[TextBoundingBox]) -> Option<TextBoundingBox> 
 }
 ```
 
+#### `merge_overlapping_boxes` — union merge pass (`ocr/text_detection.rs`)
+
+DBNet occasionally splits a single physical text region into multiple overlapping
+bounding boxes — most commonly when vertical Japanese columns produce per-character
+probability blobs, or when uneven probability mass causes a line to fragment after
+thresholding. After padding is applied these fragments often overlap. The union
+merge pass collapses them before boxes are returned to the caller.
+
+**Algorithm**: iteratively scan all box pairs; when two boxes overlap, replace them
+with their axis-aligned bounding union (upper-left-most corner, bottom-right-most
+corner). Repeat until a full pass produces zero merges. Typically converges in 1–2
+passes for the number of boxes DBNet produces.
+
+```rust
+fn overlaps(a: &TextBoundingBox, b: &TextBoundingBox) -> bool {
+    a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1
+}
+
+fn union_bbox(a: &TextBoundingBox, b: &TextBoundingBox) -> TextBoundingBox {
+    TextBoundingBox {
+        x1: a.x1.min(b.x1),
+        y1: a.y1.min(b.y1),
+        x2: a.x2.max(b.x2),
+        y2: a.y2.max(b.y2),
+    }
+}
+
+pub fn merge_overlapping_boxes(mut boxes: Vec<TextBoundingBox>) -> Vec<TextBoundingBox> {
+    loop {
+        let mut merged = Vec::with_capacity(boxes.len());
+        let mut consumed = vec![false; boxes.len()];
+        let mut any = false;
+        for i in 0..boxes.len() {
+            if consumed[i] { continue; }
+            let mut current = boxes[i].clone();
+            for j in (i + 1)..boxes.len() {
+                if consumed[j] { continue; }
+                if overlaps(&current, &boxes[j]) {
+                    current = union_bbox(&current, &boxes[j]);
+                    consumed[j] = true;
+                    any = true;
+                }
+            }
+            merged.push(current);
+        }
+        boxes = merged;
+        if !any { break; }
+    }
+    boxes
+}
+```
+
+This should be called at the end of `DbNetDetector::detect()`, after padding is
+applied and before the result is returned. It is distinct from `compute_union_bbox`
+(which folds *all* boxes into one for the oversample crop path); this function only
+merges pairs that actually overlap and leaves well-separated boxes independent.
+
 #### `adaptive_capture` algorithm
 
 ```
@@ -980,6 +1037,7 @@ fn add_offset(xy: &Option<String>, dx: i32, dy: i32) -> Option<String> {
 
 **`text_detection.rs`**
 - `compute_union_bbox` — empty input returns `None`; single box returns itself; overlapping boxes return their union; non-overlapping boxes span all four extremes
+- `merge_overlapping_boxes` — empty input returns empty; single box returns itself unchanged; two non-overlapping boxes returned as-is; two overlapping boxes collapsed into one union; three-way chain (A∩B, B∩C but not A∩C) collapses all three in second pass
 
 **`text_cropper.rs`** (primary OCR dispatch path)
 - `TextCropper::crop`: empty `boxes` → empty vec; padding applied correctly; clamped at image boundary; boxes below `min_area` filtered

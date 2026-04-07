@@ -11,4 +11,5 @@ members = [
   "prototypes/x11-gtk3-lens-test",
   "prototypes/jp_ocr_app",
   "prototypes/winit-test",
+  "prototypes/dbnet-test",
 ]
