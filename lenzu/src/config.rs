@@ -18,7 +18,8 @@ pub enum OverlayRenderMode {
     Debug,
 }
 
-// Base prompt — language-agnostic. {src}/{dest} are substituted at runtime.
+// Full-image prompt (Phase 1 / DBNet fallback when no regions are found).
+// {src}/{dest} are substituted at runtime by resolved_prompt().
 const TRANSLATE_PROMPT: &str =
     "Act as a highly accurate {src}-to-{dest} OCR and translation engine. \
     Extract ALL text from the image. Return a JSON array of objects, one per line/bubble found. \
@@ -28,6 +29,17 @@ const TRANSLATE_PROMPT: &str =
     'bot_xy' (string in \"x,y\" format, e.g. \"167,181\" — lower-right pixel corner of the text bounding box), \
     'debug_info' (string or null). \
     Do NOT use arrays or objects for top_xy/bot_xy — they must be plain strings.";
+
+// Per-region prompt used when DBNet detects text regions (Phase 4).
+// The LLM receives exactly one crop; no coordinate fields are needed.
+// {src}/{dest} and {extra_prompt} are substituted at runtime.
+const TRANSLATE_PROMPT_PER_REGION: &str =
+    "Act as a highly accurate {src}-to-{dest} OCR and translation engine. \
+    The image contains exactly one text region. Extract the text and translate it. \
+    Return a JSON object with these fields: \
+    'original' (string — the exact text as written), \
+    'debug_info' (string or null). \
+    {extra_prompt}";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
@@ -85,6 +97,35 @@ pub struct AppConfig {
     /// Set to 0 to hide immediately once Shift is released.
     #[serde(default = "default_result_display_secs")]
     pub result_display_secs: u64,
+    // ── Phase 4: text detection (DBNet) ───────────────────────────────────────
+    /// Path to the DBNet ONNX model file (relative to CWD).
+    /// When absent or null, text detection is disabled and full-image OCR is used.
+    /// Recommended: `"assets/stabrise-text_detection_dbnet_ml_v02_model.onnx"`.
+    #[serde(default)]
+    pub text_detection_model: Option<String>,
+    /// DBNet probability threshold.  Default: 0.2.
+    /// Lower values detect more text at the cost of more false positives.
+    #[serde(default = "default_text_detection_threshold")]
+    pub text_detection_threshold: f32,
+    /// Morphological dilation radius applied to the binary mask at 640×640.  Default: 16.
+    /// Merges nearby character blobs; compensates for DBNet's slightly-shrunk training targets.
+    #[serde(default = "default_text_detection_dilation")]
+    pub text_detection_dilation: u8,
+    /// Horizontal padding (original-image pixels) added to each bounding box.  Default: 32.
+    #[serde(default = "default_text_detection_pad_x")]
+    pub text_detection_pad_x: u32,
+    /// Vertical padding (original-image pixels) added to each bounding box.  Default: 32.
+    #[serde(default = "default_text_detection_pad_y")]
+    pub text_detection_pad_y: u32,
+    /// Oversample multiplier: actual capture size = max(lens_size × factor, 640).  Default: 2.0.
+    #[serde(default = "default_text_detection_oversample_factor")]
+    pub text_detection_oversample_factor: f32,
+    /// Hard ceiling on the oversample capture dimension (pixels).  Default: 1600.
+    #[serde(default = "default_text_detection_max_capture_size")]
+    pub text_detection_max_capture_size: u32,
+    /// Padding added around the final union-crop on all sides (pixels).  Default: 16.
+    #[serde(default = "default_text_detection_crop_padding")]
+    pub text_detection_crop_padding: u32,
     pub translate_src: Language,
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
@@ -118,6 +159,27 @@ fn default_paid_remote_timeout_secs() -> u64 {
 fn default_result_display_secs() -> u64 {
     5
 }
+fn default_text_detection_threshold() -> f32 {
+    0.2
+}
+fn default_text_detection_dilation() -> u8 {
+    16
+}
+fn default_text_detection_pad_x() -> u32 {
+    32
+}
+fn default_text_detection_pad_y() -> u32 {
+    32
+}
+fn default_text_detection_oversample_factor() -> f32 {
+    2.0
+}
+fn default_text_detection_max_capture_size() -> u32 {
+    1600
+}
+fn default_text_detection_crop_padding() -> u32 {
+    16
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -148,6 +210,14 @@ impl Default for AppConfig {
             // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
             local_fallback_models: vec!["gemma4:e2b".to_string()],
             result_display_secs: default_result_display_secs(),
+            text_detection_model: None,
+            text_detection_threshold: default_text_detection_threshold(),
+            text_detection_dilation: default_text_detection_dilation(),
+            text_detection_pad_x: default_text_detection_pad_x(),
+            text_detection_pad_y: default_text_detection_pad_y(),
+            text_detection_oversample_factor: default_text_detection_oversample_factor(),
+            text_detection_max_capture_size: default_text_detection_max_capture_size(),
+            text_detection_crop_padding: default_text_detection_crop_padding(),
             translate_src: Language::Jpn,
             translate_dest: Language::Eng,
             // Japanese-specific: add furigana and romaji fields with reading format hint
@@ -160,7 +230,8 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Returns the full prompt: base with {src}/{dest} resolved, plus any extra appended.
+    /// Full-image prompt (Phase 1 / fallback when DBNet finds no regions).
+    /// Substitutes {src}/{dest} and appends translate_extra_prompt.
     pub fn resolved_prompt(&self) -> String {
         let base = TRANSLATE_PROMPT
             .replace("{src}", self.translate_src.to_name())
@@ -170,6 +241,15 @@ impl AppConfig {
         } else {
             format!("{} {}", base, self.translate_extra_prompt)
         }
+    }
+
+    /// Per-region prompt (Phase 4): used when DBNet finds text regions.
+    /// The LLM receives one crop and does not need to report coordinates.
+    pub fn resolved_per_region_prompt(&self) -> String {
+        TRANSLATE_PROMPT_PER_REGION
+            .replace("{src}", self.translate_src.to_name())
+            .replace("{dest}", self.translate_dest.to_name())
+            .replace("{extra_prompt}", &self.translate_extra_prompt)
     }
 
     pub fn load() -> Self {

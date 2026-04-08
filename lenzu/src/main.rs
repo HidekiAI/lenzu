@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use lenzu::capture;
 use lenzu::client;
 use lenzu::config;
+use lenzu::ocr;
 use lenzu::utils;
 
 const HISTORY_PATH: &str = "/dev/shm/lenzu/ocr_history.txt";
@@ -115,6 +116,9 @@ struct AppState {
     spinner_angle: f64,
     flash_alpha: f64,
     server_process: Option<std::process::Child>,
+    /// DBNet text detector, shared across capture threads via `Arc`.
+    /// `None` when `text_detection_model` is not configured or the `onnx` feature is absent.
+    text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>>,
 }
 
 /// Path to `lenzu_server` directory.
@@ -207,6 +211,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = config::AppConfig::load();
 
+    // Build the text detector once at startup; shared across capture threads via Arc.
+    let text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>> =
+        match ocr::text_detection::build_text_detector(
+            cfg.text_detection_model.as_deref(),
+            cfg.text_detection_threshold,
+            cfg.text_detection_dilation,
+            cfg.text_detection_pad_x,
+            cfg.text_detection_pad_y,
+        ) {
+            Ok(Some(arc)) => {
+                eprintln!("[OCR] text detection enabled ({})", cfg.text_detection_model.as_deref().unwrap_or(""));
+                Some(arc)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                eprintln!("[OCR] failed to load text detector: {e} — falling back to full-image OCR");
+                None
+            }
+        };
+
     gtk::init().expect("Failed to initialize GTK.");
 
     let server_process = if cfg.overlay_enabled {
@@ -227,6 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         spinner_angle: 0.0,
         flash_alpha: 0.0,
         server_process,
+        text_detector,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -484,7 +509,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Arm state, extract config values, then DROP borrow before event loop.
                 let (fallback_api_key, primary_endpoint, primary_model,
                      free_remote_endpoint, free_remote_model,
-                     fallback_endpoint, fallback_model, prompt) = {
+                     fallback_endpoint, fallback_model, prompt,
+                     per_region_prompt, text_detector) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
                     s.status = if force_remote {
@@ -503,6 +529,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.config.fallback_llm_api_endpoint.clone(),
                         s.config.fallback_llm_model.clone(),
                         s.config.resolved_prompt(),
+                        s.config.resolved_per_region_prompt(),
+                        s.text_detector.clone(),
                     );
                     vals
                     // borrow_mut dropped here — safe for other callbacks to borrow
@@ -550,7 +578,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let tx_clone = tx.clone();
                         std::thread::spawn(move || {
                             // Catch any unexpected panic so is_loading is always reset.
-                            let result = std::panic::catch_unwind(|| {
+                            // AssertUnwindSafe: the Arc<dyn TextDetector> contains Mutex
+                            // interior mutability; we don't rely on its state being
+                            // consistent after a panic — each click creates a fresh dual client.
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // Phase 4: if a text detector is configured and we're not
+                                // forcing remote, try per-region OCR.  Otherwise fall back
+                                // to Phase 1 full-image OCR.
+                                if !force_remote {
+                                    if let Some(ref det) = text_detector {
+                                        let boxes = det.detect(&dyn_image);
+                                        if !boxes.is_empty() {
+                                            let cropper = ocr::text_cropper::TextCropper::new(
+                                                s_conf.text_detection_crop_padding,
+                                                256,
+                                            );
+                                            let crops = cropper.crop(&dyn_image, &boxes);
+                                            if !crops.is_empty() {
+                                                let dual_region = client::DualOcrClient::new(
+                                                    primary_endpoint.clone(),
+                                                    primary_model.clone(),
+                                                    s_conf.local_fallback_models.clone(),
+                                                    free_remote_endpoint.clone(),
+                                                    free_remote_model.clone(),
+                                                    fallback_endpoint.clone(),
+                                                    fallback_model.clone(),
+                                                    fallback_api_key.clone(),
+                                                    s_conf.fallback_max_dimension,
+                                                    s_conf.primary_num_ctx,
+                                                    s_conf.local_timeout_secs,
+                                                    s_conf.remote_timeout_secs,
+                                                    s_conf.paid_remote_timeout_secs,
+                                                    per_region_prompt,
+                                                );
+                                                let mut all_results = Vec::new();
+                                                let mut last_meta = None;
+                                                for crop in crops {
+                                                    match dual_region.call_api(&crop.image) {
+                                                        Ok((mut results, meta)) => {
+                                                            // Populate top_xy/bot_xy from the
+                                                            // DBNet box (already in lens coords).
+                                                            for r in &mut results {
+                                                                r.top_xy = Some(format!(
+                                                                    "{},{}",
+                                                                    crop.source_box.x1,
+                                                                    crop.source_box.y1
+                                                                ));
+                                                                r.bot_xy = Some(format!(
+                                                                    "{},{}",
+                                                                    crop.source_box.x2,
+                                                                    crop.source_box.y2
+                                                                ));
+                                                            }
+                                                            all_results.extend(results);
+                                                            last_meta = Some(meta);
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!("[OCR] per-region call failed: {e}");
+                                                        }
+                                                    }
+                                                }
+                                                if !all_results.is_empty() {
+                                                    let meta = last_meta.unwrap();
+                                                    return Ok((all_results, meta));
+                                                }
+                                                // All per-region calls failed — fall through to
+                                                // full-image OCR below.
+                                            }
+                                        }
+                                    }
+                                }
+                                // Phase 1 path (no detector, no boxes, or force-remote).
                                 let dual = client::DualOcrClient::new(
                                     primary_endpoint,
                                     primary_model,
@@ -572,7 +670,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     dual.call_api(&dyn_image)
                                 }.map_err(|e| e.to_string())
-                            })
+                            }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
                             let _ = tx_clone.send_blocking(result);
                         });
