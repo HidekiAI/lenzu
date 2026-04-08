@@ -14,6 +14,7 @@ use std::rc::Rc;
 extern crate libc;
 use std::time::{Duration, Instant};
 
+use isolang::Language;
 use lenzu::capture;
 use lenzu::client;
 use lenzu::config;
@@ -119,6 +120,9 @@ struct AppState {
     /// DBNet text detector, shared across capture threads via `Arc`.
     /// `None` when `text_detection_model` is not configured or the `onnx` feature is absent.
     text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>>,
+    /// Current HUD vertical position: `true` = top, `false` = bottom.
+    /// Auto-toggled when the cursor moves within 30 % of the opposite screen edge.
+    hud_at_top: bool,
 }
 
 /// Path to `lenzu_server` directory.
@@ -197,6 +201,71 @@ fn hex_to_rgb(hex: &str) -> (f64, f64, f64) {
     (r, g, b)
 }
 
+/// Country-flag emoji for common languages; falls back to 🌐.
+fn lang_flag(lang: &Language) -> &'static str {
+    match lang.to_639_1() {
+        Some("ja") => "🇯🇵",
+        Some("en") => "🇺🇸",
+        Some("zh") => "🇨🇳",
+        Some("ko") => "🇰🇷",
+        Some("fr") => "🇫🇷",
+        Some("de") => "🇩🇪",
+        Some("es") => "🇪🇸",
+        _ => "🌐",
+    }
+}
+
+fn ready_status(src: &Language, dest: &Language) -> String {
+    format!(
+        "{}→{} | Shift+Click | Ctrl+Shift+Click | Shift+H:ヘルプ | ESC",
+        lang_flag(src),
+        lang_flag(dest),
+    )
+}
+
+/// Send a position command to lenzu_server so the HUD moves to `"top"` or `"bottom"`.
+fn send_hud_position(pos: &str, port: u16) {
+    if let Ok(socket) = std::net::UdpSocket::bind("127.0.0.1:0") {
+        let addr = format!("127.0.0.1:{port}");
+        let msg = serde_json::json!({"type": "position", "pos": pos});
+        let _ = socket.send_to(msg.to_string().as_bytes(), addr);
+    }
+}
+
+/// Modal dialog listing all keyboard shortcuts, displayed in Japanese.
+fn show_help_dialog(parent: &gtk::Window) {
+    let help = "\
+ショートカット一覧
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Shift＋クリック
+  → レンズ内のテキストをOCR・翻訳
+
+Ctrl＋Shift＋クリック
+  → 全画面スキャン
+    （カーソル最近傍のテキストを翻訳）
+
+Shift＋Tab
+  → 翻訳方向を切り替え
+    （🇯🇵→🇺🇸  ⟷  🇺🇸→🇯🇵）
+
+Shift＋H
+  → このヘルプを表示
+
+ESC
+  → 終了";
+
+    let dialog = gtk::MessageDialog::new(
+        Some(parent),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        gtk::MessageType::Info,
+        gtk::ButtonsType::Close,
+        help,
+    );
+    dialog.set_title("Lenzu ヘルプ");
+    dialog.run();
+    dialog.hide();
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure /dev/shm/lenzu/ exists for all runtime output files.
     let _ = std::fs::create_dir_all("/dev/shm/lenzu");
@@ -253,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config: cfg.clone(),
         pixels: None,
         ocr_result: String::new(),
-        status: "READY: Shift+Click | Ctrl+Shift+Click (remote) | ESC".to_string(),
+        status: ready_status(&cfg.translate_src, &cfg.translate_dest),
         last_capture: Instant::now() - Duration::from_secs(2),
         clipboard: Clipboard::new().expect("Failed to init clipboard"),
         api_key,
@@ -262,6 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flash_alpha: 0.0,
         server_process,
         text_detector,
+        hud_at_top: false,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -276,13 +346,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let cfg_esc = cfg.clone();
-    let state_esc = state.clone();
+    let cfg_key = cfg.clone();
+    let state_key = state.clone();
+    let window_key = window.clone();
     window.connect_key_press_event(move |_, event| {
-        if event.keyval() == gdk::keys::constants::Escape {
-            kill_server(&mut state_esc.borrow_mut().server_process, &cfg_esc);
+        let kv = event.keyval();
+        let mods = event.state();
+
+        // ESC → quit
+        if kv == gdk::keys::constants::Escape {
+            kill_server(&mut state_key.borrow_mut().server_process, &cfg_key);
             gtk::main_quit();
+            return glib::Propagation::Proceed;
         }
+
+        // Shift+H → Japanese help dialog
+        if (kv == gdk::keys::constants::h || kv == gdk::keys::constants::H)
+            && mods.contains(gdk::ModifierType::SHIFT_MASK)
+        {
+            show_help_dialog(&window_key);
+            return glib::Propagation::Proceed;
+        }
+
+        // Shift+Tab → toggle translation direction (swap src ↔ dest)
+        if kv == gdk::keys::constants::ISO_Left_Tab
+            || (kv == gdk::keys::constants::Tab
+                && mods.contains(gdk::ModifierType::SHIFT_MASK))
+        {
+            let mut s = state_key.borrow_mut();
+            // Language is Copy — read both then assign back to avoid split-borrow error
+            let (new_src, new_dest) = (s.config.translate_dest, s.config.translate_src);
+            s.config.translate_src = new_src;
+            s.config.translate_dest = new_dest;
+            s.status = ready_status(&s.config.translate_src, &s.config.translate_dest);
+            window_key.queue_draw();
+            return glib::Propagation::Proceed;
+        }
+
         glib::Propagation::Proceed
     });
 
@@ -504,6 +604,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else if window_main.is_visible() {
             window_main.hide();
+        }
+
+        // ── HUD auto-reposition ───────────────────────────────────────────────
+        // Cursor in bottom 30 % → HUD to top; cursor in top 30 % → HUD to bottom.
+        // 30–70 % is a dead zone to prevent oscillation.
+        {
+            let sh = root_win.height();
+            let frac = if sh > 0 { y as f32 / sh as f32 } else { 0.5 };
+            let (cur_top, port) = {
+                let s = state_main.borrow();
+                (s.hud_at_top, s.config.overlay_udp_port)
+            };
+            if frac > 0.70 && !cur_top {
+                send_hud_position("top", port);
+                state_main.borrow_mut().hud_at_top = true;
+            } else if frac < 0.30 && cur_top {
+                send_hud_position("bottom", port);
+                state_main.borrow_mut().hud_at_top = false;
+            }
         }
 
         if is_shift_click {

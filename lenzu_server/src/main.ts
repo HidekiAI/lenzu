@@ -111,6 +111,10 @@ app.whenReady().then(() => {
         app.quit();
         return;
       }
+      if (cmd.type === 'position' && (cmd.pos === 'top' || cmd.pos === 'bottom')) {
+        positionWindow(cmd.pos);
+        return;
+      }
       if (cmd.type === 'message' && typeof cmd.text === 'string') {
         // Extract inner text from the JSON envelope and display it
         if (mainWindow && !mainWindow.isDestroyed()) {
