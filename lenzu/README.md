@@ -230,6 +230,63 @@ The base prompt is hardcoded and language-agnostic:
 
 `{src}` / `{dest}` are substituted at runtime from `translate_src` / `translate_dest` (e.g. `"jpn"` → `"Japanese"`). `translate_extra_prompt` is appended for language-specific field additions (furigana/romaji for Japanese, pinyin for Chinese, etc.).
 
+## 🧪 Testing
+
+### Unit tests (no external deps)
+
+```bash
+# All unit tests — no onnx feature needed
+cargo test -p lenzu
+
+# Text detection pure-logic tests (merge, union, intersects, dimensions)
+cargo test -p lenzu -- ocr::text_detection
+
+# TextCropper tests (padding, clamping, area filter)
+cargo test -p lenzu -- ocr::text_cropper
+```
+
+### DBNet image tests (requires `--features onnx`)
+
+These run the full ONNX inference pipeline against the two reference images in `assets/`.
+ONNX Runtime is downloaded automatically at build time by the `ort` crate — no system install needed.
+
+```bash
+# Both DBNet detection tests
+cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect
+
+# Lens-crop image only  →  expects 3 boxes  (Unit-test-sample-texts.png)
+cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect_lens_crop_returns_three_boxes
+
+# Fullscreen image only  →  expects 2 boxes  (OCR-Demo-JP2EN.png)
+cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect_fullscreen_returns_two_boxes
+
+# All onnx tests (detection + any future onnx unit tests)
+cargo test -p lenzu --features onnx
+```
+
+### Integration tests
+
+```bash
+# Mock-server integration test (spins up wiremock, no ollama needed)
+cargo test -p lenzu --test integration_test
+
+# Live ollama smoke-test — requires ollama running with gemma4:e2b loaded
+OLLAMA_TIMEOUT=600 /usr/local/bin/ollama serve &
+cargo test -p lenzu --test integration_test -- --ignored
+```
+
+### OCR backend smoke-test binary
+
+A standalone binary to test the OCR chain against a real image without the GTK GUI:
+
+```bash
+# Local ollama
+cargo run -p lenzu --bin ocr-test -- --image assets/Unit-test-sample-texts.png
+
+# Force remote (OpenRouter)
+OPENROUTER_API_KEY=sk-… cargo run -p lenzu --bin ocr-test -- --image assets/Unit-test-sample-texts.png --remote
+```
+
 ## 🏗 Future Context for Next Session
 
 - **Alignment Status**: The math for `win_x`/`win_y` is 1:1 with the capture box.

@@ -251,9 +251,18 @@ fn postprocess(
     merge_overlapping(boxes)
 }
 
+/// Boxes are considered overlapping if they touch or are within `MERGE_GAP` pixels of each other.
+/// A small gap absorbs 1–2 px rounding noise from the probability map without
+/// accidentally merging genuinely separate regions (which are always ≫ 4 px apart).
+#[cfg(feature = "onnx")]
+const MERGE_GAP: u32 = 4;
+
 #[cfg(feature = "onnx")]
 fn overlaps(a: &TextBoundingBox, b: &TextBoundingBox) -> bool {
-    a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1
+    a.x1 < b.x2 + MERGE_GAP
+        && a.x2 + MERGE_GAP > b.x1
+        && a.y1 < b.y2 + MERGE_GAP
+        && a.y2 + MERGE_GAP > b.y1
 }
 
 #[cfg(feature = "onnx")]
@@ -358,5 +367,37 @@ mod tests {
         // Union of first two
         let u = &merged[0];
         assert_eq!((u.x1, u.y1, u.x2, u.y2), (0, 0, 20, 20));
+    }
+
+    /// Lens-crop simulation: three separate text columns/rows in Unit-test-sample-texts.png.
+    /// Expected output validated by the dbnet-test prototype (threshold=0.2, dilation=16, pad=32×32).
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_detect_lens_crop_returns_three_boxes() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let model = format!("{root}/../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx");
+        let image_path = format!("{root}/../assets/Unit-test-sample-texts.png");
+        let detector = DbNetDetector::new(&model, 0.2, 16, 32, 32)
+            .expect("failed to load DBNet model");
+        let image = image::open(&image_path).expect("failed to open Unit-test-sample-texts.png");
+        let boxes = detector.detect(&image);
+        assert_eq!(boxes.len(), 3, "expected 3 text regions, got {}: {boxes:?}", boxes.len());
+    }
+
+    /// Fullscreen capture simulation: two dialogue regions in OCR-Demo-JP2EN.png.
+    /// Expected output validated by the dbnet-test prototype (ort =2.0.0-rc.10,
+    /// threshold=0.2, dilation=16, pad=32×32): header + dialogue merge into one box,
+    /// subtitle is the second. Cargo.toml pins ort to rc.10 exactly to keep this stable.
+    #[cfg(feature = "onnx")]
+    #[test]
+    fn test_detect_fullscreen_returns_two_boxes() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let model = format!("{root}/../assets/stabrise-text_detection_dbnet_ml_v02_model.onnx");
+        let image_path = format!("{root}/../assets/OCR-Demo-JP2EN.png");
+        let detector = DbNetDetector::new(&model, 0.2, 16, 32, 32)
+            .expect("failed to load DBNet model");
+        let image = image::open(&image_path).expect("failed to open OCR-Demo-JP2EN.png");
+        let boxes = detector.detect(&image);
+        assert_eq!(boxes.len(), 2, "expected 2 text regions, got {}: {boxes:?}", boxes.len());
     }
 }

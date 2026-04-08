@@ -1,0 +1,177 @@
+@startuml Lenzu OCR Pipeline
+title Lenzu — Capture, Detection & Translation Flow
+
+skinparam sequenceArrowThickness 1.5
+skinparam participantFontSize 12
+skinparam noteFontSize 11
+skinparam sequenceGroupBorderThickness 1
+
+' ── Participants ─────────────────────────────────────────────────────────────
+
+actor "User" as User
+
+box "lenzu  (Rust / GTK3 client process)" #e8f0fe
+  participant "LensWindow\n[GTK3 · GDK 0.18\nCairo · Pango]" as Win
+  participant "GdkPoller\n[glib::timeout\n16 ms]" as Poller
+  participant "X11Capture\n[x11rb 0.13]" as X11
+  participant "ImageConv\n[image 0.25]" as Img
+  participant "DbNetDetector\n[ort 2.0-rc · ONNX\nimageproc 0.25]" as DBNet
+  participant "TextCropper\n[image 0.25]" as Crop
+  participant "DualOcrClient\n[reqwest 0.12\nserde_json 1.0]" as Dual
+  participant "Clipboard\n[arboard 3.4]" as Clip
+  participant "UdpSocket\n[std::net]" as UDP
+end box
+
+box "local daemon" #fff8e1
+  participant "ollama\n[localhost:11434\nOpenAI-compat API]" as Ollama
+end box
+
+box "remote APIs" #fce4ec
+  participant "OpenRouter\n[free tier + paid\nopenrouter.ai]" as OR
+end box
+
+box "lenzu_server  (Electron / Node.js)" #e8f5e9
+  participant "OverlayHUD\n[Electron\nUDP :7331]" as HUD
+end box
+
+' ── Startup ──────────────────────────────────────────────────────────────────
+
+User    ->  Win   : launch  ./scripts/run.sh
+activate Win
+Win     ->  HUD   : spawn subprocess\n(LENZU_OVERLAY_UDP_PORT=7331 npm start)
+activate HUD
+
+' ── Cursor-follow poll loop ───────────────────────────────────────────────────
+
+loop every 16 ms
+  Win  -> Poller  : tick
+  activate Poller
+  Poller -> Poller : query_pointer()\n[gdk::Display]
+  Poller -> Win   : move_window(x, y)
+  deactivate Poller
+end
+
+' ── Capture trigger ───────────────────────────────────────────────────────────
+
+User -> Win : **Shift+Click**  (or Ctrl+Shift+Click)\n[gdk::ModifierType]
+note right of Win
+  force_remote = Ctrl held
+  debounce: 1 s cooldown
+end note
+
+Win -> X11  : capture_x11(x, y, w, h)
+activate X11
+X11 -> X11  : RustConnection::connect()\nget_image(ZPixmap, root window)
+X11 --> Win : Vec<u8>  BGRX raw pixels
+deactivate X11
+
+Win -> Img  : raw_to_dynamic_image(buf, w, h)
+activate Img
+Img --> Win : DynamicImage
+deactivate Img
+
+' ── Alt: DBNet path vs full-image path ───────────────────────────────────────
+
+alt text_detection_model configured  AND  not force_remote
+
+  Win   -> DBNet : detect(&DynamicImage)
+  activate DBNet
+
+  DBNet -> DBNet : **preprocess()**\nresize_exact 640×640  (Triangle)\nnormalize CHW f32\n(ImageNet mean / std)
+
+  DBNet -> DBNet : **Session::run()**\n[ONNX Runtime inference]\noutput: prob_map [1,1,640,640]
+
+  DBNet -> DBNet : **postprocess()**\nthreshold → GrayImage binary mask\ndilate (Norm::L1, r=16)\nfind_contours  [imageproc]\nscale → pad_x/pad_y boxes
+
+  DBNet -> DBNet : **merge_overlapping()**\nunion-merge overlapping/nearby boxes\n(MERGE_GAP = 4 px tolerance)\nsort top-to-bottom
+
+  DBNet --> Win  : Vec<TextBoundingBox>
+  deactivate DBNet
+
+  Win -> Crop : crop(&image, &boxes)
+  activate Crop
+  Crop -> Crop : expand pad · filter min_area\ncrop_imm()  [image 0.25]
+  Crop --> Win : Vec<CroppedRegion>
+  deactivate Crop
+
+  loop for each CroppedRegion
+
+    Win -> Dual : call_api(&crop.image)
+    activate Dual
+
+    Dual -> Dual : encode grayscale → base64\n[image 0.25 · base64 0.22]
+
+    Dual -> Ollama : POST /v1/chat/completions\nstream: true  (SSE)\n[reqwest 0.12 · blocking]
+    activate Ollama
+    Ollama --> Dual : SSE token stream\ndata: {delta: {content: "..."}}
+    deactivate Ollama
+
+    Dual -> Dual : read_sse_content()\naccumulate · strip fences\nnormalize_results()  [serde_json]
+
+    opt local primary empty → try local_fallback_models[n]
+      Dual -> Ollama : POST  (next fallback model)
+      activate Ollama
+      Ollama --> Dual : SSE stream
+      deactivate Ollama
+    end
+
+    opt all local fail → free remote
+      Dual -> OR : POST free_remote_endpoint\ngrayscale + downscale\n[reqwest · no API key]
+      activate OR
+      OR --> Dual : JSON response
+      deactivate OR
+    end
+
+    opt free remote fails → paid remote
+      Dual -> OR : POST fallback_endpoint\nBearer $OPENROUTER_API_KEY\nGemini 2.0 Flash
+      activate OR
+      OR --> Dual : JSON response
+      deactivate OR
+    end
+
+    Dual -> Dual : populate top_xy / bot_xy\nfrom crop.source_box  (not LLM)
+    Dual --> Win : Vec<TranslationResult>
+    deactivate Dual
+
+  end
+
+else force_remote (Ctrl+Shift+Click)  OR  no boxes detected
+
+  Win -> Dual : call_api_force_fallback(&full_image)
+  activate Dual
+  note right : skips local ollama entirely
+
+  Dual -> OR  : POST free_remote_endpoint\ngrayscale + downscale
+  activate OR
+  OR --> Dual : JSON response
+  deactivate OR
+
+  opt free remote fails
+    Dual -> OR : POST fallback_endpoint\nGemini 2.0 Flash · Bearer key
+    activate OR
+    OR --> Dual : JSON response
+    deactivate OR
+  end
+
+  Dual --> Win : Vec<TranslationResult>
+  deactivate Dual
+
+end
+
+' ── Result dispatch ───────────────────────────────────────────────────────────
+
+Win  -> Clip : set_text(results[0].original)\n[arboard 3.4]
+activate Clip
+deactivate Clip
+
+Win  -> UDP  : send_to_overlay(json_text)\n127.0.0.1:7331
+activate UDP
+UDP  -> HUD  : UDP datagram\n{"type":"message","text":"..."}
+HUD  -> HUD  : render translated text\nsemi-transparent overlay
+deactivate UDP
+
+Win  -> Win  : gtk draw callback\nCairo · Pango\ndisplay in lens panel
+
+deactivate Win
+
+@enduml
