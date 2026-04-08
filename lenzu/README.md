@@ -130,6 +130,8 @@ cd /path/to/lenzu
 ./scripts/run.sh
 ```
 
+![Lenzu help screen (Shift+H)](../docs/HELP.png)
+
 Or manually:
 
 ```bash

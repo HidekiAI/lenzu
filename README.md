@@ -77,6 +77,8 @@ export OPENROUTER_API_KEY=sk-your-key-here
 ./scripts/run.sh
 ```
 
+![Lenzu help screen (Shift+H)](docs/HELP.png)
+
 See [`lenzu/README.md`](lenzu/README.md) for full configuration reference and controls.
 
 ## TODO
