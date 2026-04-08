@@ -100,8 +100,9 @@ pub struct AppConfig {
     // ── Phase 4: text detection (DBNet) ───────────────────────────────────────
     /// Path to the DBNet ONNX model file (relative to CWD).
     /// When absent or null, text detection is disabled and full-image OCR is used.
-    /// Recommended: `"assets/stabrise-text_detection_dbnet_ml_v02_model.onnx"`.
-    #[serde(default)]
+    /// Defaults to `"assets/stabrise-text_detection_dbnet_ml_v02_model.onnx"` so
+    /// DBNet works out-of-the-box without any config entry.  Set to `null` to disable.
+    #[serde(default = "default_text_detection_model")]
     pub text_detection_model: Option<String>,
     /// DBNet probability threshold.  Default: 0.2.
     /// Lower values detect more text at the cost of more false positives.
@@ -159,6 +160,9 @@ fn default_paid_remote_timeout_secs() -> u64 {
 fn default_result_display_secs() -> u64 {
     5
 }
+fn default_text_detection_model() -> Option<String> {
+    Some("assets/stabrise-text_detection_dbnet_ml_v02_model.onnx".to_string())
+}
 fn default_text_detection_threshold() -> f32 {
     0.2
 }
@@ -210,7 +214,7 @@ impl Default for AppConfig {
             // gemma4:e2b as local fallback — slow (~50s) but works offline with no API key
             local_fallback_models: vec!["gemma4:e2b".to_string()],
             result_display_secs: default_result_display_secs(),
-            text_detection_model: None,
+            text_detection_model: default_text_detection_model(),
             text_detection_threshold: default_text_detection_threshold(),
             text_detection_dilation: default_text_detection_dilation(),
             text_detection_pad_x: default_text_detection_pad_x(),

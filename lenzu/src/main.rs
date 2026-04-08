@@ -210,6 +210,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let cfg = config::AppConfig::load();
+    eprintln!(
+        "[Config] llm={} | model={} | text_detection_model={} | threshold={} dilation={} pad={}x{}",
+        cfg.llm_api_endpoint,
+        cfg.llm_default_model,
+        cfg.text_detection_model.as_deref().unwrap_or("(none)"),
+        cfg.text_detection_threshold,
+        cfg.text_detection_dilation,
+        cfg.text_detection_pad_x,
+        cfg.text_detection_pad_y,
+    );
 
     // Build the text detector once at startup; shared across capture threads via Arc.
     let text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>> =
@@ -601,6 +611,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if force_remote {
                                     if let Some(ref det) = text_detector {
                                         let boxes = det.detect(&dyn_image);
+                                        utils::save_fullscreen_debug(&dyn_image, &boxes);
                                         if !boxes.is_empty() {
                                             let idx = ocr::text_detection::closest_box_to_point(
                                                 &boxes, cursor_cap_x, cursor_cap_y,

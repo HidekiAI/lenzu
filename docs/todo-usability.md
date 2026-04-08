@@ -76,6 +76,36 @@ mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
 ---
 
+## 4. Hide HUD overlay before screen capture (P1)
+
+**Problem:** The Electron HUD overlay (`lenzu_server`) is visible on screen when Shift+Click or Ctrl+Shift+Click triggers a capture. The X11 root-window `GetImage` call captures all on-screen pixels, so any text currently displayed in the HUD will appear in the captured image and be re-OCR'd — polluting the translation results with the previous output.
+
+**Fix:** Before calling `capture_x11`, send a UDP message to `lenzu_server` to hide the overlay content, wait at least one compositor frame (≥16 ms) for the screen to update, then capture, then restore the HUD.
+
+**Implementation sketch (main.rs):**
+
+```rust
+// Existing flow (around line 539–563):
+window_main.queue_draw();
+window_main.hide();
+while gtk::events_pending() { gtk::main_iteration(); }
+// ← add: send UDP {"type":"hide"} to lenzu_server here
+std::thread::sleep(Duration::from_millis(400));  // compositor settle — HUD clear within this window
+let raw = capture::capture_x11(cap_x, cap_y, cap_w, cap_h);
+// ← after capture results arrive in rx handler: send UDP {"type":"show"} to restore HUD
+```
+
+**IPC change (lenzu_server):** Add a `"hide"` / `"show"` message type to `renderer.js`:
+```js
+// renderer.js
+ipcRenderer.on('hud-visibility', (_, msg) => {
+  document.body.style.visibility = msg === 'hide' ? 'hidden' : 'visible';
+});
+```
+and in `main.js` forward the UDP JSON to the renderer when `type === 'hide'` or `'show'`.
+
+---
+
 ## 3. Spinner "line" artifact on Shift+Click (P3 — cosmetic)
 
 **Desired behavior:** The loading spinner should be a clean rotating arc with no stray line.

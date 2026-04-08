@@ -71,6 +71,84 @@ pub fn encode_to_base64(rgb_data: &[u8], w: u32, h: u32) -> String {
     general_purpose::STANDARD.encode(buffer.into_inner())
 }
 
+/// Save debug files for Ctrl+Shift+Click fullscreen scan.
+///
+/// Writes two files to `/dev/shm/lenzu/`:
+/// - `fullscreen-debug.png` — fullscreen capture with every detected bounding box
+///   drawn as a colour-coded hollow rectangle (2-pixel border, cycling through 6 colours).
+/// - `fullscreen-debug.json` — JSON object `{ count, boxes: [{idx,x1,y1,x2,y2,width,height}] }`.
+///
+/// Called unconditionally after `TextDetector::detect()` so an empty `boxes` slice still
+/// produces the files (zero-box JSON, undecorated PNG) — useful for confirming that DBNet
+/// ran but found nothing.
+pub fn save_fullscreen_debug(
+    image: &DynamicImage,
+    boxes: &[crate::ocr::text_detection::TextBoundingBox],
+) {
+    use image::Rgb;
+
+    let mut rgb = image.to_rgb8();
+    let (img_w, img_h) = rgb.dimensions();
+
+    let palette: &[Rgb<u8>] = &[
+        Rgb([255, 0, 0]),    // red
+        Rgb([0, 220, 0]),    // green
+        Rgb([0, 120, 255]),  // blue
+        Rgb([255, 200, 0]),  // yellow
+        Rgb([255, 0, 255]),  // magenta
+        Rgb([0, 220, 220]),  // cyan
+    ];
+
+    for (i, b) in boxes.iter().enumerate() {
+        let color = palette[i % palette.len()];
+        let x1 = b.x1.min(img_w.saturating_sub(1));
+        let y1 = b.y1.min(img_h.saturating_sub(1));
+        let x2 = b.x2.min(img_w.saturating_sub(1));
+        let y2 = b.y2.min(img_h.saturating_sub(1));
+
+        // 2-pixel thick hollow rectangle
+        for t in 0u32..2 {
+            let lx = x1.saturating_sub(t);
+            let ly = y1.saturating_sub(t);
+            let rx = (x2 + t).min(img_w - 1);
+            let ry = (y2 + t).min(img_h - 1);
+            for x in lx..=rx {
+                rgb.put_pixel(x, ly, color);
+                rgb.put_pixel(x, ry, color);
+            }
+            for y in ly..=ry {
+                rgb.put_pixel(lx, y, color);
+                rgb.put_pixel(rx, y, color);
+            }
+        }
+    }
+
+    let _ = rgb.save("/dev/shm/lenzu/fullscreen-debug.png");
+
+    let json_boxes: Vec<serde_json::Value> = boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            serde_json::json!({
+                "idx": i,
+                "x1": b.x1,
+                "y1": b.y1,
+                "x2": b.x2,
+                "y2": b.y2,
+                "width": b.x2.saturating_sub(b.x1),
+                "height": b.y2.saturating_sub(b.y1),
+            })
+        })
+        .collect();
+
+    if let Ok(s) = serde_json::to_string_pretty(&serde_json::json!({
+        "count": boxes.len(),
+        "boxes": json_boxes,
+    })) {
+        let _ = std::fs::write("/dev/shm/lenzu/fullscreen-debug.json", s);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
