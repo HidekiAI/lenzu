@@ -18,10 +18,10 @@ importers:
         specifier: 35.7.5
         version: 35.7.5
       esbuild:
-        specifier: ^0.25.12
+        specifier: ^0.25.0
         version: 0.25.12
       vitest:
-        specifier: ^3.2.4
+        specifier: ^3.0.0
         version: 3.2.4(@types/node@25.5.2)
 
 packages:

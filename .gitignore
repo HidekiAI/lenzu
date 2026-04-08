@@ -40,3 +40,7 @@ build*/
 gha-creds-*.json
 .ollama_mode
 
+# Claude Code
+CLAUDE.md
+.claude/
+
