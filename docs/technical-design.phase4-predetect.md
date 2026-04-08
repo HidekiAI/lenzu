@@ -1,8 +1,8 @@
 # Phase 4 Technical Design: Local Pre-Detection + Dual-Backend OCR
 
-> **Status**: Planning / Pre-implementation — model selection finalised (DBNet)
+> **Status**: Prototype validated — implementation in progress
 > **Created**: 2026-04-04  
-> **Updated**: 2026-04-06 — YOLO/COCO dropped in favour of DBNet; TextCropper class added; dependency section added
+> **Updated**: 2026-04-07 — prototype `prototypes/dbnet-test` validated algorithm and defaults; dilation step added to §4.3; Cargo.toml deps corrected (ort 2.0.0-rc.10, imageproc, no ndarray/half); factory signature extended with dilation/pad params
 > **Related**: `planning.md` M7 / M7b, `technical-design.md` §3, `lenzu/src/ocr/text_detection.rs`
 
 ---
@@ -177,17 +177,19 @@ The `translate_extra_prompt` field (e.g., the furigana/romaji extension for Japa
 ```toml
 [features]
 default = []
-onnx = ["ort", "ndarray", "half"]
+onnx = ["ort", "imageproc"]
 
 [dependencies]
 # existing deps unchanged ...
-ort   = { version = "2.0", optional = true }
-ndarray = { version = "0.16", optional = true }
-half  = { version = "2.4", optional = true }
-anyhow = "1.0"
+anyhow   = "1.0"
+ort      = { version = "2.0.0-rc.10", features = ["ndarray"], optional = true }
+imageproc = { version = "0.25", optional = true }
 ```
 
 Build with: `cargo build -p lenzu --features onnx`
+
+> **Note — why not `ndarray` / `half` as separate deps?**  
+> The prototype (`prototypes/dbnet-test`) uses `ort::value::Tensor::from_array` with a raw `Vec<f32>` rather than an `ndarray::Array4`, so `ndarray` and `half` are not required as direct dependencies.  The `ort` crate's own `ndarray` feature is kept to enable its internal ndarray integration.
 
 ### 4.2 `OcrRect` struct (`lenzu/src/ocr/ocr_traits.rs`)
 
@@ -258,14 +260,21 @@ pub trait TextDetector: Send + Sync {
    using ImageNet constants (R/G/B mean `[123.675, 116.28, 103.53]`, std `[58.395, 57.12, 57.375]`).  
    Shape: `[1, 3, 640, 640]` float32.
 4. Run ONNX session; output is `[1, 1, 640, 640]` probability map (`prob_map[[0, 0, y, x]]`).
-5. Threshold: for each pixel, `if prob > threshold { 255 } else { 0 }` → build a `GrayImage` mask.
-6. `imageproc::contours::find_contours::<u32>(&mask)` → `Vec<Contour<u32>>`.
-7. Filter: skip contours with fewer than 4 points (stray noise).
-8. For each surviving contour, compute `min_x, min_y, max_x, max_y` of its `.points`.
-9. Scale back:  
-   `x_orig = (x_640 as f32 / 640.0 * orig_width as f32) as u32`  
-   (same for y).
-10. Return as `Vec<TextBoundingBox>`, sorted top-to-bottom (`y1` ascending).
+5. Threshold: for each pixel, `if prob >= threshold { 255 } else { 0 }` → build a `GrayImage` mask.
+6. **Dilation** (if `dilation > 0`): `imageproc::morphology::dilate(&mask, Norm::L1, dilation)`.  
+   Merges nearby character blobs and compensates for DBNet's slightly-shrunk training targets.
+   The radius is in 640×640 pixels; default 16 ≈ 2.5% of image width.
+7. `imageproc::contours::find_contours::<u32>(&mask)` → `Vec<Contour<u32>>`.
+8. Filter: skip contours with fewer than 4 points (stray noise).
+9. For each surviving contour, compute `min_x, min_y, max_x, max_y` of its `.points`.
+   Also skip contours where `(max_x - min_x) < 5 || (max_y - min_y) < 5` (single-pixel noise).
+10. Scale back:  
+    `x_orig = (x_640 as f32 * scale_x).round() as u32`  
+    where `scale_x = orig_width as f32 / 640.0` (same for y).
+11. Apply padding: expand by `pad_x`/`pad_y` on each side, clamped to image bounds:  
+    `x1 = x1.saturating_sub(pad_x); x2 = (x2 + pad_x).min(orig_w);` (same for y).
+12. Collect into `Vec<TextBoundingBox>`; run union-merge to collapse overlapping boxes.
+13. Sort top-to-bottom, left-to-right (`y1` ascending, then `x1`).
 
 **Why axis-aligned AABB from contour min/max?**  
 The downstream consumers (`TextCropper` and the HUD overlay `top_xy`/`bot_xy`) both use axis-aligned rectangles. Computing the convex hull or rotated minimum bounding box would add complexity without benefit here; for dense manga text the AABB is tight enough.
@@ -277,10 +286,13 @@ The downstream consumers (`TextCropper` and the HUD overlay `top_xy`/`bot_xy`) b
 pub fn build_text_detector(
     model_path: Option<&str>,
     threshold: f32,
+    dilation: u8,
+    pad_x: u32,
+    pad_y: u32,
 ) -> anyhow::Result<Option<Box<dyn TextDetector>>>
 ```
-The entire implementation body (including the `ort` import) is `#[cfg(feature = "onnx")]`.  
-When the feature is absent the function always returns `Ok(None)`.
+The `DbNetDetector` struct and its `TextDetector` impl are `#[cfg(feature = "onnx")]`.  
+`build_text_detector` is always present: without the feature it always returns `Ok(None)` and logs a warning if `model_path` is `Some`.
 
 ### 4.4 `TextCropper` — per-region crop dispatch (`lenzu/src/ocr/text_cropper.rs`)
 

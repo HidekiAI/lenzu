@@ -2342,6 +2342,7 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 name = "lenzu"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arboard",
  "async-channel",
  "base64",
@@ -2352,8 +2353,10 @@ dependencies = [
  "glib 0.18.5",
  "gtk",
  "image 0.25.10",
+ "imageproc",
  "isolang",
  "libc",
+ "ort",
  "pango 0.18.3",
  "pangocairo",
  "reqwest",
