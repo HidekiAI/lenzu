@@ -166,7 +166,7 @@ Model output : "fetch_name_0"
 
 ## 1. Text Detection Model (Local)
 
-The real-time bounding box detection is powered by the DBNet Mobile-Lite model.
+The real-time bounding box detection is powered by the DBNet Multi-Language model.
 
 Model Variant: [text_detection_dbnet_ml_v0.2](https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2)
 
