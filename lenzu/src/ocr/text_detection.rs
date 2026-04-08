@@ -310,6 +310,27 @@ fn merge_overlapping(mut boxes: Vec<TextBoundingBox>) -> Vec<TextBoundingBox> {
     boxes
 }
 
+/// Returns the index of the box whose nearest edge is closest to `(px, py)`.
+///
+/// If the cursor is inside a box, that box has distance 0 and is always preferred.
+/// Uses squared distance for comparison — no sqrt needed.
+pub fn closest_box_to_point(boxes: &[TextBoundingBox], px: u32, py: u32) -> usize {
+    assert!(!boxes.is_empty(), "closest_box_to_point called with empty slice");
+    boxes
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, b)| {
+            // Clamp px/py to [x1,x2]×[y1,y2]: gives nearest point on box boundary
+            let nx = (px as i64).clamp(b.x1 as i64, b.x2 as i64);
+            let ny = (py as i64).clamp(b.y1 as i64, b.y2 as i64);
+            let dx = nx - px as i64;
+            let dy = ny - py as i64;
+            dx * dx + dy * dy
+        })
+        .unwrap()
+        .0
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

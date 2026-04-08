@@ -543,26 +543,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 std::thread::sleep(Duration::from_millis(400));
 
-                match capture::capture_x11(
-                    win_x.max(0),
-                    win_y.max(0),
-                    s_conf.lens_size as u32,
-                    s_conf.lens_size as u32,
-                ) {
+                // Feature 2: Ctrl+Shift+Click with DBNet → capture full desktop so DBNet
+                // can scan the entire screen for the closest text region to the cursor.
+                // Without a detector (no `onnx` feature or no model configured) the normal
+                // lens-sized capture is used and sent to the remote backend unchanged.
+                let is_fullscreen_scan = force_remote && text_detector.is_some();
+                let (cap_x, cap_y, cap_w, cap_h) = if is_fullscreen_scan {
+                    let (sw, sh) = capture::screen_size().unwrap_or((1920, 1080));
+                    (0i32, 0i32, sw, sh)
+                } else {
+                    (win_x.max(0), win_y.max(0),
+                     s_conf.lens_size as u32, s_conf.lens_size as u32)
+                };
+                // Cursor position inside the captured image (same as screen coords when
+                // cap origin is (0,0); used by closest_box_to_point in Feature 2).
+                let cursor_cap_x = (x - cap_x) as u32;
+                let cursor_cap_y = (y - cap_y) as u32;
+
+                match capture::capture_x11(cap_x, cap_y, cap_w, cap_h) {
                     Ok(raw) => {
-                        let dyn_image = utils::raw_to_dynamic_image(
-                            &raw,
-                            s_conf.lens_size as u32,
-                            s_conf.lens_size as u32,
-                        );
-                        utils::save_debug_image(
-                            &utils::raw_to_rgb(&raw),
-                            s_conf.lens_size as u32,
-                            s_conf.lens_size as u32,
-                        );
-                        let mut pb_data = raw.clone();
-                        utils::swap_bytes_for_pixbuf(&mut pb_data);
-                        {
+                        let dyn_image = utils::raw_to_dynamic_image(&raw, cap_w, cap_h);
+
+                        // Only update the lens pixbuf for the lens-sized capture; the
+                        // full-desktop image is too large to display in the small window.
+                        if !is_fullscreen_scan {
+                            utils::save_debug_image(
+                                &utils::raw_to_rgb(&raw),
+                                s_conf.lens_size as u32,
+                                s_conf.lens_size as u32,
+                            );
+                            let mut pb_data = raw.clone();
+                            utils::swap_bytes_for_pixbuf(&mut pb_data);
                             let mut s = state_main.borrow_mut();
                             s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
                                 pb_data,
@@ -574,6 +585,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 s_conf.lens_size * 4,
                             ));
                         }
+
                         window_main.show();
                         let tx_clone = tx.clone();
                         std::thread::spawn(move || {
@@ -582,9 +594,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // interior mutability; we don't rely on its state being
                             // consistent after a panic — each click creates a fresh dual client.
                             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                // Phase 4: if a text detector is configured and we're not
-                                // forcing remote, try per-region OCR.  Otherwise fall back
-                                // to Phase 1 full-image OCR.
+
+                                // ── Feature 2: Ctrl+Shift+Click ──────────────────────────────
+                                // Full desktop was captured; run DBNet and pick the text region
+                                // nearest the cursor, then send that tight crop to remote OCR.
+                                if force_remote {
+                                    if let Some(ref det) = text_detector {
+                                        let boxes = det.detect(&dyn_image);
+                                        if !boxes.is_empty() {
+                                            let idx = ocr::text_detection::closest_box_to_point(
+                                                &boxes, cursor_cap_x, cursor_cap_y,
+                                            );
+                                            let cropper = ocr::text_cropper::TextCropper::new(
+                                                s_conf.text_detection_crop_padding, 256,
+                                            );
+                                            if let Some(crop) = cropper
+                                                .crop(&dyn_image, &[boxes[idx].clone()])
+                                                .into_iter()
+                                                .next()
+                                            {
+                                                eprintln!(
+                                                    "[DBNet] fullscreen: {} boxes, closest idx={} \
+                                                     box=({},{})→({},{}) cursor=({},{})",
+                                                    boxes.len(), idx,
+                                                    boxes[idx].x1, boxes[idx].y1,
+                                                    boxes[idx].x2, boxes[idx].y2,
+                                                    cursor_cap_x, cursor_cap_y,
+                                                );
+                                                let dual = client::DualOcrClient::new(
+                                                    primary_endpoint,
+                                                    primary_model,
+                                                    s_conf.local_fallback_models.clone(),
+                                                    free_remote_endpoint,
+                                                    free_remote_model,
+                                                    fallback_endpoint,
+                                                    fallback_model,
+                                                    fallback_api_key,
+                                                    s_conf.fallback_max_dimension,
+                                                    s_conf.primary_num_ctx,
+                                                    s_conf.local_timeout_secs,
+                                                    s_conf.remote_timeout_secs,
+                                                    s_conf.paid_remote_timeout_secs,
+                                                    prompt,
+                                                );
+                                                return dual
+                                                    .call_api_force_fallback(&crop.image)
+                                                    .map_err(|e| e.to_string());
+                                            }
+                                        }
+                                        return Err(
+                                            "No text detected near cursor".to_string()
+                                        );
+                                    }
+                                    // No detector — fall through to Phase 1 with lens image
+                                }
+
+                                // ── Feature 1: Shift+Click (per-region DBNet) ────────────────
+                                // DBNet detects all text regions in the lens capture; each crop
+                                // is sent as a separate OCR request with the per-region prompt.
+                                // Falls back to full-image OCR if detection finds nothing or all
+                                // per-region calls fail.
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
                                         let boxes = det.detect(&dyn_image);
@@ -616,8 +685,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 for crop in crops {
                                                     match dual_region.call_api(&crop.image) {
                                                         Ok((mut results, meta)) => {
-                                                            // Populate top_xy/bot_xy from the
-                                                            // DBNet box (already in lens coords).
+                                                            // top_xy/bot_xy come from the DBNet
+                                                            // box (lens coords), not from the LLM.
                                                             for r in &mut results {
                                                                 r.top_xy = Some(format!(
                                                                     "{},{}",
@@ -634,13 +703,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             last_meta = Some(meta);
                                                         }
                                                         Err(e) => {
-                                                            eprintln!("[OCR] per-region call failed: {e}");
+                                                            eprintln!(
+                                                                "[OCR] per-region call failed: {e}"
+                                                            );
                                                         }
                                                     }
                                                 }
                                                 if !all_results.is_empty() {
-                                                    let meta = last_meta.unwrap();
-                                                    return Ok((all_results, meta));
+                                                    return Ok((all_results, last_meta.unwrap()));
                                                 }
                                                 // All per-region calls failed — fall through to
                                                 // full-image OCR below.
@@ -648,7 +718,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
-                                // Phase 1 path (no detector, no boxes, or force-remote).
+
+                                // ── Phase 1 fallback ─────────────────────────────────────────
+                                // No detector, no boxes detected, all per-region calls failed,
+                                // or force_remote without a detector (lens image → remote).
                                 let dual = client::DualOcrClient::new(
                                     primary_endpoint,
                                     primary_model,

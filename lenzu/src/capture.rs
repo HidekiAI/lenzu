@@ -2,6 +2,13 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 
+/// Returns `(width, height)` of the X11 root window (primary screen in pixels).
+pub fn screen_size() -> Result<(u32, u32), Box<dyn std::error::Error>> {
+    let (conn, screen_num) = RustConnection::connect(None)?;
+    let screen = &conn.setup().roots[screen_num];
+    Ok((screen.width_in_pixels as u32, screen.height_in_pixels as u32))
+}
+
 pub fn capture_x11(x: i32, y: i32, w: u32, h: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let (conn, screen_num) = RustConnection::connect(None)?;
     let screen = &conn.setup().roots[screen_num];
