@@ -133,8 +133,16 @@ fn postprocess(prob_map: &[f32], orig_w: u32, orig_h: u32, p: Params) -> Vec<BBo
     merge_overlapping(boxes)
 }
 
+/// Merge boxes that overlap or are within MERGE_GAP pixels of each other.
+/// A 4 px tolerance absorbs 1–2 px rounding noise in the probability map
+/// without merging genuinely separate regions (always ≫ 4 px apart).
+const MERGE_GAP: u32 = 4;
+
 fn overlaps(a: &BBox, b: &BBox) -> bool {
-    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+    a.x < b.x + b.w + MERGE_GAP
+        && a.x + a.w + MERGE_GAP > b.x
+        && a.y < b.y + b.h + MERGE_GAP
+        && a.y + a.h + MERGE_GAP > b.y
 }
 
 fn union(a: &BBox, b: &BBox) -> BBox {
