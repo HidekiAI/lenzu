@@ -725,8 +725,7 @@ dependencies = [
  "anyhow",
  "image 0.25.10",
  "imageproc",
- "ndarray 0.15.6",
- "ort",
+ "jp_detect",
 ]
 
 [[package]]
@@ -2257,6 +2256,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "jp_detect"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1ed322eb49f1fb491da11643bad9f98eece9c91adea7269bd1f049317101337"
+dependencies = [
+ "anyhow",
+ "image 0.25.10",
+ "imageproc",
+ "ort",
+]
+
+[[package]]
 name = "jp_ocr_app"
 version = "0.1.0"
 dependencies = [
@@ -2353,10 +2364,9 @@ dependencies = [
  "glib 0.18.5",
  "gtk",
  "image 0.25.10",
- "imageproc",
  "isolang",
+ "jp_detect",
  "libc",
- "ort",
  "pango 0.18.3",
  "pangocairo",
  "reqwest",
