@@ -130,6 +130,26 @@ mod tests {
     }
 
     #[test]
+    fn test_opt1_union_crop_is_smaller_than_source() {
+        use crate::ocr::text_detection::compute_union_bbox;
+        // Simulate a 400×400 lens where text only occupies a small region near the top-left.
+        // Two boxes covering roughly 60×30 px combined.
+        let img = solid_image(400, 400);
+        let boxes = vec![bbox(20, 30, 55, 50), bbox(30, 35, 80, 60)];
+        let union = compute_union_bbox(&boxes).unwrap();
+        let cropper = TextCropper::new(8, 0);
+        let crops = cropper.crop(&img, &[union.clone()]);
+        assert_eq!(crops.len(), 1);
+        let (w, h) = crops[0].image.dimensions();
+        // The crop must be well under the full 400×400 lens dimension.
+        assert!(w < 400, "crop width {w} should be smaller than the source width 400");
+        assert!(h < 400, "crop height {h} should be smaller than the source height 400");
+        // The crop must at least cover the union region (before padding).
+        assert!(w >= union.x2 - union.x1, "crop must be at least as wide as the union bbox");
+        assert!(h >= union.y2 - union.y1, "crop must be at least as tall as the union bbox");
+    }
+
+    #[test]
     fn test_source_box_preserved() {
         let img = solid_image(100, 100);
         let cropper = TextCropper::new(2, 0);

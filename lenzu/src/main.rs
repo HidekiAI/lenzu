@@ -783,10 +783,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // is sent as a separate OCR request with the per-region prompt.
                                 // Falls back to full-image OCR if detection finds nothing or all
                                 // per-region calls fail.
+                                //
+                                // OPT-1: keep the detected boxes so the Phase 1 fallback can
+                                // crop to the union bbox instead of sending the full lens image.
+                                let mut detected_boxes: Vec<ocr::text_detection::TextBoundingBox> = Vec::new();
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
                                         let boxes = det.detect(&gray_image);
                                         if !boxes.is_empty() {
+                                            detected_boxes = boxes.clone();
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding,
                                                 256,
@@ -867,10 +872,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     s_conf.paid_remote_timeout_secs,
                                     prompt,
                                 );
-                                if force_remote {
-                                    dual.call_api_force_fallback(&dyn_image)
+                                // OPT-1: if DBNet found boxes but all per-region calls failed,
+                                // crop to the union bbox rather than sending the full lens image.
+                                // When no boxes were detected (or force_remote), falls back to
+                                // the full dyn_image unchanged.
+                                let union_crop = if !force_remote {
+                                    ocr::text_detection::compute_union_bbox(&detected_boxes)
+                                        .and_then(|union| {
+                                            let cropper = ocr::text_cropper::TextCropper::new(
+                                                s_conf.text_detection_crop_padding, 0,
+                                            );
+                                            cropper.crop(&dyn_image, &[union])
+                                                .into_iter().next().map(|c| c.image)
+                                        })
                                 } else {
-                                    dual.call_api(&dyn_image)
+                                    None
+                                };
+                                let fallback_img = union_crop.as_ref().unwrap_or(&dyn_image);
+                                if force_remote {
+                                    dual.call_api_force_fallback(fallback_img)
+                                } else {
+                                    dual.call_api(fallback_img)
                                 }.map_err(|e| e.to_string())
                             }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
