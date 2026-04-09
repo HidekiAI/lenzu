@@ -696,11 +696,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Only update the lens pixbuf for the lens-sized capture; the
                         // full-desktop image is too large to display in the small window.
                         if !is_fullscreen_scan {
-                            utils::save_debug_image(
-                                &utils::raw_to_rgb(&raw),
-                                s_conf.lens_size as u32,
-                                s_conf.lens_size as u32,
-                            );
                             let mut pb_data = raw.clone();
                             utils::swap_bytes_for_pixbuf(&mut pb_data);
                             let mut s = state_main.borrow_mut();
@@ -723,13 +718,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // interior mutability; we don't rely on its state being
                             // consistent after a panic — each click creates a fresh dual client.
                             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // Greyscale once; DBNet only needs luminance and this avoids
+                                // the crate doing its own (possibly inconsistent) conversion.
+                                let gray_image = dyn_image.grayscale();
 
                                 // ── Feature 2: Ctrl+Shift+Click ──────────────────────────────
                                 // Full desktop was captured; run DBNet and pick the text region
                                 // nearest the cursor, then send that tight crop to remote OCR.
                                 if force_remote {
                                     if let Some(ref det) = text_detector {
-                                        let boxes = det.detect(&dyn_image);
+                                        let boxes = det.detect(&gray_image);
                                         utils::save_fullscreen_debug(&dyn_image, &boxes);
                                         if !boxes.is_empty() {
                                             let idx = ocr::text_detection::closest_box_to_point(
@@ -786,7 +784,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // per-region calls fail.
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
-                                        let boxes = det.detect(&dyn_image);
+                                        let boxes = det.detect(&gray_image);
                                         if !boxes.is_empty() {
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding,

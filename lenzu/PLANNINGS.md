@@ -123,12 +123,34 @@ Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining
 ### BUG-1 — Spinning cursor lollipop artefact
 The animated spinner cursor has a visible tail/disfigurement — appears as a lollipop shape instead of a clean spinning circle. Likely a leftover artefact from a previous frame not being cleared before drawing the next.
 
+### ~~BUG-3 — Image not greyscaled before DBNet detection~~ ✓ FIXED
+`det.detect()` now receives `dyn_image.grayscale()` (computed once at the top of the worker closure). The fullscreen debug overlay and crop calls retain the original RGB image so bounding-box visualisation stays coloured.
+
+### ~~DBG-1 — Save pre-wire image to debug_lens.png instead of raw capture~~ ✓ FIXED
+`save_debug_image()` removed. Replaced by `save_prewire_debug(image)` called at the top of both `DualOcrClient::call_api()` and `call_api_force_fallback()`, writing the greyscale crop (exactly what will be base64-encoded and sent) to `debug_lens.png`.
+
 ### BUG-2 — Lens text box clips long results
 The text display area beneath the lens window is too small and clips content when OCR results are long.
 
 **Proposed fixes (pick one or combine):**
 - Auto-scroll: slowly scroll down through the text, pause at bottom, reset to top and repeat (marquee-style vertical scroll)
 - **Shift+Tab toggle**: swap content between the HUD overlay and the lens text box — what was in the HUD moves to the text box and vice versa, toggling back and forth on each Shift+Tab press
+
+---
+
+## 🧹 Housekeeping / Chores
+
+### CHORE-1 — Rename `./lenzu` → `./lenzu_client`
+The main client crate lives in `./lenzu/` but should be `./lenzu_client/` to match the naming of `./lenzu_server/` and make the workspace layout self-documenting.
+
+**Touch-points to update:**
+- `lenzu/Cargo.toml` → `lenzu_client/Cargo.toml` (package `name` field, path refs)
+- Root `Cargo.toml` `[workspace] members` entry
+- `build.rs` (if it references the directory by name)
+- Shell scripts / Makefiles referencing `./lenzu/`
+- `README.md` / docs referencing the old path
+- Any `#[path]` or `include!` macros that embed the old directory name
+- CI/CD workflows (`.github/workflows/`) that reference `lenzu/`
 
 ---
 

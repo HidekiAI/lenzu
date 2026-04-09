@@ -28,10 +28,12 @@ pub fn swap_bytes_for_pixbuf(raw: &mut [u8]) {
     }
 }
 
-pub fn save_debug_image(rgb_data: &[u8], w: u32, h: u32) {
-    if let Some(img) = ImageBuffer::<Rgb<u8>, _>::from_raw(w, h, rgb_data.to_vec()) {
-        let _ = img.save(DEBUG_IMAGE_PATH);
-    }
+/// Save the exact image that will be sent over the wire: greyscaled, same dimensions as the
+/// crop/lens capture.  Written just before the OCR/LLM call so the file reflects the actual
+/// payload rather than the raw RGB lens capture.
+pub fn save_prewire_debug(image: &DynamicImage) {
+    let gray = image.grayscale();
+    let _ = gray.save(DEBUG_IMAGE_PATH);
 }
 
 /// Encode as **grayscale** PNG → base64.

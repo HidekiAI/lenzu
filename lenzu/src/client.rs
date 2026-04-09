@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use crate::utils::{encode_as_grayscale, encode_for_fallback};
+use crate::utils::{encode_as_grayscale, encode_for_fallback, save_prewire_debug};
 
 const API_DEBUG_PATH: &str = "/dev/shm/lenzu/api_debug.txt";
 
@@ -432,6 +432,7 @@ impl DualOcrClient {
     /// the primary.  Remote fallback gets grayscale + downscale.
     pub fn call_api(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
+        save_prewire_debug(image);
         let primary_b64 = encode_as_grayscale(image);
         let primary_result = self.primary.call_api(&primary_b64);
 
@@ -515,6 +516,7 @@ impl DualOcrClient {
     /// Tries free remote first, then paid remote (if API key is set).
     pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
+        save_prewire_debug(image);
         let b64 = encode_for_fallback(image, self.fallback_max_dimension);
 
         // Try free remote first (always available)
