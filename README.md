@@ -6,6 +6,10 @@ The key difference from browser extensions like Yomitan/Rikaichan: this operates
 
 ![beta demo](docs/lenzu-beta-demo.gif)
 
+![Japanese OCR result](assets/Screenshot-JP.png)
+
+![English translation result](assets/Screenshot-EN.png)
+
 > **Architecture note**: The Windows/winit/GTK4 experiments are archived in `prototypes/`. The active implementation uses **GTK3** (`gtk-rs` 0.18) on Linux/X11. GTK4 was evaluated and abandoned due to integration complexity — GTK3 provides everything needed and is simpler to build against. See [Technical Design](./docs/technical-design.md) for current architecture.
 
 ## Architecture (Current)
