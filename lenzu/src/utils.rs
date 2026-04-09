@@ -178,4 +178,40 @@ mod tests {
         let b64 = encode_to_base64(&rgb, 1, 1);
         assert!(!b64.is_empty());
     }
+
+    // ── OPT-2 tests: encode_for_fallback downscaling behaviour ───────────────
+
+    fn rgb_image(w: u32, h: u32) -> DynamicImage {
+        use image::{ImageBuffer, Rgb};
+        DynamicImage::ImageRgb8(ImageBuffer::from_fn(w, h, |_, _| Rgb([128u8, 64, 32])))
+    }
+
+    fn decoded_dims(b64: &str) -> (u32, u32) {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        image::load_from_memory(&bytes).unwrap().dimensions()
+    }
+
+    #[test]
+    fn encode_for_fallback_caps_longest_edge() {
+        // 600×400 image, cap 512 → longest edge becomes 512, short edge scales proportionally
+        let (w, h) = decoded_dims(&encode_for_fallback(&rgb_image(600, 400), 512));
+        assert_eq!(w, 512, "longest edge should be capped at 512");
+        assert!(h < 512 && h > 0, "short edge should be < 512 and > 0, got {h}");
+    }
+
+    #[test]
+    fn encode_for_fallback_zero_is_noop() {
+        // max_dim = 0 must leave dimensions unchanged (no downscale)
+        let (w, h) = decoded_dims(&encode_for_fallback(&rgb_image(600, 400), 0));
+        assert_eq!(w, 600);
+        assert_eq!(h, 400);
+    }
+
+    #[test]
+    fn encode_for_fallback_no_upscale_when_under_limit() {
+        // Image already smaller than the cap — must not be enlarged
+        let (w, h) = decoded_dims(&encode_for_fallback(&rgb_image(300, 200), 512));
+        assert_eq!(w, 300);
+        assert_eq!(h, 200);
+    }
 }

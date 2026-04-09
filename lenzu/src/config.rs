@@ -69,6 +69,12 @@ pub struct AppConfig {
     /// Longest-edge pixel limit applied to images before the fallback call. 0 = no limit.
     #[serde(default = "default_fallback_max_dimension")]
     pub fallback_max_dimension: u32,
+    /// Longest-edge pixel limit applied to images before every primary (local Ollama) call.
+    /// `0` = no limit (default — preserves existing behaviour).
+    /// Set to e.g. `512` to reduce payload size and VRAM pressure on smaller local models.
+    /// Remote fallbacks are unaffected — they use `fallback_max_dimension`.
+    #[serde(default)]
+    pub primary_max_dimension: u32,
     /// Timeout in seconds for each local (ollama) backend request.
     /// If inference doesn't complete within this window the client fails-over to the
     /// next backend in the chain.  Default: 3 s — fast enough to feel responsive while
@@ -207,6 +213,7 @@ impl Default for AppConfig {
             fallback_llm_api_endpoint: default_fallback_endpoint(),
             fallback_llm_model: default_fallback_model(),
             fallback_max_dimension: default_fallback_max_dimension(),
+            primary_max_dimension: 0,
             local_timeout_secs: default_local_timeout_secs(),
             remote_timeout_secs: default_remote_timeout_secs(),
             paid_remote_timeout_secs: default_paid_remote_timeout_secs(),
@@ -297,6 +304,7 @@ mod tests {
         assert_eq!(cfg.fallback_llm_api_endpoint, "https://openrouter.ai/api/v1/chat/completions");
         assert_eq!(cfg.fallback_llm_model, "google/gemini-2.0-flash-001");
         assert_eq!(cfg.fallback_max_dimension, 800);
+        assert_eq!(cfg.primary_max_dimension, 0, "old configs without primary_max_dimension must default to 0 (no limit)");
     }
 
     #[test]

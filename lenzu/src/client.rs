@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use crate::utils::{encode_as_grayscale, encode_for_fallback, save_prewire_debug};
+use crate::utils::{encode_for_fallback, save_prewire_debug};
 
 const API_DEBUG_PATH: &str = "/dev/shm/lenzu/api_debug.txt";
 
@@ -334,7 +334,7 @@ pub fn coords_within(actual: Option<&str>, expected: (i64, i64), tolerance: i64)
 /// `OcrClient` (OpenRouter/remote).
 ///
 /// Encoding is handled internally:
-///   - Primary  → grayscale, full resolution
+///   - Primary  → grayscale, capped to `primary_max_dimension` (0 = no limit)
 ///   - Fallback → grayscale + proportional downscale to `fallback_max_dimension`
 ///
 /// `call_api_force_fallback` skips primary entirely (Ctrl+Shift+Click path).
@@ -348,6 +348,8 @@ pub struct DualOcrClient {
     /// Paid remote fallback (e.g. Gemini via OpenRouter) — only configured when API key is set.
     remote_fallback: Option<OcrClient>,
     fallback_max_dimension: u32,
+    /// Longest-edge pixel cap for primary/local calls. 0 = no limit.
+    primary_max_dimension: u32,
 }
 
 impl DualOcrClient {
@@ -367,6 +369,7 @@ impl DualOcrClient {
         fallback_model: String,
         fallback_api_key: String,
         fallback_max_dimension: u32,
+        primary_max_dimension: u32,
         primary_num_ctx: Option<u32>,
         local_timeout_secs: u64,
         free_remote_timeout_secs: u64,
@@ -399,7 +402,7 @@ impl DualOcrClient {
         } else {
             None
         };
-        Self { primary, local_fallbacks, free_remote_fallback, remote_fallback, fallback_max_dimension }
+        Self { primary, local_fallbacks, free_remote_fallback, remote_fallback, fallback_max_dimension, primary_max_dimension }
     }
 
     /// Returns `true` when results are empty or every `english` field is absent/blank.
@@ -433,7 +436,7 @@ impl DualOcrClient {
     pub fn call_api(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
         save_prewire_debug(image);
-        let primary_b64 = encode_as_grayscale(image);
+        let primary_b64 = encode_for_fallback(image, self.primary_max_dimension);
         let primary_result = self.primary.call_api(&primary_b64);
 
         let needs_fb = match &primary_result {
@@ -819,7 +822,8 @@ mod tests {
             "https://openrouter.ai/api/v1/chat/completions".into(),
             "google/gemini-2.0-flash-001".into(),
             api_key.to_string(),
-            800,
+            800,  // fallback_max_dimension
+            0,    // primary_max_dimension (no limit)
             None,
             3,   // local_timeout_secs
             15,  // free_remote_timeout_secs
