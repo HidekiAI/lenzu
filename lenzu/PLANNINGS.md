@@ -105,13 +105,30 @@ let server_bin = std::env::current_exe()
 
 ---
 
-## 🔲 Phase 4 — Detection Pipeline (Future)
+## 🔶 Phase 4 — Detection Pipeline (Partially Complete)
 
-Once the client/server lifecycle is stable, revisit the original vision of local text detection before sending to the LLM:
+Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining work:
 
-- Pre-screen the lens capture with YOLOv8n (already in repo: `yolov8n_fp16.onnx`) to find text bounding boxes
-- Only send cropped text regions to the API → lower token cost, higher accuracy
-- `top_xy` / `bot_xy` fields in `TranslationResult` will anchor results to screen coordinates for future overlay positioning
+- [x] DBNet text detection via `jp_detect` crate (replaces planned YOLOv8n path)
+- [x] Ctrl+Shift+Click fullscreen scan → crop to nearest text region → remote OCR
+- [x] Lens-capture mode: per-region detection + individual crops sent to API
+- [ ] `top_xy` / `bot_xy` from `TranslationResult` not yet used to anchor HUD text to screen coordinates
+- [ ] YOLOv8n (`yolov8n_fp16.onnx`) still in repo — evaluate whether it adds value over DBNet or can be removed
+- [ ] Fullscreen detection parameter tuning: live desktop (taskbars, UI chrome) causes over-merging at default dilation=16; consider separate config for fullscreen vs lens-crop paths
+
+---
+
+## 🐛 Known Bugs
+
+### BUG-1 — Spinning cursor lollipop artefact
+The animated spinner cursor has a visible tail/disfigurement — appears as a lollipop shape instead of a clean spinning circle. Likely a leftover artefact from a previous frame not being cleared before drawing the next.
+
+### BUG-2 — Lens text box clips long results
+The text display area beneath the lens window is too small and clips content when OCR results are long.
+
+**Proposed fixes (pick one or combine):**
+- Auto-scroll: slowly scroll down through the text, pause at bottom, reset to top and repeat (marquee-style vertical scroll)
+- **Shift+Tab toggle**: swap content between the HUD overlay and the lens text box — what was in the HUD moves to the text box and vice versa, toggling back and forth on each Shift+Tab press
 
 ---
 
