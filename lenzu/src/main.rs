@@ -120,9 +120,6 @@ struct AppState {
     /// DBNet text detector, shared across capture threads via `Arc`.
     /// `None` when `text_detection_model` is not configured or the `onnx` feature is absent.
     text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>>,
-    /// Same model as `text_detector` but with dilation=0 — used as a BUG-4 retry when
-    /// the primary detector merges everything into a single fullscreen bbox.
-    text_detector_nodilation: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>>,
     /// Current HUD vertical position: `true` = top, `false` = bottom.
     /// Auto-toggled when the cursor moves within 30 % of the opposite screen edge.
     hud_at_top: bool,
@@ -313,27 +310,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-    // BUG-4: second detector with dilation=0 — used to retry when the primary merges
-    // everything into a single fullscreen bbox.  Only built when the primary succeeded.
-    let text_detector_nodilation: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>> =
-        if text_detector.is_some() {
-            match ocr::text_detection::build_text_detector(
-                cfg.text_detection_model.as_deref(),
-                cfg.text_detection_threshold,
-                0,  // dilation=0: no morphological expansion, so blobs stay separate
-                cfg.text_detection_pad_x,
-                cfg.text_detection_pad_y,
-            ) {
-                Ok(opt) => opt,
-                Err(e) => {
-                    eprintln!("[OCR] failed to build no-dilation detector: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
     gtk::init().expect("Failed to initialize GTK.");
 
     let server_process = if cfg.overlay_enabled {
@@ -355,7 +331,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flash_alpha: 0.0,
         server_process,
         text_detector,
-        text_detector_nodilation,
         hud_at_top: false,
     }));
 
@@ -665,7 +640,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (fallback_api_key, primary_endpoint, primary_model,
                      free_remote_endpoint, free_remote_model,
                      fallback_endpoint, fallback_model, prompt,
-                     per_region_prompt, text_detector, text_detector_nodilation) = {
+                     per_region_prompt, text_detector) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
                     s.status = if force_remote {
@@ -686,7 +661,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.config.resolved_prompt(),
                         s.config.resolved_per_region_prompt(),
                         s.text_detector.clone(),
-                        s.text_detector_nodilation.clone(),
                     );
                     vals
                     // borrow_mut dropped here — safe for other callbacks to borrow
@@ -757,32 +731,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let mut boxes = det.detect(&gray_image);
                                         utils::save_fullscreen_debug(&dyn_image, &boxes);
 
-                                        // BUG-4: if dilation merged everything into 1 large box,
-                                        // retry with dilation=0 to recover individual text regions.
-                                        if boxes.len() == 1 {
-                                            let box_area = boxes[0].width() as u64 * boxes[0].height() as u64;
-                                            let screen_area = cap_w as u64 * cap_h as u64;
-                                            if box_area > screen_area / 4 {
-                                                if let Some(ref det_nd) = text_detector_nodilation {
-                                                    let retry = det_nd.detect(&gray_image);
-                                                    if retry.len() > 1 {
+                                        if !boxes.is_empty() {
+                                            let mut idx = ocr::text_detection::closest_box_to_point(
+                                                &boxes, cursor_cap_x, cursor_cap_y,
+                                            );
+
+                                            // BUG-4: if the chosen box is an over-merge (spans > 60%
+                                            // of screen width OR height), crop to that box and re-run
+                                            // DBNet on just that sub-image using scale-table params
+                                            // appropriate for the sub-image size.  Sub-box coordinates
+                                            // are remapped back to original image space (+ox, +oy) so
+                                            // the cursor position stays valid for closest_box_to_point.
+                                            let chosen_w = boxes[idx].width();
+                                            let chosen_h = boxes[idx].height();
+                                            if chosen_w as u64 > cap_w as u64 * 6 / 10
+                                                || chosen_h as u64 > cap_h as u64 * 6 / 10
+                                            {
+                                                let entry = s_conf.detection_params_for(chosen_w, chosen_h);
+                                                if let Ok(Some(det_nd)) = ocr::text_detection::build_text_detector(
+                                                    s_conf.text_detection_model.as_deref(),
+                                                    entry.threshold,
+                                                    entry.dilation,
+                                                    entry.pad_x,
+                                                    entry.pad_y,
+                                                ) {
+                                                    let ox = boxes[idx].x1;
+                                                    let oy = boxes[idx].y1;
+                                                    let sub = dyn_image.crop_imm(ox, oy, chosen_w, chosen_h);
+                                                    let sub_gray = sub.grayscale();
+                                                    let sub_boxes = det_nd.detect(&sub_gray);
+                                                    // Remap from crop-space → original image space so
+                                                    // cursor coords stay valid for closest_box_to_point.
+                                                    let remapped: Vec<ocr::text_detection::TextBoundingBox> =
+                                                        sub_boxes.into_iter().map(|b| {
+                                                            ocr::text_detection::TextBoundingBox {
+                                                                x1: b.x1 + ox,
+                                                                y1: b.y1 + oy,
+                                                                x2: b.x2 + ox,
+                                                                y2: b.y2 + oy,
+                                                            }
+                                                        }).collect();
+                                                    if remapped.len() > boxes.len() {
                                                         eprintln!(
-                                                            "[DBNet] BUG-4 retry (dilation=0): {} boxes \
-                                                             (was 1 merged, {:.1}% of screen)",
-                                                            retry.len(),
-                                                            box_area as f64 / screen_area as f64 * 100.0,
+                                                            "[DBNet] BUG-4 retry (sub-crop {}×{}, \
+                                                             dilation={} thr={:.2}): {} boxes \
+                                                             (was {}, chosen {:.0}%w {:.0}%h of screen)",
+                                                            chosen_w, chosen_h,
+                                                            entry.dilation, entry.threshold,
+                                                            remapped.len(),
+                                                            boxes.len(),
+                                                            chosen_w as f64 / cap_w as f64 * 100.0,
+                                                            chosen_h as f64 / cap_h as f64 * 100.0,
                                                         );
-                                                        boxes = retry;
+                                                        boxes = remapped;
+                                                        idx = ocr::text_detection::closest_box_to_point(
+                                                            &boxes, cursor_cap_x, cursor_cap_y,
+                                                        );
                                                         utils::save_fullscreen_debug(&dyn_image, &boxes);
                                                     }
                                                 }
                                             }
-                                        }
-
-                                        if !boxes.is_empty() {
-                                            let idx = ocr::text_detection::closest_box_to_point(
-                                                &boxes, cursor_cap_x, cursor_cap_y,
-                                            );
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding, 256,
                                             );

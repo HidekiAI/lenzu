@@ -4,6 +4,24 @@ use std::fs;
 use std::path::Path;
 use serde_json;
 
+/// One entry in the DBNet scale table.  Params are chosen based on the longest edge
+/// of the image being passed to the detector: smaller images need more dilation to
+/// merge nearby character blobs; larger images need less to avoid over-merging.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DetectionScaleEntry {
+    /// Images whose longest edge is ≤ this value use these params.
+    /// Sort entries ascending; the last entry is the catch-all for larger images.
+    pub max_dimension: u32,
+    /// Morphological dilation radius (pixels at 640×640 DBNet resolution).
+    pub dilation: u8,
+    /// DBNet confidence threshold.  Higher = fewer but more certain detections.
+    pub threshold: f32,
+    /// Horizontal padding added to each bbox in original-image pixels.
+    pub pad_x: u32,
+    /// Vertical padding added to each bbox in original-image pixels.
+    pub pad_y: u32,
+}
+
 /// Controls which field(s) from each TranslationResult are sent to the overlay HUD.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -114,6 +132,13 @@ pub struct AppConfig {
     /// Lower values detect more text at the cost of more false positives.
     #[serde(default = "default_text_detection_threshold")]
     pub text_detection_threshold: f32,
+    /// Scale table: maps image longest-edge → (dilation, threshold, pad_x, pad_y).
+    /// Entries must be sorted ascending by max_dimension.
+    /// Used by `detection_params_for(w, h)` to pick the right DBNet params for the
+    /// actual image size — smaller lens crops get more dilation, large fullscreen
+    /// captures get less (to avoid over-merging).
+    #[serde(default = "default_detection_scale_table")]
+    pub detection_scale_table: Vec<DetectionScaleEntry>,
     /// Morphological dilation radius applied to the binary mask at 640×640.  Default: 16.
     /// Merges nearby character blobs; compensates for DBNet's slightly-shrunk training targets.
     #[serde(default = "default_text_detection_dilation")]
@@ -172,6 +197,21 @@ fn default_text_detection_model() -> Option<String> {
 fn default_text_detection_threshold() -> f32 {
     0.2
 }
+fn default_detection_scale_table() -> Vec<DetectionScaleEntry> {
+    // Dilation and threshold scale inversely with image size:
+    // - Small lens crops need high dilation to merge nearby character blobs.
+    // - Large fullscreen captures need low dilation/high threshold to keep
+    //   text regions separate.  DBNet always runs at 640×640 internally, so
+    //   a dilation of N pixels at 640-res represents N*(original/640) pixels
+    //   in the original image — much more blur for large inputs.
+    vec![
+        DetectionScaleEntry { max_dimension:   800, dilation: 16, threshold: 0.20, pad_x: 32, pad_y: 32 },
+        DetectionScaleEntry { max_dimension:  1280, dilation: 10, threshold: 0.25, pad_x: 24, pad_y: 24 },
+        DetectionScaleEntry { max_dimension:  1920, dilation:  6, threshold: 0.35, pad_x: 16, pad_y: 16 },
+        DetectionScaleEntry { max_dimension:  2560, dilation:  3, threshold: 0.45, pad_x: 12, pad_y: 12 },
+        DetectionScaleEntry { max_dimension: u32::MAX, dilation: 0, threshold: 0.50, pad_x: 8, pad_y: 8 },
+    ]
+}
 fn default_text_detection_dilation() -> u8 {
     16
 }
@@ -223,6 +263,7 @@ impl Default for AppConfig {
             result_display_secs: default_result_display_secs(),
             text_detection_model: default_text_detection_model(),
             text_detection_threshold: default_text_detection_threshold(),
+            detection_scale_table: default_detection_scale_table(),
             text_detection_dilation: default_text_detection_dilation(),
             text_detection_pad_x: default_text_detection_pad_x(),
             text_detection_pad_y: default_text_detection_pad_y(),
@@ -241,6 +282,20 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Returns the DBNet params appropriate for an image of the given dimensions.
+    /// Finds the first scale-table entry whose `max_dimension` ≥ the longest edge,
+    /// or falls back to the last entry for images larger than all entries.
+    /// The returned fields map directly onto `build_text_detector` arguments:
+    ///   `build_text_detector(model, entry.threshold, entry.dilation, entry.pad_x, entry.pad_y)`
+    pub fn detection_params_for(&self, image_w: u32, image_h: u32) -> &DetectionScaleEntry {
+        let longest = image_w.max(image_h);
+        self.detection_scale_table
+            .iter()
+            .find(|e| longest <= e.max_dimension)
+            .or_else(|| self.detection_scale_table.last())
+            .expect("detection_scale_table must not be empty")
+    }
+
     /// Full-image prompt (Phase 1 / fallback when DBNet finds no regions).
     /// Substitutes {src}/{dest} and appends translate_extra_prompt.
     pub fn resolved_prompt(&self) -> String {
@@ -305,6 +360,11 @@ mod tests {
         assert_eq!(cfg.fallback_llm_model, "google/gemini-2.0-flash-001");
         assert_eq!(cfg.fallback_max_dimension, 800);
         assert_eq!(cfg.primary_max_dimension, 0, "old configs without primary_max_dimension must default to 0 (no limit)");
+        assert!(!cfg.detection_scale_table.is_empty(), "old configs must get a non-empty default scale table");
+        let first = &cfg.detection_scale_table[0];
+        let last = cfg.detection_scale_table.last().unwrap();
+        assert!(last.threshold > first.threshold, "scale table: threshold must increase with image size");
+        assert!(last.dilation < first.dilation || last.dilation == 0, "scale table: dilation must decrease with image size");
     }
 
     #[test]
