@@ -115,6 +115,7 @@ Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining
 - [ ] `top_xy` / `bot_xy` from `TranslationResult` not yet used to anchor HUD text to screen coordinates
 - [ ] YOLOv8n (`yolov8n_fp16.onnx`) still in repo — evaluate whether it adds value over DBNet or can be removed
 - [ ] Fullscreen detection parameter tuning: live desktop (taskbars, UI chrome) causes over-merging at default dilation=16; consider separate config for fullscreen vs lens-crop paths
+- [ ] **INVESTIGATE** — fullscreen scan returns exactly 1 bbox: retry with dilation=0 (see below)
 
 ---
 
@@ -129,6 +130,43 @@ Cairo's `arc()` draws a connecting line from the current path point (left by the
 ### ~~DBG-1 — Save pre-wire image to debug_lens.png instead of raw capture~~ ✓ FIXED
 `save_debug_image()` removed. Replaced by `save_prewire_debug(image)` called at the top of both `DualOcrClient::call_api()` and `call_api_force_fallback()`, writing the greyscale crop (exactly what will be base64-encoded and sent) to `debug_lens.png`.
 
+### BUG-4 — Fullscreen scan over-merges into a single bbox; retry with dilation disabled
+
+**Symptom:** Ctrl+Shift+Click fullscreen scan returns exactly 1 bounding box covering a
+large screen area. This is a sign that the morphological dilation (`text_detection_dilation`,
+default 16) has merged all nearby text blobs into one giant region. The subsequent crop
+sent to remote OCR is oversized and often produces garbage or a timeout.
+
+**Hypothesis:** At 640×640 detection resolution, a dilation radius of 16 px is
+proportionally large relative to the full desktop scaled down. Multiple separate UI
+text regions bleed together and the connected-components step collapses them into one.
+
+**Proposed fix — detect-and-retry:**
+
+1. Run fullscreen DBNet with the normal config (existing behaviour).
+2. If `boxes.len() == 1` **and** the single box covers more than a configurable fraction
+   of the screen area (e.g. > 25 % — a heuristic for "this is clearly over-merged"),
+   re-run `det.detect()` on the same already-captured `gray_image` with `dilation = 0`.
+3. If the second run produces `> 1` box, use those results; otherwise fall back to the
+   original single box.
+
+**Touch-points:**
+- `jp_detect` crate must expose per-call dilation override, or a second detector instance
+  must be constructed with `dilation=0` at startup and stored alongside the primary in
+  `AppState` (same `Arc<dyn TextDetector + Send + Sync>`).  Check `jp_detect` API first.
+- If a second detector instance is the only option: add
+  `text_detector_nodilation: Option<Arc<dyn TextDetector + Send + Sync>>` to `AppState`
+  and initialise it unconditionally whenever the primary detector is configured.
+- Retry logic lives in the `force_remote` branch of the capture thread in `main.rs`
+  (currently around the `is_fullscreen_scan` block).
+- Add a config flag `fullscreen_single_bbox_retry: bool` (default `true`) so the retry
+  can be disabled if it causes issues.
+
+**Investigation first:** confirm the symptom is reproducible with a known over-merged
+screen, compare `fullscreen-debug.png` and `fullscreen-debug.json` between dilation=16
+and dilation=0 runs, and verify the retry produces meaningfully more boxes before
+committing to the implementation.
+
 ### BUG-2 — Lens text box clips long results
 The text display area beneath the lens window is too small and clips content when OCR results are long.
 
@@ -139,6 +177,130 @@ The text display area beneath the lens window is too small and clips content whe
 ---
 
 ## 💡 Future Ideas
+
+### IDEA-2 — Local Ollama payload optimisation
+
+Four targeted reductions to avoid sending oversized images to local Ollama.
+Ordered by impact vs. effort; each has a concrete unit-test gate so we
+know whether it's actually worth shipping before touching the hot path.
+
+---
+
+#### OPT-1 — Union-bbox crop before Phase 1 fallback
+
+**Problem:** When DBNet detects boxes but all per-region calls fail, the
+fallback at `main.rs` (Phase 1 fallback block) still sends the full
+`dyn_image` (lens-sized, e.g. 400×400). `compute_union_bbox` is already
+re-exported from `jp_detect` via `ocr::text_detection`.
+
+**Fix:** `union = compute_union_bbox(&boxes)` → `TextCropper::crop(&dyn_image, &[union])` →
+pass that crop to `call_api` instead of `dyn_image`.
+
+**Touch-points:** `main.rs` fallback block only; no new config, no
+changes to `client.rs` or `utils.rs`.
+
+**Unit test to prove value:**
+```rust
+// ocr/text_cropper.rs or a new tests/opt_union_crop.rs
+// Construct a 400×400 DynamicImage with a 40×20 "text region" in the
+// corner.  Feed two TextBoundingBoxes that cover that region to
+// compute_union_bbox(), then TextCropper::crop().  Assert the resulting
+// CroppedRegion dimensions are ≤ 40+2*pad × 20+2*pad (well under 400×400).
+// This confirms the crop path produces a smaller image — without any
+// Ollama call.
+```
+
+---
+
+#### OPT-2 — `primary_max_dimension` config (downscale for local Ollama)
+
+**Problem:** `call_api` calls `encode_as_grayscale(image)` with no size
+cap, so a 400×400 or 800×800 (oversampled) grayscale PNG is sent to
+every local Ollama call. `encode_for_fallback` already supports a
+`max_dim` cap for remote — the same mechanism is absent for primary.
+
+**Fix:**
+- Add `primary_max_dimension: u32` to `AppConfig` (default `0` = no
+  limit, suggested starting value `512`).
+- Add `primary_max_dimension: u32` field to `DualOcrClient`.
+- In `call_api`, replace `encode_as_grayscale(image)` with
+  `encode_for_fallback(image, self.primary_max_dimension)` (reuses
+  existing downscale logic; `max_dim=0` is a no-op so no behaviour
+  change for users who don't set it).
+
+**Touch-points:** `config.rs` (+1 field), `client.rs` (+1 field +
+constructor arg + one call-site change), all `DualOcrClient::new()`
+call-sites in `main.rs` (+1 arg, ~3 places).
+
+**Unit test to prove value:**
+```rust
+// utils.rs tests block
+// Create a 600×400 DynamicImage.  Call encode_for_fallback(img, 512).
+// Decode the resulting base64 PNG and assert longest edge ≤ 512 and
+// shortest edge is proportionally scaled (not distorted).
+// Then call encode_for_fallback(img, 0) and assert dimensions are
+// unchanged (600×400) — proving max_dim=0 is truly a no-op.
+```
+
+---
+
+#### OPT-3 — Skip Ollama call entirely when DBNet finds zero boxes
+
+**Problem:** If DBNet is configured and detects no boxes in the lens
+capture, the image almost certainly has no readable text, yet the code
+falls through to a full-image Ollama round-trip anyway.
+
+**Fix:** After `det.detect(&gray_image)` returns an empty `boxes` vec
+in the `!force_remote` branch, return `Err("No text detected".into())`
+(or a dedicated empty-result `Ok`) immediately, without constructing a
+`DualOcrClient` or calling `call_api`.
+
+Make this opt-in: add `skip_ocr_if_no_boxes: bool` to `AppConfig`
+(default `false`) so users can enable it once they're confident in their
+DBNet model's recall.
+
+**Touch-points:** `config.rs` (+1 bool field), `main.rs` (~5 lines in
+the `!force_remote` branch).
+
+**Unit test to prove value:**
+```rust
+// No real test needed for the guard itself (trivial branch).
+// The valuable test: create a solid-colour 400×400 DynamicImage with no
+// text-like content, run it through a mock TextDetector that returns
+// vec![], and assert the function returns before constructing a
+// DualOcrClient.  Use a mock/spy on DualOcrClient::new() or count
+// HTTP calls via wiremock — zero calls expected.
+```
+
+---
+
+#### OPT-4 — Downscale oversampled capture before handing to Ollama
+
+**Problem:** `text_detection_oversample_factor` (default 2.0) captures
+up to `max(lens_size × factor, 640)` pixels for DBNet accuracy.  That
+oversized image is then passed as `dyn_image` into `call_api` — Ollama
+receives an 800px image when the text region (after crop) may be 60px.
+OPT-1 + OPT-2 together largely neutralise this, but for the no-detector
+fallback path it still applies.
+
+**Fix:** After capture and before any `call_api` call on the non-cropped
+path, resize `dyn_image` back down to `lens_size × lens_size` (or
+`primary_max_dimension` from OPT-2, whichever is smaller).  This is
+already implicit if OPT-2 is implemented with a sensible
+`primary_max_dimension` value.
+
+**Note:** Implement OPT-1 + OPT-2 first; OPT-4 may become a no-op.
+
+**Unit test to prove value:**
+```rust
+// Confirm encode_for_fallback(oversampled_image, lens_size) produces
+// output whose decoded dimensions equal lens_size × lens_size (or the
+// proportionally-scaled equivalent).  Verifies the downscale path
+// triggers correctly when the capture exceeds the cap.
+// (Reuses the encode_for_fallback test from OPT-2 with a larger input.)
+```
+
+---
 
 ### IDEA-1 — Dynamic lens resize on Ctrl+Shift hover
 

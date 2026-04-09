@@ -33,11 +33,11 @@ Model: [text_detection_dbnet_ml_v0.2](https://huggingface.co/StabRise/text_detec
 
 ## Original DBNet Research
 
-```
+```bibtex
 @inproceedings{liao2020real,
-  title={Real-time Scene Text Detection with Differentiable Binarization},
-  author={Liao, Minghui and Wan, Zhaoyi and Yao, Cong and Chen, Kai and Bai, Xiang},
-  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
-  year={2020}
+  title     = {Real-time Scene Text Detection with Differentiable Binarization},
+  author    = {Liao, Minghui and Wan, Zhaoyi and Yao, Cong and Chen, Kai and Bai, Xiang},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  year      = {2020}
 }
 ```
