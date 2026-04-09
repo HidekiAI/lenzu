@@ -115,7 +115,7 @@ Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining
 - [ ] `top_xy` / `bot_xy` from `TranslationResult` not yet used to anchor HUD text to screen coordinates
 - [ ] YOLOv8n (`yolov8n_fp16.onnx`) still in repo — evaluate whether it adds value over DBNet or can be removed
 - [ ] Fullscreen detection parameter tuning: live desktop (taskbars, UI chrome) causes over-merging at default dilation=16; consider separate config for fullscreen vs lens-crop paths
-- [ ] **INVESTIGATE** — fullscreen scan returns exactly 1 bbox: retry with dilation=0 (see below)
+- [x] **INVESTIGATE** — fullscreen scan returns exactly 1 bbox: retry with dilation=0 (see BUG-4, fixed)
 
 ---
 
@@ -130,7 +130,7 @@ Cairo's `arc()` draws a connecting line from the current path point (left by the
 ### ~~DBG-1 — Save pre-wire image to debug_lens.png instead of raw capture~~ ✓ FIXED
 `save_debug_image()` removed. Replaced by `save_prewire_debug(image)` called at the top of both `DualOcrClient::call_api()` and `call_api_force_fallback()`, writing the greyscale crop (exactly what will be base64-encoded and sent) to `debug_lens.png`.
 
-### BUG-4 — Fullscreen scan over-merges into a single bbox; retry with dilation disabled
+### ~~BUG-4 — Fullscreen scan over-merges into a single bbox; retry with dilation disabled~~ ✓ FIXED
 
 **Symptom:** Ctrl+Shift+Click fullscreen scan returns exactly 1 bounding box covering a
 large screen area. This is a sign that the morphological dilation (`text_detection_dilation`,
