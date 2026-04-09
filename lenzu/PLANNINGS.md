@@ -120,8 +120,8 @@ Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining
 
 ## 🐛 Known Bugs
 
-### BUG-1 — Spinning cursor lollipop artefact
-The animated spinner cursor has a visible tail/disfigurement — appears as a lollipop shape instead of a clean spinning circle. Likely a leftover artefact from a previous frame not being cleared before drawing the next.
+### ~~BUG-1 — Spinning cursor lollipop artefact~~ ✓ FIXED
+Cairo's `arc()` draws a connecting line from the current path point (left by the preceding `show_layout` call) to the arc start, producing a lollipop tail. Fixed by inserting `cr.new_sub_path()` before `cr.arc()` to break the path connection.
 
 ### ~~BUG-3 — Image not greyscaled before DBNet detection~~ ✓ FIXED
 `det.detect()` now receives `dyn_image.grayscale()` (computed once at the top of the worker closure). The fullscreen debug overlay and crop calls retain the original RGB image so bounding-box visualisation stays coloured.
@@ -135,6 +135,33 @@ The text display area beneath the lens window is too small and clips content whe
 **Proposed fixes (pick one or combine):**
 - Auto-scroll: slowly scroll down through the text, pause at bottom, reset to top and repeat (marquee-style vertical scroll)
 - **Shift+Tab toggle**: swap content between the HUD overlay and the lens text box — what was in the HUD moves to the text box and vice versa, toggling back and forth on each Shift+Tab press
+
+---
+
+## 💡 Future Ideas
+
+### IDEA-1 — Dynamic lens resize on Ctrl+Shift hover
+
+When Ctrl+Shift is held (no click), the lens window resizes to match whichever detected bounding box the cursor is hovering over. Resets to `config.lens_size` when the cursor is not inside any bbox, and again when the OCR result arrives.
+
+**Interaction flow:**
+1. Hold Ctrl+Shift → trigger a fullscreen DBNet detect-only scan (background thread, no OCR call)
+2. Timer loop checks cursor against cached boxes each tick:
+   - Cursor inside a bbox → resize lens to that bbox's `(w, h)`
+   - Cursor outside all boxes → lens = default `config.lens_size`
+3. Ctrl+Shift+Click on a highlighted box → OCR that region (existing flow)
+4. OCR result received → clear cached boxes, reset lens to default
+
+**Implementation touch-points (`main.rs` only; no changes to `client.rs` / `config.rs`):**
+- `AppState`: add `cached_boxes`, `cached_boxes_origin: (i32, i32)`, `lens_override: Option<(i32, i32)>`, `ctrl_shift_scan_done: bool`
+- Shared `Arc<Mutex<Option<(Vec<TextBoundingBox>, (i32, i32))>>>` to pass detect results from background thread to timer loop
+- Timer loop: spawn detect-only thread on Ctrl+Shift rising edge; drain shared mutex each tick; hit-test cursor against boxes; call `window.resize(eff_w, eff_h + ui_panel_height)` and `window.move_(x - eff_w/2, y - eff_h/2)`
+- Draw callback: replace all bare `s.config.lens_size` refs with `s.eff_w()` / `s.eff_h()` helpers
+- RX handler: `s.lens_override = None; s.cached_boxes.clear();` on result
+
+**Coordinate note:** using the fullscreen-scan path means boxes are in screen coordinates (origin `(0, 0)`), so the cursor hit-test is a direct `x1 <= cx <= x2 && y1 <= cy <= y2` with no offset math.
+
+**Estimated scope:** ~100 lines added/changed, all in `main.rs`.
 
 ---
 

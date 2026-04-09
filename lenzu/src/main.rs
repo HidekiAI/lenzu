@@ -457,6 +457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cr.rotate(s.spinner_angle);
             cr.set_line_width(3.0);
             cr.set_source_rgb(r, g, b);
+            cr.new_sub_path();
             cr.arc(0.0, 0.0, 8.0, 0.0, 1.5 * std::f64::consts::PI);
             cr.stroke().ok();
             cr.restore().ok();
