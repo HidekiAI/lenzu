@@ -12,4 +12,5 @@ members = [
   "prototypes/jp_ocr_app",
   "prototypes/winit-test",
   "prototypes/dbnet-test",
+  "prototypes/manga-ocr-test",
 ]

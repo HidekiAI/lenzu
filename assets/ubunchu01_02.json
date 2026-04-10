@@ -1,0 +1,61 @@
+{
+  "image_id": "ubuntu_manga_page_01",
+  "width": 1000,
+  "height": 1414,
+  "annotations": [
+    {
+      "box_2d": [75, 804, 216, 951],
+      "text": "あ あたしの オススメは",
+      "orientation": "vertical",
+      "description": "Top right bubble, line 1"
+    },
+    {
+      "box_2d": [140, 686, 310, 831],
+      "text": "うぶんちゅ",
+      "orientation": "vertical",
+      "description": "Top right bubble, large text"
+    },
+    {
+      "box_2d": [145, 95, 345, 252],
+      "text": "最近人気の デスクトップな リナックスです！",
+      "orientation": "vertical",
+      "description": "Top left bubble"
+    },
+    {
+      "box_2d": [386, 344, 408, 654],
+      "text": "※ うぶんちゅではなくウブントゥです",
+      "orientation": "horizontal",
+      "description": "Center caption (tiny text)"
+    },
+    {
+      "box_2d": [431, 328, 542, 501],
+      "text": "却下！",
+      "orientation": "vertical",
+      "description": "Middle bubble (rejection)"
+    },
+    {
+      "box_2d": [632, 431, 712, 563],
+      "text": "マジいってん んだぜ！",
+      "orientation": "vertical",
+      "description": "Bottom center, aggressive text"
+    },
+    {
+      "box_2d": [629, 742, 730, 915],
+      "text": "よけなー このっ！",
+      "orientation": "vertical",
+      "description": "Bottom right, screaming"
+    },
+    {
+      "box_2d": [631, 41, 765, 239],
+      "text": "ハモリながら ケンカしないでっ",
+      "orientation": "vertical",
+      "description": "Bottom left bubble, top part"
+    },
+    {
+      "box_2d": [805, 75, 929, 169],
+      "text": "一瞬くらい 検討して くださいよー！",
+      "orientation": "vertical",
+      "description": "Bottom left bubble, bottom part"
+    }
+  ]
+}
