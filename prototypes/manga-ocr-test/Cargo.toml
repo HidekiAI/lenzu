@@ -1,0 +1,21 @@
+[package]
+name = "manga-ocr-test"
+version = "0.1.0"
+edition = "2021"
+
+# lib is auto-detected from src/lib.rs (the future crate surface).
+# The binary is an explicit CLI wrapper around it.
+[[bin]]
+name = "manga-ocr-test"
+path = "src/main.rs"
+
+# ─── Dependencies ────────────────────────────────────────────────────────────
+# Keep versions in sync with lenzu/Cargo.toml where they overlap (image, ndarray).
+# ort version must match what jp_detect pulls in to avoid duplicate ONNX Runtime
+# binaries in the workspace.
+
+[dependencies]
+ort        = "2.0.0-rc.12"
+image      = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+serde_json = "1.0"
+anyhow     = "1.0"
