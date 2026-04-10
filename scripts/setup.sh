@@ -7,11 +7,13 @@
 #   lenzu_server  -- Electron overlay (Node.js via lenzu_server/scripts/setup.sh)
 #   prototypes    -- GTK4 + Graphene
 #   ollama        -- local LLM backend (Docker container, gemma4:e2b)
+#   manga-ocr-2025 -- ONNX models for prototypes/manga-ocr-test (~140 MB, via curl)
 #
 # Flags:
-#   --skip-ollama   skip Docker/Ollama setup (use if you prefer OpenRouter only)
-#   --gpu           force GPU mode (error if no CUDA GPU found)
-#   --no-gpu        force CPU-only mode even when a GPU is present
+#   --skip-ollama      skip Docker/Ollama setup (use if you prefer OpenRouter only)
+#   --skip-manga-ocr   skip manga-ocr-2025 model download
+#   --gpu              force GPU mode (error if no CUDA GPU found)
+#   --no-gpu           force CPU-only mode even when a GPU is present
 #
 # Default (no flag): auto-detect — uses GPU when CUDA is available, CPU otherwise.
 # Re-run at any time to switch modes.
@@ -22,13 +24,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE_FILE="$REPO_ROOT/.ollama_mode"
 
 SKIP_OLLAMA=false
+SKIP_MANGA_OCR=false
 FORCE_GPU=false
 FORCE_CPU=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --skip-ollama) SKIP_OLLAMA=true ;;
-        --gpu)         FORCE_GPU=true ;;
-        --no-gpu)      FORCE_CPU=true ;;
+        --skip-ollama)    SKIP_OLLAMA=true ;;
+        --skip-manga-ocr) SKIP_MANGA_OCR=true ;;
+        --gpu)            FORCE_GPU=true ;;
+        --no-gpu)         FORCE_CPU=true ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
     shift
@@ -83,6 +87,50 @@ echo "Building lenzu (debug, with onnx feature)..."
 cd "$REPO_ROOT"
 cargo build -p lenzu --features onnx
 cd "$REPO_ROOT"
+
+
+# ── manga-ocr ONNX models (prototypes/manga-ocr-test) ────────────────────────
+# mayocream/manga-ocr-onnx — ONNX export of kha-white/manga-ocr-base.
+# Three files, ~440 MB total.  Downloaded once; re-run skips existing files.
+echo ""
+if [[ "$SKIP_MANGA_OCR" == "true" ]]; then
+    echo "Skipping manga-ocr model download (--skip-manga-ocr)."
+else
+    MANGA_OCR_DIR="$REPO_ROOT/assets/manga-ocr"
+    MANGA_OCR_BASE="https://huggingface.co/mayocream/manga-ocr-onnx/resolve/main"
+    MANGA_OCR_FILES=("encoder_model.onnx" "decoder_model.onnx" "vocab.txt")
+
+    all_present=true
+    for f in "${MANGA_OCR_FILES[@]}"; do
+        [[ -f "$MANGA_OCR_DIR/$f" ]] || { all_present=false; break; }
+    done
+
+    if [[ "$all_present" == "true" ]]; then
+        echo "manga-ocr models already present — skipping."
+    else
+        echo "Downloading manga-ocr ONNX models (~440 MB)..."
+        mkdir -p "$MANGA_OCR_DIR"
+        download_ok=true
+        for f in "${MANGA_OCR_FILES[@]}"; do
+            if [[ -f "$MANGA_OCR_DIR/$f" ]]; then
+                echo "  $f — already present, skipping."
+                continue
+            fi
+            echo "  Downloading $f..."
+            if ! curl -fL --progress-bar -o "$MANGA_OCR_DIR/$f" "$MANGA_OCR_BASE/$f"; then
+                echo "  WARNING: failed to download $f"
+                rm -f "$MANGA_OCR_DIR/$f"   # remove partial file
+                download_ok=false
+            fi
+        done
+        if [[ "$download_ok" == "true" ]]; then
+            echo "manga-ocr models ready."
+        else
+            echo "  Some files failed. Re-run setup.sh to retry, or download manually:"
+            echo "    curl -fL -o assets/manga-ocr/<file> $MANGA_OCR_BASE/<file>"
+        fi
+    fi
+fi
 
 echo ""
 echo "Setting up Node.js and pnpm for lenzu_server (Electron)..."
@@ -375,6 +423,8 @@ echo "  1. Install Rust:       https://rustup.rs"
 echo "  2. Install Node (for lenzu_server): https://nodejs.org  (or: nvm install --lts)"
 echo "  3a. Local backend:     ./scripts/run.sh          (uses ollama + $OLLAMA_MODEL)"
 echo "  3b. Remote backend:    export OPENROUTER_API_KEY=sk-your-key-here && ./scripts/run.sh"
+echo "  4. manga-ocr prototype test (once models downloaded):"
+echo "       cargo test -p manga-ocr-test -- --nocapture"
 echo ""
 echo "Ollama mode: $(cat "$MODE_FILE" 2>/dev/null || echo "unknown")"
 echo "  Auto-detect (recommended): ./scripts/setup.sh"
