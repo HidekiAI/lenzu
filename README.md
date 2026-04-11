@@ -61,6 +61,13 @@ For 4 GB VRAM cards, set `gemma4:e2b` as local fallback and `glm-ocr` as primary
 - **Cloud OCR**: Automatically falls back to OpenRouter (Gemini 2.0 Flash) when local inference times out. Disable by leaving `OPENROUTER_API_KEY` unset.
 - **GPU Acceleration**: Optional YOLOv8n pre-detection (model in repo) to crop text regions before API call, reducing token cost ~80%.
 
+## Related Crates
+
+These companion crates were developed as part of this project and are available on crates.io:
+
+- [`jp_detect`](https://crates.io/crates/jp_detect) — real-time scene text detection using DBNet (ONNX). Locates text bounding boxes in manga panels and screenshots.
+- [`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs) — Japanese manga OCR via ViT encoder + BERT decoder (ONNX). Converts image crops to Japanese text.
+
 ## Libraries & Dependencies
 
 - [`gtk` 0.18](https://crates.io/crates/gtk) — GTK3 bindings (gtk-rs). **GTK3, not GTK4.**
