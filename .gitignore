@@ -35,6 +35,8 @@ tags
 !assets/Screenshot-JP.png
 !assets/Screenshot-EN.png
 !docs/*.png
+!prototypes/dbnet-ocr-pipeline/docs/*.png
+!prototypes/dbnet-ocr-pipeline/docs/**/*.png
 
 # Large model binaries — download via scripts/setup.sh, never commit
 assets/manga-ocr/
