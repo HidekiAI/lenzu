@@ -67,6 +67,7 @@ sudo apt install -y \
     libssl-dev \
     libgtk-4-dev \
     libgraphene-1.0-dev \
+    libkakasi2-dev \
     fonts-noto-cjk \
     fonts-ipafont-gothic
 

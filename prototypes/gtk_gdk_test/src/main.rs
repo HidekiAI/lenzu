@@ -4,18 +4,13 @@ use std::sync::OnceLock;
 
 use crate::glib::clone;
 use gtk4::{
-    ffi::{gtk_list_store_append, GtkButton, GtkWidget},
-    gdk_pixbuf::Pixbuf,
-    gio, glib,
+    glib,
     prelude::*,
-    subclass::widget,
-    Box, Button, HeaderBar, Image, Orientation, Picture, Widget,
+    Box, Button, Image, Orientation, Picture,
 };
 use tokio::runtime::Runtime;
 
 const APP_ID: &str = "tld.mydomain.lenzu.prototype.gtk_gdk_test";
-//const APP_ID_PATH: String  = format!("/{}/", APP_ID.to_string().replace(".", "/")); // "/tld/mydomain/lenzu/prototype/gtk_gdk_test/";
-const APP_ID_PATH: &str = "/tld/mydomain/lenzu/prototype/gtk_gdk_test/";
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -125,6 +120,7 @@ fn build_ui(application: &gtk4::Application) {
     // all is attached to parent_box, now attach itself to window
     //window.set_child(Some(&parent_box));
     window_scrollable.set_child(Some(&parent_box));
+    #[allow(deprecated)]
     window.show();
     window.set_visible(true);
     window.present(); // mark (child scene-graph nodes) for refresh
