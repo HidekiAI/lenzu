@@ -24,7 +24,10 @@ fn main() {
     //println!("cargo:rustc-link-arg=-l:libkakasi.a");    // force link against libkakasi.a (statically linked)
 
     // Other libs that libkakasi.a depends on:
-    println!("cargo:rustc-link-arg=-liconv");    // force link against libkakasi.a (statically linked)
+    // On macOS/BSD, iconv is a separate library; on Linux/glibc it's built into libc.
+    if !cfg!(target_os = "linux") {
+        println!("cargo:rustc-link-arg=-liconv");
+    }
 
     // Set RUSTFLAGS to include the desired linker search path
     if cfg!(target_os = "windows") {

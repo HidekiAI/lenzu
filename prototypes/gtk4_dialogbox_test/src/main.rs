@@ -1,5 +1,5 @@
 use gtk4::{
-    glib::{self, clone, property::PropertyGet, GString},
+    glib::{self, clone},
     prelude::*,
 }; // Assumes that gtk4 is in the Cargo.toml file is set to features=["v4_14"] (meaning 4.10 methods such as GtkDialog is deprecated and replaced with GtkWindow)
 use std::{borrow::Borrow, cell::RefCell, rc::Rc, sync::OnceLock, time::SystemTime};
@@ -105,7 +105,7 @@ fn build_ui(app: &gtk4::Application) {
             .halign(gtk4::Align::End) // anchor to bottom right
             .valign(gtk4::Align::End)
             .build();
-        let sender_rc = dialog_close_signal_sender.clone(); // increment ref-count
+        let _sender_rc = dialog_close_signal_sender.clone(); // increment ref-count
         // It's OK to move sender signal into the closure since it's the only sender/producer
         let _signal_id = close_button.connect_clicked(move |_close_button_self| {
             println!("Signal closing dialog...");

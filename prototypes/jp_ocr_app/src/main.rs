@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed
     });
 
+    #[allow(deprecated)]
     let (tx, rx) = glib::MainContext::channel(glib::Priority::default());
 
     let state_draw = state.clone();

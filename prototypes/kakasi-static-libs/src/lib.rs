@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod bindings;
 
 // This is just a prototype to use libkakasi instead of kakasi
@@ -38,14 +39,16 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn test_encode_to_SJIS() {
         let text_utf8 = "最近人気のデスクトップなリナックスです!";
         let (enco, _, _) = encoding_rs::SHIFT_JIS.encode(&text_utf8); // from UTF8 -> SJIS
-        let text_sjis = enco.into_owned();
-        println!("text_sjis: {:?}", text_sjis);
+        let _text_sjis = enco.into_owned();
+        println!("text_sjis: {:?}", _text_sjis);
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn test_decode_from_SJIS() {
         let text_sjis = vec![
             // from SJIS -> UTF8
@@ -59,6 +62,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(unexpected_cfgs)]
     async fn test_kakasi() {
         //$ kakasi -JH  -i utf8 -o utf8 -f <<< "最近人気の\nデスクトップな\nリナックスです!"
         println!("test_kakasi; setting  up args...");
@@ -91,7 +95,7 @@ mod tests {
         let text_utf8_slice = "最近人気のデスクトップなリナックスです!";
         let text_utf8 = text_utf8_slice.to_string(); // has to be a String, not &str for UTF8?
         let (enco, _, _) = encoding_rs::SHIFT_JIS.encode(&text_utf8); // from UTF8 -> SJIS
-        let text_sjis = enco.into_owned();
+        let _text_sjis = enco.into_owned();
 
         // convert it to CStr first before passing it to kakasi_do()
         let text_utf8_cstr = match std::ffi::CString::new(text_utf8.clone()) {
