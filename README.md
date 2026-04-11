@@ -1,8 +1,10 @@
-# lenzu
+# lenzu 「レンズ」 (LINUX ONLY)
+
+**Linux only** (X11, GTK3). No Windows or macOS support.
 
 Desktop OCR lens — a transparent floating window that follows the mouse cursor, captures the region under it on demand, and sends it to a local or remote LLM for OCR and translation. Results appear in a separate transparent overlay HUD (`lenzu_server`).
 
-The key difference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
+The key dif:ference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
 
 ![beta demo](docs/lenzu-beta-demo.gif)
 
@@ -27,28 +29,29 @@ lenzu (GTK3 client)               lenzu_server (Electron)
    - **Local primary** (e.g. `gemma4:e2b` via ollama, 3 s) — fully on-device, no API key needed
    - **Local fallbacks** (e.g. `glm-ocr`, `qwen2.5vl`, 3 s each) — smaller OCR-specialist models
    - **Remote fallback** (OpenRouter/Gemini 2.0 Flash, 15 s) — cloud fallback when local fails
-   
+
    All backends use the same production code path (single source of truth in `client.rs`).  
    Streaming (`"stream": true`) keeps each request's TCP connection alive, preventing ollama's  
    server-side write timeout from firing during slow CPU/partial-GPU inference.
+
 3. **Overlay**: Formatted text sent via UDP loopback to `lenzu_server`, an Electron transparent window pinned to screen edge.
 
 ### Privacy modes
 
-| Mode | Config | API key needed? | Images leave device? |
-|---|---|---|---|
-| Fully local | `OPENROUTER_API_KEY` unset | No | No |
-| Local-first | default | No (local) / Yes (remote) | Only on fallback |
-| Remote-only (Ctrl+Shift+Click) | any | Yes | Yes |
+| Mode                           | Config                     | API key needed?           | Images leave device? |
+| ------------------------------ | -------------------------- | ------------------------- | -------------------- |
+| Fully local                    | `OPENROUTER_API_KEY` unset | No                        | No                   |
+| Local-first                    | default                    | No (local) / Yes (remote) | Only on fallback     |
+| Remote-only (Ctrl+Shift+Click) | any                        | Yes                       | Yes                  |
 
 ### Inference speed on typical hardware
 
-| Backend | VRAM | Typical latency |
-|---|---|---|
-| gemma4:e2b — full GPU (8 GB+) | ~7.4 GB | ~15–30 s |
-| gemma4:e2b — partial GPU | ~2 GB GPU + CPU | 60–120 s |
-| glm-ocr — full GPU (4 GB) | ~2.2 GB | ~5–15 s |
-| Gemini 2.0 Flash (remote) | — | ~3–5 s |
+| Backend                       | VRAM            | Typical latency |
+| ----------------------------- | --------------- | --------------- |
+| gemma4:e2b — full GPU (8 GB+) | ~7.4 GB         | ~15–30 s        |
+| gemma4:e2b — partial GPU      | ~2 GB GPU + CPU | 60–120 s        |
+| glm-ocr — full GPU (4 GB)     | ~2.2 GB         | ~5–15 s         |
+| Gemini 2.0 Flash (remote)     | —               | ~3–5 s          |
 
 For 4 GB VRAM cards, set `gemma4:e2b` as local fallback and `glm-ocr` as primary, or skip gemma and use the glm-ocr → remote chain.
 

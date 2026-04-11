@@ -40,17 +40,15 @@ tags
 assets/manga-ocr/
 assets/manga-ocr-2025/
 
-
 .config/
 .local/
-
 build*/
 
-.gemini/
 gha-creds-*.json
 .ollama_mode
 
-# Claude Code
+# LLM crufts
 CLAUDE.md
 .claude/
+.gemini/
 
