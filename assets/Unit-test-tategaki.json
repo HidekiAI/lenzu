@@ -1,0 +1,8 @@
+{
+  "crop_file": "tategaki_cut.png",
+  "text": "『言語モデルのテスト』",
+  "top_xy": [5, 5],
+  "bot_xy": [195, 995],
+  "orientation": "vertical",
+  "note": "Coordinates are relative to the 200x1000 crop."
+}
