@@ -1,13 +1,10 @@
-use image::GenericImageView;
 use image::DynamicImage;
-use winit::dpi::PhysicalSize;
-use winit::raw_window_handle::HasDisplayHandle;
-use winit::raw_window_handle::HasWindowHandle;
-use winit::window::Window;
+use image::GenericImageView;
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::{
     event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    keyboard::{self, Key, KeyCode, PhysicalKey},
+    keyboard::{KeyCode, PhysicalKey},
     window::WindowBuilder,
 };
 
@@ -50,13 +47,13 @@ fn main() {
     let resized_image = dynamic_image.resize(size.width, size.height, image::imageops::FilterType::Lanczos3);
 
     // Convert the resized image to a buffer
-    let resized_buffer = resized_image.as_bytes();
+    let _resized_buffer = resized_image.as_bytes();
 
     // get window handle
-    let window_handle = window.window_handle().expect("Cannot get window handle");
+    let _window_handle = window.window_handle().expect("Cannot get window handle");
 
     // get display handle
-    let display_handle = window.display_handle().expect("Cannot get display handle");
+    let _display_handle = window.display_handle().expect("Cannot get display handle");
 
 
 
