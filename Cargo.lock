@@ -676,6 +676,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "dbnet-ocr-pipeline"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "image 0.25.10",
+ "imageproc",
+ "jp_detect",
+ "manga-ocr-rs",
+ "serde_json",
+]
+
+[[package]]
 name = "dbnet-test"
 version = "0.1.0"
 dependencies = [
