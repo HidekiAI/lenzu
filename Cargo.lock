@@ -2476,12 +2476,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1670343e58806300d87950e3401e820b519b9384281bbabfb15e3636689ffd69"
 
 [[package]]
+name = "manga-ocr-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bbd893e10f3391840c7fc5e9bfdcb1f6b8e112fbebd9b85dcbc1264a3188bc0"
+dependencies = [
+ "anyhow",
+ "image 0.25.10",
+ "ort",
+]
+
+[[package]]
 name = "manga-ocr-test"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "image 0.25.10",
- "ort",
+ "manga-ocr-rs",
  "serde_json",
 ]
 

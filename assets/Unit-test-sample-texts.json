@@ -8,7 +8,7 @@
     "furigana": "『言[げん]語[ご]MODERU no TESUTO』"
   },
   {
-    "label": "horizontal_printed",
+    "label": "yokogaki_printed",
     "top_xy": [270, 120],
     "bot_xy": [940, 245],
     "text": "データを正確に読み取る",
