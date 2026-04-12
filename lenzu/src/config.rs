@@ -215,6 +215,14 @@ pub struct AppConfig {
     /// Overrides `enrichment_enabled` when set.
     #[serde(default)]
     pub furigana_only: bool,
+    // ── MeCab furigana overwrite ─────────────────────────────────────────────
+    /// When `true`, MeCab re-annotates furigana on results from the LLM
+    /// fallback chain (DualOcrClient), overwriting whatever the LLM returned.
+    /// MeCab is dictionary-based (~5 ms) and produces correct readings for
+    /// standard vocabulary.  Disabled by default; enable via config or
+    /// `--mecab_overwrite` CLI flag.
+    #[serde(default)]
+    pub mecab_overwrite: bool,
     // ── Token spend warnings ────────────────────────────────────────────────
     /// Session-total paid tokens (prompt + completion) at which the HUD color
     /// changes from its configured color to orange.  0 = disable warning.
@@ -359,6 +367,7 @@ impl Default for AppConfig {
             enrichment_timeout_secs: default_enrichment_timeout_secs(),
             enrichment_prompt: None,
             furigana_only: false,
+            mecab_overwrite: false,
             token_warning_threshold: default_token_warning_threshold(),
             token_critical_threshold: default_token_critical_threshold(),
         }

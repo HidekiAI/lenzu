@@ -293,6 +293,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[Config] --furigana_only: MeCab furigana only, LLM enrichment disabled");
     }
 
+    // CLI override: --mecab_overwrite re-annotates furigana via MeCab on LLM fallback results
+    if std::env::args().any(|a| a == "--mecab_overwrite") {
+        cfg.mecab_overwrite = true;
+        eprintln!("[Config] --mecab_overwrite: MeCab will overwrite LLM furigana on fallback results");
+    }
+
     eprintln!(
         "[Config] llm={} | model={} | text_detection_model={} | threshold={} dilation={} pad={}x{}",
         cfg.llm_api_endpoint,
@@ -782,7 +788,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // AssertUnwindSafe: the Arc<dyn TextDetector> contains Mutex
                             // interior mutability; we don't rely on its state being
                             // consistent after a panic — each click creates a fresh dual client.
-                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 // Greyscale once; DBNet only needs luminance and this avoids
                                 // the crate doing its own (possibly inconsistent) conversion.
                                 let gray_image = dyn_image.grayscale();
@@ -1173,6 +1179,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }.map_err(|e| e.to_string())
                             }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
+
+                            // MeCab overwrite: re-annotate furigana on LLM fallback results
+                            if s_conf.mecab_overwrite {
+                                if let Ok((ref mut results, _)) = result {
+                                    let overwritten = furigana::annotate(results, false);
+                                    eprintln!("[mecab-overwrite] fallback results: overwritten={overwritten}");
+                                }
+                            }
+
                             let _ = tx_clone.send_blocking(result);
                         });
                     }
