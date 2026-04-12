@@ -120,6 +120,10 @@ struct AppState {
     /// DBNet text detector, shared across capture threads via `Arc`.
     /// `None` when `text_detection_model` is not configured or the `onnx` feature is absent.
     text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>>,
+    /// manga-ocr-rs local OCR handle, shared across threads.
+    /// When both detection and OCR confidence >= 71%, results are returned
+    /// immediately without hitting any LLM service.
+    local_ocr: Option<std::sync::Arc<manga_ocr_rs::MangaOcr>>,
     /// Current HUD vertical position: `true` = top, `false` = bottom.
     /// Auto-toggled when the cursor moves within 30 % of the opposite screen edge.
     hud_at_top: bool,
@@ -310,6 +314,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+    // Load manga-ocr-rs models once at startup for local-first OCR.
+    // Requires the text detector to be enabled — no point doing local OCR
+    // without detection to produce bounding boxes.
+    let local_ocr: Option<std::sync::Arc<manga_ocr_rs::MangaOcr>> = if text_detector.is_some() {
+        match ocr::local_ocr::LocalOcrEngine::new() {
+            Ok(engine) => {
+                eprintln!("[OCR] local manga-ocr loaded — confidence-gated pipeline active");
+                Some(engine.handle())
+            }
+            Err(e) => {
+                eprintln!("[OCR] manga-ocr unavailable ({e}) — local-first pipeline disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     gtk::init().expect("Failed to initialize GTK.");
 
     let server_process = if cfg.overlay_enabled {
@@ -331,6 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flash_alpha: 0.0,
         server_process,
         text_detector,
+        local_ocr,
         hud_at_top: false,
     }));
 
@@ -640,7 +663,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (fallback_api_key, primary_endpoint, primary_model,
                      free_remote_endpoint, free_remote_model,
                      fallback_endpoint, fallback_model, prompt,
-                     per_region_prompt, text_detector) = {
+                     per_region_prompt, text_detector, local_ocr) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
                     s.status = if force_remote {
@@ -661,6 +684,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.config.resolved_prompt(),
                         s.config.resolved_per_region_prompt(),
                         s.text_detector.clone(),
+                        s.local_ocr.clone(),
                     );
                     vals
                     // borrow_mut dropped here — safe for other callbacks to borrow
@@ -769,6 +793,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 y1: b.y1 + oy,
                                                                 x2: b.x2 + ox,
                                                                 y2: b.y2 + oy,
+                                                                confidence: b.confidence,
+                                                                contours: b.contours,
                                                             }
                                                         }).collect();
                                                     if remapped.len() > boxes.len() {
@@ -791,6 +817,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     }
                                                 }
                                             }
+                                            // ── Local-first OCR on chosen box ──────────
+                                            // Try manga-ocr-rs before hitting the LLM chain.
+                                            if let Some(ref mocr) = local_ocr {
+                                                let chosen = &boxes[idx];
+                                                if chosen.confidence >= 0.71 {
+                                                    let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
+                                                        std::sync::Arc::clone(mocr),
+                                                    );
+                                                    let (local_result, _) = engine.try_local_pipeline(
+                                                        &dyn_image, &[chosen.clone()],
+                                                        s_conf.text_detection_crop_padding, 256,
+                                                    );
+                                                    if let Some(results) = local_result {
+                                                        let t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
+                                                            client::TranslationResult {
+                                                                original: r.text.clone(),
+                                                                top_xy: Some(format!("{},{}", r.source_box.x1, r.source_box.y1)),
+                                                                bot_xy: Some(format!("{},{}", r.source_box.x2, r.source_box.y2)),
+                                                                debug_info: Some(format!(
+                                                                    "local-ocr det:{:.0}% ocr:{:.1}% {}ms",
+                                                                    r.source_box.confidence * 100.0,
+                                                                    r.confidence * 100.0, r.ocr_ms,
+                                                                )),
+                                                                ..Default::default()
+                                                            }
+                                                        }).collect();
+                                                        let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
+                                                        eprintln!("[OCR] fullscreen local-first succeeded — skipping LLM chain");
+                                                        return Ok((t_results, client::OcrMeta {
+                                                            backend: "local:manga-ocr".to_string(),
+                                                            elapsed_ms: total_ocr_ms,
+                                                        }));
+                                                    }
+                                                    eprintln!("[OCR] fullscreen local-first: confidence below gate — falling through to LLM");
+                                                }
+                                            }
+
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding, 256,
                                             );
@@ -850,6 +913,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         let boxes = det.detect(&gray_image);
                                         if !boxes.is_empty() {
                                             detected_boxes = boxes.clone();
+
+                                            // ── Local-first OCR (manga-ocr-rs) ─────────────────
+                                            // If all boxes have detection confidence >= 71% AND
+                                            // manga-ocr-rs returns OCR confidence >= 71% for each,
+                                            // return immediately — no LLM needed.
+                                            if let Some(ref mocr) = local_ocr {
+                                                let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
+                                                    std::sync::Arc::clone(mocr),
+                                                );
+                                                let (local_result, _partials) = engine.try_local_pipeline(
+                                                    &dyn_image,
+                                                    &boxes,
+                                                    s_conf.text_detection_crop_padding,
+                                                    256,
+                                                );
+                                                if let Some(results) = local_result {
+                                                    let t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
+                                                        client::TranslationResult {
+                                                            original: r.text.clone(),
+                                                            top_xy: Some(format!("{},{}", r.source_box.x1, r.source_box.y1)),
+                                                            bot_xy: Some(format!("{},{}", r.source_box.x2, r.source_box.y2)),
+                                                            debug_info: Some(format!(
+                                                                "local-ocr det:{:.0}% ocr:{:.1}% {}ms",
+                                                                r.source_box.confidence * 100.0,
+                                                                r.confidence * 100.0,
+                                                                r.ocr_ms,
+                                                            )),
+                                                            ..Default::default()
+                                                        }
+                                                    }).collect();
+                                                    let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
+                                                    let meta = client::OcrMeta {
+                                                        backend: "local:manga-ocr".to_string(),
+                                                        elapsed_ms: total_ocr_ms,
+                                                    };
+                                                    eprintln!("[OCR] local-first pipeline succeeded — {} results, skipping LLM chain", t_results.len());
+                                                    return Ok((t_results, meta));
+                                                }
+                                                eprintln!("[OCR] local-first pipeline: confidence below gate — falling through to LLM chain");
+                                            }
+
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding,
                                                 256,

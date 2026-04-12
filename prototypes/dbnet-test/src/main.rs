@@ -81,7 +81,8 @@ fn run_detection(detector: &DbNetDetector, det: &DetectionRun) -> Result<Vec<Tex
     println!("  Detect     : {:?}", t0.elapsed());
     println!("  Boxes found: {}", boxes.len());
     for (i, b) in boxes.iter().enumerate() {
-        println!("    [{i:3}] x1={} y1={} x2={} y2={}", b.x1, b.y1, b.x2, b.y2);
+        println!("    [{i:3}] x1={} y1={} x2={} y2={} confidence={:.1}%",
+            b.x1, b.y1, b.x2, b.y2, b.confidence * 100.0);
     }
 
     let annotated = draw_boxes(&det.img, &boxes);

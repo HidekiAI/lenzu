@@ -30,8 +30,13 @@ fn run(image_path: &str, model_dir_override: Option<&str>) -> Result<()> {
     let ocr = MangaOcr::new(model_dir).context("load models")?;
 
     let t = Instant::now();
-    let text = ocr.recognize(&img).context("recognize")?;
-    println!("time  : {:?}", t.elapsed());
-    println!("text  : {text}");
+    let rec = ocr.recognize_with_score(&img).context("recognize")?;
+    println!("time       : {:?}", t.elapsed());
+    println!("text       : {}", rec.text);
+    println!("confidence : {:.1}%", rec.confidence * 100.0);
+    println!("raw_conf   : {:.1}%", rec.raw_confidence * 100.0);
+    println!("score      : {:.4}", rec.score);
+    println!("truncated  : {}", rec.truncated);
+    println!("tokens     : {}", rec.token_count);
     Ok(())
 }

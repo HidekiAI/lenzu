@@ -17,7 +17,8 @@ onnx = ["jp_detect/onnx"]
 
 [dependencies]
 anyhow = "1.0"
-jp_detect = "0.2.0"
+jp_detect = "0.2.2"
+manga-ocr-rs = "0.1.1"
 gtk = { version = "0.18", features = ["v3_24"] }
 gdk = { version = "0.18", features = ["v3_24"] }
 glib = "0.18"

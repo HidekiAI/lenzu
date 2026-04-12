@@ -6,6 +6,10 @@ pub use jp_detect::{
     build_text_detector,
     closest_box_to_point,
     compute_union_bbox,
+    detection_params_for_size,
+    DetectionScaleEntry,
+    DetectionOutput,
+    DEFAULT_SCALE_TABLE,
 };
 
 #[cfg(feature = "onnx")]

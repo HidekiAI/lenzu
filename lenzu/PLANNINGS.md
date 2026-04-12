@@ -107,15 +107,16 @@ let server_bin = std::env::current_exe()
 
 ## 🔶 Phase 4 — Detection Pipeline (Partially Complete)
 
-Core detection is live via `jp_detect 0.2.0` (DBNet, published crate). Remaining work:
+Core detection is live via `jp_detect 0.2.2` (DBNet, published crate). Confidence-gated local-first OCR pipeline is complete.
 
 - [x] DBNet text detection via `jp_detect` crate (replaces planned YOLOv8n path)
 - [x] Ctrl+Shift+Click fullscreen scan → crop to nearest text region → remote OCR
 - [x] Lens-capture mode: per-region detection + individual crops sent to API
+- [x] **Confidence-gated local-first OCR** — jp_detect (>= 71% detection confidence) + manga-ocr-rs (>= 71% OCR confidence) → done, no LLM. Both Shift+Click and Ctrl+Shift+Click paths try local OCR first. Falls through to LLM chain only when confidence is too low.
+- [x] **INVESTIGATE** — fullscreen scan returns exactly 1 bbox: retry with dilation=0 (see BUG-4, fixed)
 - [ ] `top_xy` / `bot_xy` from `TranslationResult` not yet used to anchor HUD text to screen coordinates
 - [ ] YOLOv8n (`yolov8n_fp16.onnx`) still in repo — evaluate whether it adds value over DBNet or can be removed
 - [ ] Fullscreen detection parameter tuning: live desktop (taskbars, UI chrome) causes over-merging at default dilation=16; consider separate config for fullscreen vs lens-crop paths
-- [x] **INVESTIGATE** — fullscreen scan returns exactly 1 bbox: retry with dilation=0 (see BUG-4, fixed)
 
 ---
 

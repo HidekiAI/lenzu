@@ -183,11 +183,13 @@ This section outlines the modern approach to Japanese text extraction in manga, 
    - Direction detection (vertical vs horizontal)
 
 4. **Fallback Mechanisms**
-   - Confidence scoring for detected regions
+   - Confidence scoring for detected regions (jp_detect: per-box detection confidence 0–100%; manga-ocr-rs: per-result OCR confidence 0–100%)
+   - Confidence gate: both scores must be >= 71% for local results to be accepted
    - Progressive enhancement:
-     1. Try local detection
-     2. If low confidence → cloud detection
-     3. Final fallback → full-image analysis
+     1. Try local detection (jp_detect DBNet) + local OCR (manga-ocr-rs) — if both >= 71% confidence, done
+     2. If low confidence → local LLM (Ollama)
+     3. If local LLM fails → free remote tier
+     4. Final fallback → paid remote (Gemini 2.0 Flash)
 
 5. **Performance Benchmarks**
    - Target: <500ms detection time on 1080p image (Core i5)
@@ -413,13 +415,18 @@ Notes on building and compiling the project including dependencies and platform-
 
 Performance benchmarks and accuracy assessments across OCR engines:
 
-- **Performance Benchmarks**:
-  - Windows Media OCR: ~2 seconds per image
-  - Tesseract (Linux, default settings): ~34 seconds per image
-  - Tesseract (Linux, optimized PSM 5): ~5 seconds per image
-  - Manga-OCR: ~32 seconds per image (complex installation)
-- **Accuracy Assessments**: Windows Media OCR demonstrated the highest accuracy for manga text; Tesseract performed adequately with preprocessing; Manga-OCR showed strong results but was finicky to install.
-- **Sample Outputs**: Examples of OCR results include raw text, line breakdown, and kakasi conversion outputs.
+| Engine | Latency | Confidence Scoring | Accuracy | Notes |
+|---|---|---|---|---|
+| jp_detect + manga-ocr-rs (local, no LLM) | ~1–5 s (CPU) | Det 0–100%, OCR 0–100%; >= 71% both = pass | High for clean text regions | Fully offline; preferred path |
+| Windows Media OCR | ~2 s | None | High for manga text | Windows-only; legacy |
+| Tesseract (Linux, PSM 5) | ~5 s | None | Medium with preprocessing | Requires traineddata files |
+| Tesseract (Linux, default) | ~34 s | None | Low without tuning | Default settings unusable for manga |
+| Manga-OCR (Python) | ~32 s | None | High | Complex installation; replaced by manga-ocr-rs |
+| gemma4:e2b (Ollama) | ~15–110 s | N/A (LLM fallback) | Inconsistent block detection | Misses vertical CJK |
+| glm-ocr (Ollama) | ~10–20 s | N/A (LLM fallback) | Accurate text, poor segmentation | Lumps text into one block |
+| Gemini 2.0 Flash (remote) | ~3–5 s | N/A (LLM fallback) | Best overall | Requires API key; images leave device |
+
+The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for LLM calls when both detection and OCR confidence scores pass the 71% gate. Low-confidence results fall through to the LLM chain automatically.
 
 ## 13. windows-rs Integration
 

@@ -48,13 +48,23 @@ Lenzu is two processes:
 | **x11rb** | X11 screen capture | Captures GPU-accelerated windows correctly; root-window pixel-read approach inspired by [xfce4-screenshooter](https://gitlab.xfce.org/apps/xfce4-screenshooter) |
 | **Electron** (`lenzu_server`) | Transparent HUD overlay | Separate Node.js process |
 
-### OCR / AI backends (multi-tier fallback chain)
+### Local-first OCR (confidence-gated, no LLM)
+
+| Technology | Role | Confidence | Requires |
+|---|---|---|---|
+| **jp_detect** >= 0.2.2 (DBNet) | Text detection with per-box confidence | 0-100% detection score | `--features onnx` build |
+| **manga-ocr-rs** >= 0.1.1 | Japanese OCR with per-result confidence | 0-100% OCR score | ~140 MB model files (auto-downloaded) |
+
+Both scores must be >= 71% to pass the confidence gate. When they do, results are returned
+immediately — no LLM, no Ollama, no network. Models loaded once at startup, shared via `Arc`.
+
+### LLM fallback chain (when local OCR confidence is too low)
 
 | Technology | Role | Requires |
 |---|---|---|
 | **Ollama** | Local LLM runtime | Running daemon at `localhost:11434` |
-| **glm-ocr** (via Ollama) | Primary OCR model — fast, specialist | ~2.2 GB VRAM |
-| **Gemma 4 E2B** (via Ollama) | Local fallback OCR model | ~1.5 GB quantized |
+| **glm-ocr** (via Ollama) | Primary LLM OCR model — fast, specialist | ~2.2 GB VRAM |
+| **Gemma 4 E2B** (via Ollama) | Local LLM fallback OCR model | ~1.5 GB quantized |
 | **OpenRouter** | Remote API gateway | `OPENROUTER_API_KEY` env var |
 | **Google Gemini 2.0 Flash** (via OpenRouter) | Paid remote fallback | OpenRouter key |
 | `openrouter/free` | Free remote fallback | Optional key (rate-limited without) |

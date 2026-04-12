@@ -76,7 +76,7 @@ mod tests {
     }
 
     fn bbox(x1: u32, y1: u32, x2: u32, y2: u32) -> TextBoundingBox {
-        TextBoundingBox { x1, y1, x2, y2 }
+        TextBoundingBox { x1, y1, x2, y2, confidence: 1.0, contours: vec![] }
     }
 
     #[test]
