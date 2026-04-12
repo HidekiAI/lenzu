@@ -68,7 +68,7 @@ Ollama, no network. The LLM chain is only reached when confidence is too low.
 ### jp_detect + manga-ocr-rs (local-first, no LLM)
 - **Crates**: `jp_detect >= 0.2.2`, `manga-ocr-rs >= 0.1.1`
 - **Size**: ~4.7 MB (DBNet) + ~140 MB (manga-ocr encoder+decoder)
-- **Speed**: ~50-120 ms detection + ~1-42 s OCR per crop (CPU); much faster with GPU
+- **Speed**: ~700-1500 ms detection + ~0.8-2 s OCR per high-confidence crop (CPU); 25-40 s for low-confidence crops (decoder runaway); much faster with GPU
 - **Quality**: Excellent for clean, isolated text regions. Per-box confidence scores
   (0.0-1.0) reliably predict accuracy — boxes passing the 71% gate on both detection
   and OCR are consistently correct. Fails gracefully on merged/ambiguous regions by

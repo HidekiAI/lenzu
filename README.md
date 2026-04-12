@@ -49,7 +49,7 @@ lenzu (GTK3 client)               lenzu_server (Electron)
 
 | Backend | VRAM | Typical latency | Confidence scoring |
 | --- | --- | --- | --- |
-| jp_detect + manga-ocr-rs (local, no LLM) | ~150 MB models | ~1–5 s per crop (CPU) | Det 0-100%, OCR 0-100%; >= 71% both = pass |
+| jp_detect + manga-ocr-rs (local, no LLM) | ~150 MB models | ~0.8–2 s per high-confidence crop (CPU) | Det 0-100%, OCR 0-100%; >= 71% both = pass |
 | gemma4:e2b — full GPU (8 GB+) | ~7.4 GB | ~15–30 s | N/A (LLM fallback) |
 | gemma4:e2b — partial GPU | ~2 GB GPU + CPU | 60–120 s | N/A (LLM fallback) |
 | glm-ocr — full GPU (4 GB) | ~2.2 GB | ~5–15 s | N/A (LLM fallback) |
@@ -57,7 +57,7 @@ lenzu (GTK3 client)               lenzu_server (Electron)
 
 The local OCR path (jp_detect + manga-ocr-rs) is tried first for all capture modes. When
 both confidence scores pass the 71% gate, no LLM or network call is needed. For 4 GB VRAM
-cards, this means most clean text regions are handled in 1-5 seconds without touching Ollama.
+cards, this means most clean text regions are handled in under 2 seconds without touching Ollama.
 
 ## Hardware and Privacy
 

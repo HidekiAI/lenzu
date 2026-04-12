@@ -49,23 +49,24 @@ Auto-scaled params: threshold=0.35, dilation=6, pad=16 (longest edge 1635 — me
 
 9 boxes detected. Results by box:
 
-| Box | Size | Det % | OCR % | OCR text | Pass? | Notes |
-|-----|------|-------|-------|----------|-------|-------|
-| [0] red | 672x581 | low | low | `いや、いや...いやいやぁっ、こういう最近人気の...` (hallucinated) | No | Merged multiple panels; both scores below gate |
-| [1] green | 313x523 | high | high | `ああたしのオススメはうぶんちゅ` | Yes | Clean single bubble, both scores above 71% |
-| [2] blue | 117x106 | mid | mid | `その` | Partial | Small fragment; detection confident but OCR uncertain |
-| [3] orange | 86x150 | high | high | `却下!` | Yes | Tight single-word box, high confidence both |
-| [4] magenta | 236x218 | mid | low | `よけんなこのっ!!!...` (hallucinated) | No | Mixed art/text; OCR confidence collapsed |
-| [5] cyan | 227x195 | mid | low | `いモリなからケーカしないで~~~っ!!!...` (hallucinated) | No | Too much content; OCR score below gate, truncated at 32 chars |
-| [6] red | 168x124 | mid | low | `マジいてんんだぞ!!!...` (hallucinated) | No | OCR hallucination flagged by low confidence |
-| [7] green | 162x254 | high | high | `一瞬くらい検討してくださいよー!` | Yes | Clean bubble, both scores well above 71% |
-| [8] blue | 145x126 | low | low | (hallucinated) | No | Background art misdetected; both scores below gate |
+| Box | Size | Det % | OCR % | OCR text | Time | Pass? | Notes |
+|-----|------|-------|-------|----------|------|-------|-------|
+| [0] red | 672x581 | 99% | 13% | `いや、いや...いやいやぁっ、こういう最近人気の...` (hallucinated) | 29 s | No | Merged multiple panels; OCR hallucinated, truncated at 32 chars |
+| [1] green | 313x523 | 99% | 90% | `ああたしのオススメはうぶんちゅ` | 1.7 s | Yes | Clean single bubble, both scores well above 71% |
+| [2] blue | 117x106 | 84% | 74% | `その` | 0.8 s | Yes | Small fragment; both scores pass 71% gate |
+| [3] orange | 86x150 | 97% | 100% | `却下!` | 24 s | Yes | Tight single-word box, perfect OCR confidence |
+| [4] magenta | 236x218 | 97% | 8% | `よけんなこのっ!!!...` (hallucinated) | 27 s | No | Mixed art/text; OCR confidence collapsed, truncated |
+| [5] cyan | 227x195 | 97% | 16% | `いモリなからケーカしないで~~~っ!!!...` (hallucinated) | 39 s | No | Too much content; OCR hallucinated, truncated at 32 chars |
+| [6] red | 168x124 | 91% | 8% | `マジいてんんだぞ!!!...` (hallucinated) | 28 s | No | OCR hallucination flagged by low confidence, truncated |
+| [7] green | 162x254 | 97% | 98% | `一瞬くらい検討してくださいよー!` | 39 s | Yes | Clean bubble, both scores well above 71% |
+| [8] blue | 145x126 | 81% | 16% | (hallucinated) | 38 s | No | Background art misdetected; OCR below gate, truncated |
 
 **Det %** = jp_detect per-box confidence (mean probability of thresholded pixels).
 **OCR %** = manga-ocr-rs dimension-adjusted confidence. **Pass** = both >= 71% (the confidence gate used by lenzu's local-first pipeline).
 
-The pattern is clear: boxes that pass both confidence gates ([1], [3], [7]) are the accurate ones.
-Boxes with low detection or OCR confidence reliably indicate merged regions or hallucinated output.
+The pattern is clear: boxes that pass both confidence gates ([1], [2], [3], [7]) produce accurate text.
+High-confidence crops complete in 0.8–1.7 s. Low-confidence crops take 25–40 s because the
+decoder runs away generating garbage — the confidence gate catches these reliably.
 
 Individual crops (generated via `--save-crops`):
 
@@ -131,13 +132,19 @@ while a small box that overlaps art scores low. The confidence scores capture th
 
 | Stage | Time |
 |-------|------|
-| DBNet detection | ~800-1800 ms |
-| manga-ocr model load | ~1100-1300 ms |
-| OCR per crop | ~1-42 s (varies with content) |
-| Full page (9 crops) | ~240 s total |
-| Single panel (1 crop) | ~44 s total |
+| DBNet detection | ~700–1500 ms |
+| manga-ocr model load | ~1000–1100 ms |
+| OCR per crop (high confidence) | ~0.8–2 s |
+| OCR per crop (low confidence, hallucinating) | ~25–40 s |
+| Full page (9 crops) | ~229 s total |
+| Single panel (1 crop) | ~37 s total |
 
-OCR is the bottleneck — beam search decoding is CPU-intensive. Detection is fast (~1-2s).
+High-confidence crops (clean single bubbles) complete in 1–2 s. Low-confidence crops
+(merged regions, mixed art) take 25–40 s because the beam search decoder runs away
+generating garbage — these are reliably caught by the OCR confidence gate (<71%) and
+truncated at 32 characters.
+
+Detection is fast (~0.7–1.5 s) with auto-scaled parameters from `detection_params_for_size()`.
 For production use, ONNX GPU execution providers (CUDA, TensorRT) would reduce per-crop
 latency dramatically.
 
