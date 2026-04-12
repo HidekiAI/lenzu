@@ -132,26 +132,24 @@ tokenizers C++ core). No additional system packages are needed beyond `build-ess
 
 ## 5. Integration into lenzu
 
-### 5.1 New OCR tier
+### 5.1 New OCR tier (IMPLEMENTED)
 
 The current fallback chain is:
 
 ```
-Ollama (local LLM, OCR+translate)  →  OpenRouter (remote, OCR+translate)
+jp_detect (>= 71% detection confidence)
+  → manga-ocr-rs (>= 71% OCR confidence)
+    → DONE (fully offline, no LLM)
+  → gemma4:e2b (Ollama) → glm-ocr (Ollama) → free remote → paid remote (Gemini 2.0 Flash)
 ```
 
-manga-ocr inserts a new tier for the OCR-only case:
+manga-ocr-rs is the first tier in the pipeline, sitting before all LLM backends. When both detection and OCR confidence scores pass the 71% gate, results are returned immediately — no Ollama, no network. The LLM chain is only reached when confidence is too low.
 
-```
-manga-ocr (local ONNX, ~300 ms)  →  Ollama (local LLM, ~3 s)  →  OpenRouter
-```
+This tier is active for ALL capture methods (Shift+Click and Ctrl+Shift+Click) when:
+- The text_detector is configured (jp_detect DBNet model loaded)
+- manga-ocr-rs models are loaded (auto-downloaded on first run, ~140 MB)
 
-This tier is only active when:
-- The user has downloaded the model files
-- `config.json` sets `"manga_ocr_model_dir"` to the directory
-- Translation is not needed (new config flag `"ocr_only": true`)
-
-For lenzu's primary use case (OCR + translation together), the LLM tiers remain.
+Models are loaded once at startup and shared across threads via `Arc`.
 
 ### 5.2 Config additions (future)
 
@@ -201,14 +199,16 @@ kept at the public API boundary.  Steps to publish as `manga-ocr-rs`:
 
 ## 7. Known limitations & future work
 
-| Item | Notes |
-|------|-------|
-| Greedy decode | Beam search (k=4) improves accuracy ~5–10% for ambiguous text |
-| No KV cache | Decoder is non-merged; each step is O(n²) — acceptable for short text |
-| FP32 only | No FP16 export available upstream; would save ~70 MB if produced |
-| CPU only | `ort` feature `cuda` would enable GPU inference; adds ~20 MB ORT binary |
-| Furigana | Appears in output as regular characters; caller filters if unwanted |
-| Vertical text | Handled by the model natively (trained on manga); no rotation needed |
+| Item | Confidence Impact | Notes |
+|------|-------------------|-------|
+| Greedy decode | Slightly lower raw_confidence vs beam search | Beam search (k=4) improves accuracy ~5–10% for ambiguous text |
+| No KV cache | None | Decoder is non-merged; each step is O(n²) — acceptable for short text |
+| FP32 only | None | No FP16 export available upstream; would save ~70 MB if produced |
+| CPU only | None | `ort` feature `cuda` would enable GPU inference; adds ~20 MB ORT binary |
+| Furigana | None | Appears in output as regular characters; caller filters if unwanted |
+| Vertical text | None | Handled by the model natively (trained on manga); no rotation needed |
+| Hallucination on merged regions | OCR confidence drops below 71% gate; `truncated` flag fires | Beam search decoder runs away without EOS when input contains multiple text columns or mixed art — reliably caught by low confidence score |
+| Ambiguous/noisy input | Low OCR confidence triggers LLM fallback | Results with < 71% OCR confidence are not trusted; pipeline falls through to Ollama → OpenRouter chain |
 
 ---
 

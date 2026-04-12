@@ -141,13 +141,13 @@ The `translate_extra_prompt` field (e.g., the furigana/romaji extension for Japa
 
 ### 3.2 Candidate comparison
 
-| Option | Accuracy on manga text | Size | Latency (CPU) | Notes |
-|---|---|---|---|---|
-| **DBNet (ONNX) — chosen** | High | ~5 MB | ~50–120 ms | Purpose-built text detector; model already in assets |
-| **YOLOv8n fine-tuned on manga** | High | ~6 MB | ~30–80 ms | Requires training pipeline; no dataset yet |
-| **CRAFT (ONNX export)** | High | ~30 MB | ~200–400 ms | Character-level; larger and slower than needed |
-| **EAST text detector** | Medium | ~90 MB | ~150–300 ms | Too large for edge deployment |
-| **Generic YOLOv8n (COCO)** | **Low — disqualified** | 6 MB | ~30 ms | Wrong training domain; see above |
+| Option | Accuracy on manga text | Size | Latency (CPU) | Confidence Scoring | Notes |
+|---|---|---|---|---|---|
+| **DBNet (ONNX) — chosen** | High | ~5 MB | ~50–120 ms | Per-box 0–100% (mean prob of thresholded pixels) | Purpose-built text detector; model already in assets |
+| **YOLOv8n fine-tuned on manga** | High | ~6 MB | ~30–80 ms | Per-box objectness score | Requires training pipeline; no dataset yet |
+| **CRAFT (ONNX export)** | High | ~30 MB | ~200–400 ms | Per-pixel affinity score | Character-level; larger and slower than needed |
+| **EAST text detector** | Medium | ~90 MB | ~150–300 ms | Per-box score | Too large for edge deployment |
+| **Generic YOLOv8n (COCO)** | **Low — disqualified** | 6 MB | ~30 ms | N/A | Wrong training domain; see above |
 
 ### 3.3 Decision: DBNet via `stabrise-text_detection_dbnet_ml_v02_model.onnx`
 
