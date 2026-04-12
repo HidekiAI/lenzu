@@ -225,11 +225,12 @@ echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true).
 # Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
 # trap from firing and leaving the ollama container running after lenzu exits.
 
-# Pass through CLI flags (e.g. --furigana_only) to the binary.
+# Pass through CLI flags (e.g. --furigana_only, --mecab_overwrite) to the binary.
 LENZU_ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --furigana_only) LENZU_ARGS+=("--furigana_only") ;;
+        --furigana_only)   LENZU_ARGS+=("--furigana_only") ;;
+        --mecab_overwrite) LENZU_ARGS+=("--mecab_overwrite") ;;
     esac
 done
 

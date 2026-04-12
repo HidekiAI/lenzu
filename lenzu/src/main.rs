@@ -309,6 +309,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.text_detection_pad_x,
         cfg.text_detection_pad_y,
     );
+    eprintln!(
+        "[Config] flags: furigana_only={} mecab_overwrite={} enrichment_enabled={} overlay_enabled={}",
+        cfg.furigana_only, cfg.mecab_overwrite, cfg.enrichment_enabled, cfg.overlay_enabled,
+    );
 
     // Build the text detector once at startup; shared across capture threads via Arc.
     let text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>> =
