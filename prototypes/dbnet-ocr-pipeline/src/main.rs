@@ -14,31 +14,12 @@ use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use std::time::Instant;
 
-// ── Detection scale table ────────────────────────────────────────────────────
-// DBNet always runs at 640x640 internally, so dilation of N pixels at 640-res
-// represents N*(original/640) pixels in the original image — much more blur
-// for large inputs.  Scale params inversely with image size.
-struct ScaleEntry {
-    max_dimension: u32,
-    dilation: u8,
-    threshold: f32,
-    pad: u32,
-}
+/// Confidence threshold — boxes / OCR results at or below this are considered
+/// low-confidence and trigger fallback behaviour.
+const CONFIDENCE_GATE: f32 = 0.70;
 
-const SCALE_TABLE: &[ScaleEntry] = &[
-    ScaleEntry { max_dimension:   800, dilation: 16, threshold: 0.20, pad: 32 },
-    ScaleEntry { max_dimension:  1280, dilation: 10, threshold: 0.25, pad: 24 },
-    ScaleEntry { max_dimension:  1920, dilation:  6, threshold: 0.35, pad: 16 },
-    ScaleEntry { max_dimension:  2560, dilation:  3, threshold: 0.45, pad: 12 },
-    ScaleEntry { max_dimension: u32::MAX, dilation: 0, threshold: 0.50, pad:  8 },
-];
-
-fn params_for_size(w: u32, h: u32) -> &'static ScaleEntry {
-    let longest = w.max(h);
-    SCALE_TABLE.iter()
-        .find(|e| longest <= e.max_dimension)
-        .unwrap_or(SCALE_TABLE.last().unwrap())
-}
+/// Maximum characters to keep from a low-confidence OCR result.
+const LOW_CONF_MAX_CHARS: usize = 32;
 
 // Minimum crop size — skip boxes too small to contain readable text.
 const MIN_CROP_SIDE: u32 = 16;
@@ -128,11 +109,10 @@ fn run(
     eprintln!("image: {image_path} ({img_w}x{img_h})");
 
     // ── Select detection parameters ──────────────────────────────────────────
-    // Auto-scale by image size unless explicitly overridden via CLI flags.
-    let entry = params_for_size(img_w, img_h);
+    let entry = jp_detect::detection_params_for_size(img_w, img_h);
     let threshold = threshold_override.unwrap_or(entry.threshold);
     let dilation = dilation_override.unwrap_or(entry.dilation);
-    let pad = pad_override.unwrap_or(entry.pad);
+    let pad = pad_override.unwrap_or(entry.pad_x);
 
     // ── Step 1: Text detection (DBNet) ───────────────────────────────────────
     let t_detect = Instant::now();
@@ -141,14 +121,122 @@ fn run(
         None, threshold, dilation, pad, pad,
     )?.context("DBNet detector not available (onnx feature missing?)")?;
 
-    let boxes = detector.detect(&img);
+    let mut boxes = detector.detect(&img);
     let detect_ms = t_detect.elapsed().as_millis();
     eprintln!("detection: {} boxes in {} ms", boxes.len(), detect_ms);
 
+    // ── Separate high / low confidence boxes ────────────────────────────────
+    // Boxes with confidence <= CONFIDENCE_GATE get retried at different scales.
+    let (confident, weak): (Vec<_>, Vec<_>) = boxes.drain(..)
+        .partition(|b: &jp_detect::TextBoundingBox| b.confidence > CONFIDENCE_GATE);
+
+    boxes = confident;
+
+    if !weak.is_empty() {
+        eprintln!(
+            "{} low-confidence boxes (confidence <= {:.0}%) — retrying at different scales",
+            weak.len(), CONFIDENCE_GATE * 100.0,
+        );
+
+        // Try 0.5x — text becomes larger relative to DBNet's 640×640 input.
+        let (sw, sh) = (img_w / 2, img_h / 2);
+        if sw > 0 && sh > 0 {
+            let se = jp_detect::detection_params_for_size(sw, sh);
+            let small_det = jp_detect::build_text_detector(
+                None, se.threshold, se.dilation, se.pad_x, se.pad_y,
+            )?.context("DBNet detector (0.5x retry)")?;
+            let small_img = img.resize_exact(
+                sw, sh, image::imageops::FilterType::Triangle,
+            );
+            let retry_boxes: Vec<_> = small_det.detect(&small_img).into_iter()
+                .filter(|b| b.confidence > CONFIDENCE_GATE)
+                .map(|b| jp_detect::TextBoundingBox {
+                    x1: b.x1 * 2, y1: b.y1 * 2,
+                    x2: b.x2 * 2, y2: b.y2 * 2,
+                    ..b
+                })
+                .collect();
+            if !retry_boxes.is_empty() {
+                eprintln!("  retry 0.5x: recovered {} confident boxes", retry_boxes.len());
+                boxes.extend(retry_boxes);
+            }
+        }
+
+        // Try 1.5x — text becomes smaller relative to DBNet's 640×640 input.
+        let (lw, lh) = (img_w * 3 / 2, img_h * 3 / 2);
+        let le = jp_detect::detection_params_for_size(lw, lh);
+        let large_det = jp_detect::build_text_detector(
+            None, le.threshold, le.dilation, le.pad_x, le.pad_y,
+        )?.context("DBNet detector (1.5x retry)")?;
+        let large_img = img.resize_exact(
+            lw, lh, image::imageops::FilterType::Triangle,
+        );
+        let retry_boxes: Vec<_> = large_det.detect(&large_img).into_iter()
+            .filter(|b| b.confidence > CONFIDENCE_GATE)
+            .map(|b| jp_detect::TextBoundingBox {
+                x1: b.x1 * 2 / 3, y1: b.y1 * 2 / 3,
+                x2: b.x2 * 2 / 3, y2: b.y2 * 2 / 3,
+                ..b
+            })
+            .collect();
+        if !retry_boxes.is_empty() {
+            eprintln!("  retry 1.5x: recovered {} confident boxes", retry_boxes.len());
+            boxes.extend(retry_boxes);
+        }
+    }
+
+    // If still nothing even after retries, try a full-image retry at both scales
+    // (covers the case where the original pass returned zero boxes at all).
     if boxes.is_empty() {
-        eprintln!("no text detected");
+        eprintln!("no confident boxes — retrying full detection at different scales");
+
+        let (sw, sh) = (img_w / 2, img_h / 2);
+        if sw > 0 && sh > 0 {
+            let se = jp_detect::detection_params_for_size(sw, sh);
+            let small_det = jp_detect::build_text_detector(
+                None, se.threshold, se.dilation, se.pad_x, se.pad_y,
+            )?.context("DBNet detector (0.5x full retry)")?;
+            let small_img = img.resize_exact(sw, sh, image::imageops::FilterType::Triangle);
+            let small_boxes: Vec<_> = small_det.detect(&small_img).into_iter()
+                .map(|b| jp_detect::TextBoundingBox {
+                    x1: b.x1 * 2, y1: b.y1 * 2,
+                    x2: b.x2 * 2, y2: b.y2 * 2,
+                    ..b
+                })
+                .collect();
+            if !small_boxes.is_empty() {
+                eprintln!("  full retry 0.5x: found {} boxes", small_boxes.len());
+                boxes = small_boxes;
+            }
+        }
+
+        if boxes.is_empty() {
+            let (lw, lh) = (img_w * 3 / 2, img_h * 3 / 2);
+            let le = jp_detect::detection_params_for_size(lw, lh);
+            let large_det = jp_detect::build_text_detector(
+                None, le.threshold, le.dilation, le.pad_x, le.pad_y,
+            )?.context("DBNet detector (1.5x full retry)")?;
+            let large_img = img.resize_exact(lw, lh, image::imageops::FilterType::Triangle);
+            let large_boxes: Vec<_> = large_det.detect(&large_img).into_iter()
+                .map(|b| jp_detect::TextBoundingBox {
+                    x1: b.x1 * 2 / 3, y1: b.y1 * 2 / 3,
+                    x2: b.x2 * 2 / 3, y2: b.y2 * 2 / 3,
+                    ..b
+                })
+                .collect();
+            if !large_boxes.is_empty() {
+                eprintln!("  full retry 1.5x: found {} boxes", large_boxes.len());
+                boxes = large_boxes;
+            }
+        }
+    }
+
+    if boxes.is_empty() {
+        eprintln!("no text detected (including retries)");
         return Ok(());
     }
+
+    eprintln!("final: {} boxes after confidence filtering + retries", boxes.len());
 
     // ── Save bbox overlay image ─────────────────────────────────────────────
     if let Some(path) = save_boxes {
@@ -189,20 +277,57 @@ fn run(
         }
 
         let t = Instant::now();
-        let text = ocr.recognize(&crop)
-            .unwrap_or_else(|e| format!("ERROR: {e}"));
+        let rec = ocr.recognize_with_score(&crop)
+            .unwrap_or_else(|e| manga_ocr_rs::Recognition {
+                text: format!("ERROR: {e}"),
+                score: 0.0,
+                raw_confidence: 0.0,
+                confidence: 0.0,
+                truncated: true,
+                token_count: 0,
+            });
         let ms = t.elapsed().as_millis();
+
+        // When OCR confidence is low (or decoder truncated without EOS),
+        // keep text as-is if short, but truncate long strings as garbage.
+        let low_conf_ocr = rec.confidence <= CONFIDENCE_GATE || rec.truncated;
+        let char_count = rec.text.chars().count();
+        let text = if low_conf_ocr && char_count >= LOW_CONF_MAX_CHARS {
+            let truncated: String = rec.text.chars().take(LOW_CONF_MAX_CHARS).collect();
+            eprintln!(
+                "[{i}] low-confidence OCR ({:.1}%): truncated {char_count} → {} chars",
+                rec.confidence * 100.0, LOW_CONF_MAX_CHARS,
+            );
+            truncated
+        } else {
+            if low_conf_ocr {
+                eprintln!(
+                    "[{i}] low-confidence OCR ({:.1}%) but short ({char_count} chars) — keeping as-is",
+                    rec.confidence * 100.0,
+                );
+            }
+            rec.text.clone()
+        };
 
         if json_output {
             results.push(serde_json::json!({
                 "box": [bbox.x1, bbox.y1, bbox.x2, bbox.y2],
                 "size": [w, h],
+                "detect_confidence": bbox.confidence,
                 "text": text,
+                "ocr_confidence": rec.confidence,
+                "ocr_truncated": low_conf_ocr && char_count >= LOW_CONF_MAX_CHARS,
                 "ms": ms,
             }));
         } else {
+            let conf_tag = format!(
+                " [det:{:.0}% ocr:{:.0}%{}]",
+                bbox.confidence * 100.0,
+                rec.confidence * 100.0,
+                if low_conf_ocr && char_count >= LOW_CONF_MAX_CHARS { " TRUNCATED" } else { "" },
+            );
             println!(
-                "[{i}] ({ms} ms) [{},{},{},{}] ({w}x{h}): {text:?}",
+                "[{i}] ({ms} ms) [{},{},{},{}] ({w}x{h}): {text:?}{conf_tag}",
                 bbox.x1, bbox.y1, bbox.x2, bbox.y2
             );
         }

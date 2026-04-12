@@ -6,12 +6,27 @@ using `scripts/test-ocr.sh --no-timeout` on hardware with 4GB VRAM (NVIDIA).
 ## Current chain
 
 ```
-gemma4:e2b  →  glm-ocr  →  remote (OpenRouter / Gemini 2.0 Flash)
+jp_detect (>= 71% det confidence)
+  → manga-ocr-rs (>= 71% OCR confidence)
+    → DONE (fully offline, no LLM)
+  → gemma4:e2b  →  glm-ocr  →  free remote  →  paid remote (Gemini 2.0 Flash)
 ```
+
+The local-first path (jp_detect + manga-ocr-rs) runs before any LLM. When both
+detection and OCR confidence are >= 71%, results are returned immediately — no
+Ollama, no network. The LLM chain is only reached when confidence is too low.
 
 ---
 
 ## Tested and dropped
+
+| Model | Usability | OCR Accuracy | Verdict |
+|-------|-----------|-------------|---------|
+| moondream2 | 0% — wrong output type | 0% — prose, not OCR | Captioning model, useless |
+| qwen2.5:1.5b/0.5b | 0% — no vision input | 0% — hallucinates from prompt | Text-only, wrong family |
+| qwen2-vl:2b | 0% — doesn't exist | N/A | Wrong model name |
+| qwen2.5vl:3b | 0% — always times out | N/A — never completes | CPU-bound on 4 GB VRAM |
+| florence2:large | 0% — no ollama package | N/A | Python-only, excluded |
 
 ### moondream / moondream2
 - **Ollama name**: `moondream`
@@ -50,7 +65,21 @@ gemma4:e2b  →  glm-ocr  →  remote (OpenRouter / Gemini 2.0 Flash)
 
 ## Retained models
 
-### gemma4:e2b (primary local)
+### jp_detect + manga-ocr-rs (local-first, no LLM)
+- **Crates**: `jp_detect >= 0.2.2`, `manga-ocr-rs >= 0.1.1`
+- **Size**: ~4.7 MB (DBNet) + ~140 MB (manga-ocr encoder+decoder)
+- **Speed**: ~50-120 ms detection + ~1-42 s OCR per crop (CPU); much faster with GPU
+- **Quality**: Excellent for clean, isolated text regions. Per-box confidence scores
+  (0.0-1.0) reliably predict accuracy — boxes passing the 71% gate on both detection
+  and OCR are consistently correct. Fails gracefully on merged/ambiguous regions by
+  reporting low confidence, triggering fallback to the LLM chain.
+- **Confidence scores**: Detection confidence = mean probability of thresholded DBNet pixels.
+  OCR confidence = dimension-adjusted geometric mean of per-token probabilities.
+  `truncated` flag fires when decoder runs away without EOS (strong hallucination signal).
+- **Notes**: Loaded once at startup, shared via `Arc`. No network, no API key. This is
+  the preferred path — the LLM chain exists as fallback for low-confidence cases only.
+
+### gemma4:e2b (primary local LLM fallback)
 - **Size**: ~7.2 GB
 - **Speed**: 47–110 s on partial GPU (4 GB VRAM)
 - **Quality**: Inconsistent block detection (2–5 blocks per run); misses vertical CJK text

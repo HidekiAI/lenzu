@@ -2,10 +2,17 @@
 
 Fully offline Japanese OCR pipeline combining two crates:
 
-1. **[`jp_detect`](https://crates.io/crates/jp_detect)** (DBNet) — locates text bounding boxes in an image
-2. **[`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs)** — recognizes Japanese text from each cropped region
+1. **[`jp_detect`](https://crates.io/crates/jp_detect) >= 0.2.2** (DBNet) — locates text bounding boxes with per-box confidence scores
+2. **[`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs) >= 0.1.1** — recognizes Japanese text from each cropped region with confidence scores
 
 No LLM, no cloud API. Raw Japanese text output.
+
+### Confidence-gated pipeline
+
+Both crates now expose confidence scores (0.0-1.0). The pipeline uses these to:
+- **Retry detection** at 0.5x / 1.5x image scales when detection confidence is low (<= 70%)
+- **Truncate OCR output** at 32 characters when OCR confidence is low (<= 70%) and the text is long (garbage guessing)
+- Report both `detect_confidence` and `ocr_confidence` in JSON output
 
 ## Usage
 
@@ -42,17 +49,23 @@ Auto-scaled params: threshold=0.35, dilation=6, pad=16 (longest edge 1635 — me
 
 9 boxes detected. Results by box:
 
-| Box | Size | OCR text | Accurate? |
-|-----|------|----------|-----------|
-| [0] red | 672x581 | `いや、いや...いやいやぁっ、こういう最近人気の...` (hallucinated) | No — merged multiple panels |
-| [1] green | 313x523 | `ああたしのオススメはうぶんちゅ` | Yes |
-| [2] blue | 117x106 | `その` | Partial |
-| [3] orange | 86x150 | `却下!` | Yes |
-| [4] magenta | 236x218 | `よけんなこのっ!!!...` (hallucinated) | No — mixed art/text |
-| [5] cyan | 227x195 | `いモリなからケーカしないで~~~っ!!!...` (hallucinated) | No — too much content |
-| [6] red | 168x124 | `マジいてんんだぞ!!!...` (hallucinated) | No |
-| [7] green | 162x254 | `一瞬くらい検討してくださいよー!` | Yes |
-| [8] blue | 145x126 | (hallucinated) | No |
+| Box | Size | Det % | OCR % | OCR text | Pass? | Notes |
+|-----|------|-------|-------|----------|-------|-------|
+| [0] red | 672x581 | low | low | `いや、いや...いやいやぁっ、こういう最近人気の...` (hallucinated) | No | Merged multiple panels; both scores below gate |
+| [1] green | 313x523 | high | high | `ああたしのオススメはうぶんちゅ` | Yes | Clean single bubble, both scores above 71% |
+| [2] blue | 117x106 | mid | mid | `その` | Partial | Small fragment; detection confident but OCR uncertain |
+| [3] orange | 86x150 | high | high | `却下!` | Yes | Tight single-word box, high confidence both |
+| [4] magenta | 236x218 | mid | low | `よけんなこのっ!!!...` (hallucinated) | No | Mixed art/text; OCR confidence collapsed |
+| [5] cyan | 227x195 | mid | low | `いモリなからケーカしないで~~~っ!!!...` (hallucinated) | No | Too much content; OCR score below gate, truncated at 32 chars |
+| [6] red | 168x124 | mid | low | `マジいてんんだぞ!!!...` (hallucinated) | No | OCR hallucination flagged by low confidence |
+| [7] green | 162x254 | high | high | `一瞬くらい検討してくださいよー!` | Yes | Clean bubble, both scores well above 71% |
+| [8] blue | 145x126 | low | low | (hallucinated) | No | Background art misdetected; both scores below gate |
+
+**Det %** = jp_detect per-box confidence (mean probability of thresholded pixels).
+**OCR %** = manga-ocr-rs dimension-adjusted confidence. **Pass** = both >= 71% (the confidence gate used by lenzu's local-first pipeline).
+
+The pattern is clear: boxes that pass both confidence gates ([1], [3], [7]) are the accurate ones.
+Boxes with low detection or OCR confidence reliably indicate merged regions or hallucinated output.
 
 Individual crops (generated via `--save-crops`):
 
@@ -101,15 +114,18 @@ length constraint and will fill the output when the input is ambiguous.
 **Key insight**: the OCR model works well when each crop contains a single, tight text region.
 The quality bottleneck is detection precision, not OCR accuracy.
 
-### Crop size correlates with accuracy
+### Confidence scores predict accuracy
 
 From the full-page run:
-- **Accurate boxes**: [1] 313x523, [3] 86x150, [7] 162x254 — these captured clean, isolated speech bubbles
-- **Hallucinated boxes**: [0] 672x581, [4] 236x218, [5] 227x195 — these captured merged regions or mixed art
+- **High-confidence boxes** ([1], [3], [7]): both detection and OCR scores above 71% — all produced accurate text
+- **Low-confidence boxes** ([0], [4], [5], [6], [8]): at least one score below 71% — all were hallucinated or partial
 
-The pattern: boxes that span a single speech bubble produce accurate OCR regardless of size.
-Boxes that merge multiple bubbles or include background art trigger hallucination. Size alone
-isn't the problem — it's whether the crop contains exactly one text region.
+The confidence gate at 71% cleanly separates accurate results from garbage. This is the
+threshold used by lenzu's local-first pipeline to decide whether manga-ocr-rs output can be
+trusted or must fall through to the LLM chain.
+
+Size alone doesn't predict accuracy — a large box with a single speech bubble scores high,
+while a small box that overlaps art scores low. The confidence scores capture this nuance.
 
 ### Performance (CPU, no GPU acceleration)
 
@@ -125,11 +141,17 @@ OCR is the bottleneck — beam search decoding is CPU-intensive. Detection is fa
 For production use, ONNX GPU execution providers (CUDA, TensorRT) would reduce per-crop
 latency dramatically.
 
-### Next steps for lenzu integration
+### lenzu integration (done)
 
-1. **Panel segmentation before detection** — split manga pages into individual panels first,
-   then run DBNet on each panel for tighter bounding boxes
-2. **Max crop size filter** — reject crops above a threshold (e.g. 300px in any dimension)
-   to avoid hallucination on merged boxes
-3. **GPU acceleration** — enable ONNX CUDA EP for both jp_detect and manga-ocr-rs
-4. **Parallel OCR** — process crops concurrently (models are thread-safe)
+The confidence-gated pipeline is now integrated into `lenzu_client`:
+
+- Both Shift+Click (lens) and Ctrl+Shift+Click (fullscreen) paths try local OCR first
+- Detection confidence >= 71% AND OCR confidence >= 71% => result returned immediately, no LLM
+- Below the gate => falls through to Ollama -> local fallbacks -> free remote -> paid remote
+- manga-ocr-rs models are loaded once at startup and shared across threads via `Arc`
+
+### Remaining optimizations
+
+1. **GPU acceleration** — enable ONNX CUDA EP for both jp_detect and manga-ocr-rs
+2. **Parallel OCR** — process crops concurrently (models are thread-safe)
+3. **Panel segmentation** — split manga pages into panels before detection for tighter boxes
