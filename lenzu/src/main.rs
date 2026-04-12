@@ -33,7 +33,9 @@ fn format_for_overlay(
         .map(|r| match mode {
             Original => r.original.clone(),
             English => r.english.clone().unwrap_or_else(|| r.original.clone()),
-            Furigana => r.furigana.clone().unwrap_or_else(|| r.original.clone()),
+            Furigana => r.furigana.clone()
+                .or_else(|| r.romaji.clone())
+                .unwrap_or_else(|| r.original.clone()),
             Romaji => r.romaji.clone().unwrap_or_else(|| r.original.clone()),
             All => {
                 let mut parts = vec![r.original.clone()];
@@ -663,7 +665,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let (fallback_api_key, primary_endpoint, primary_model,
                      free_remote_endpoint, free_remote_model,
                      fallback_endpoint, fallback_model, prompt,
-                     per_region_prompt, text_detector, local_ocr) = {
+                     per_region_prompt, text_detector, local_ocr,
+                     enrichment_enabled, enrichment_model, enrichment_prompt,
+                     enrichment_timeout_secs) = {
                     let mut s = state_main.borrow_mut();
                     s.last_capture = Instant::now();
                     s.status = if force_remote {
@@ -685,6 +689,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         s.config.resolved_per_region_prompt(),
                         s.text_detector.clone(),
                         s.local_ocr.clone(),
+                        s.config.enrichment_enabled,
+                        s.config.enrichment_model.clone(),
+                        s.config.resolved_enrichment_prompt(),
+                        s.config.enrichment_timeout_secs,
                     );
                     vals
                     // borrow_mut dropped here — safe for other callbacks to borrow
@@ -830,7 +838,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         s_conf.text_detection_crop_padding, 256,
                                                     );
                                                     if let Some(results) = local_result {
-                                                        let t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
+                                                        let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
                                                             client::TranslationResult {
                                                                 original: r.text.clone(),
                                                                 top_xy: Some(format!("{},{}", r.source_box.x1, r.source_box.y1)),
@@ -845,8 +853,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         }).collect();
                                                         let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                         eprintln!("[OCR] fullscreen local-first succeeded — skipping LLM chain");
+                                                        let backend = if enrichment_enabled {
+                                                            let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
+                                                            if client::enrich_local_results(
+                                                                &mut t_results, &primary_endpoint, enrich_model,
+                                                                &enrichment_prompt, enrichment_timeout_secs,
+                                                                s_conf.primary_num_ctx,
+                                                            ) {
+                                                                "local:manga-ocr+enriched".to_string()
+                                                            } else {
+                                                                "local:manga-ocr".to_string()
+                                                            }
+                                                        } else {
+                                                            "local:manga-ocr".to_string()
+                                                        };
                                                         return Ok((t_results, client::OcrMeta {
-                                                            backend: "local:manga-ocr".to_string(),
+                                                            backend,
                                                             elapsed_ms: total_ocr_ms,
                                                         }));
                                                     }
@@ -929,7 +951,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     256,
                                                 );
                                                 if let Some(results) = local_result {
-                                                    let t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
+                                                    let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
                                                         client::TranslationResult {
                                                             original: r.text.clone(),
                                                             top_xy: Some(format!("{},{}", r.source_box.x1, r.source_box.y1)),
@@ -944,11 +966,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         }
                                                     }).collect();
                                                     let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
+                                                    eprintln!("[OCR] local-first pipeline succeeded — {} results, skipping LLM chain", t_results.len());
+                                                    let backend = if enrichment_enabled {
+                                                        let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
+                                                        if client::enrich_local_results(
+                                                            &mut t_results, &primary_endpoint, enrich_model,
+                                                            &enrichment_prompt, enrichment_timeout_secs,
+                                                            s_conf.primary_num_ctx,
+                                                        ) {
+                                                            "local:manga-ocr+enriched".to_string()
+                                                        } else {
+                                                            "local:manga-ocr".to_string()
+                                                        }
+                                                    } else {
+                                                        "local:manga-ocr".to_string()
+                                                    };
                                                     let meta = client::OcrMeta {
-                                                        backend: "local:manga-ocr".to_string(),
+                                                        backend,
                                                         elapsed_ms: total_ocr_ms,
                                                     };
-                                                    eprintln!("[OCR] local-first pipeline succeeded — {} results, skipping LLM chain", t_results.len());
                                                     return Ok((t_results, meta));
                                                 }
                                                 eprintln!("[OCR] local-first pipeline: confidence below gate — falling through to LLM chain");

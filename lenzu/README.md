@@ -135,11 +135,17 @@ Shift+Click
   │       │                                            │
   │       ├─ local OCR (manga-ocr-rs) per box         │
   │       │   ├─ ALL boxes: det >= 71% AND ocr >= 71% │
+  │       │   │   ├─ enrichment_enabled?               │
+  │       │   │   │   ├─ yes: text-only Ollama call    │
+  │       │   │   │   │   (furigana/romaji/translation)│
+  │       │   │   │   │   success → +enriched label    │
+  │       │   │   │   │   fail → raw text (graceful)   │
+  │       │   │   │   └─ no: raw text only             │
   │       │   │   └─ DONE ← return results ───────────┼──► format_for_overlay()
-  │       │   │       backend: "local:manga-ocr"       │        │
-  │       │   └─ any box below gate                    │        ├─ UDP JSON ──► lenzu_server
-  │       │       │                                    │        ├─ clipboard
-  │       │       ▼                                    │        └─ ocr_history.txt
+  │       │   │       backend: "local:manga-ocr[+enriched]"    │
+  │       │   │                                        │        ├─ UDP JSON ──► lenzu_server
+  │       │   └─ any box below gate                    │        ├─ clipboard
+  │       │       │                                    │        └─ ocr_history.txt
   │       ├─ per-region LLM (per_region_prompt)        │
   │       │   ├─ any region succeeds                   │
   │       │   │   └─ DONE ← return results ────────────┼──► format_for_overlay() ──► ...
@@ -197,8 +203,14 @@ Ctrl+Shift+Click
   │       │
   │       ├─ local OCR (manga-ocr-rs) on chosen box
   │       │   ├─ det >= 71% AND ocr >= 71%
+  │       │   │   ├─ enrichment_enabled?
+  │       │   │   │   ├─ yes: text-only Ollama call
+  │       │   │   │   │   (furigana/romaji/translation)
+  │       │   │   │   │   success → +enriched label
+  │       │   │   │   │   fail → raw text (graceful)
+  │       │   │   │   └─ no: raw text only
   │       │   │   └─ DONE ← return results ──► format_for_overlay()
-  │       │   │       backend: "local:manga-ocr"       │
+  │       │   │       backend: "local:manga-ocr[+enriched]"
   │       │   └─ below gate                            ├─ UDP ──► lenzu_server
   │       │       │                                    ├─ clipboard
   │       │       ▼                                    └─ ocr_history.txt
@@ -320,7 +332,13 @@ Optional file in the working directory. All fields have defaults if the file is 
   // Translation
   "translate_src": "jpn",
   "translate_dest": "eng",
-  "translate_extra_prompt": "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation."
+  "translate_extra_prompt": "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation.",
+
+  // Text enrichment (post local-OCR) — adds furigana/romaji/translation to
+  // raw manga-ocr-rs text via text-only Ollama call (no image, no vision model)
+  "enrichment_enabled": true,
+  "enrichment_model": "qwen2.5:1.5b",
+  "enrichment_timeout_secs": 15
 }
 ```
 
@@ -343,6 +361,10 @@ Optional file in the working directory. All fields have defaults if the file is 
 | `text_detection_debug` | Write annotated debug PNG to `/dev/shm/lenzu/debug_detection.png` after each capture; draw box outlines on lens window | `false` |
 | `translate_src` / `translate_dest` | ISO 639-3 language codes (`"jpn"`, `"eng"`, `"kor"`, `"cmn"` …) | `"jpn"` / `"eng"` |
 | `translate_extra_prompt` | Appended to base prompt for language-specific fields | furigana/romaji hint |
+| `enrichment_enabled` | Enrich local OCR results with furigana/translation via text-only Ollama call | `true` |
+| `enrichment_model` | Text-only Ollama model for enrichment (not a vision model); `null` falls back to `llm_default_model` | `"qwen2.5:1.5b"` |
+| `enrichment_timeout_secs` | Timeout for each enrichment request | `15` |
+| `enrichment_prompt` | Override the entire enrichment prompt; `null` uses built-in (JP furigana/romaji). `{src}`/`{dest}` placeholders resolved. | `null` |
 
 ### How the prompt is built
 

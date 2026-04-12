@@ -126,7 +126,8 @@ impl OcrClient {
                 ]
             }],
             "temperature": 0.1,
-            "stream": true
+            "stream": true,
+            "logprobs": true
         });
         // json_object mode helps OpenAI-family models (OpenRouter/Gemini) return valid JSON.
         // Local ollama models (gemma4, glm-ocr) may return a single object when constrained
@@ -147,7 +148,84 @@ impl OcrClient {
         b64: &str,
     ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
         let payload = self.generate_payload(b64);
+        self.send_and_parse(payload)
+    }
 
+    /// Text-only call: sends raw text (not an image) to the LLM.
+    /// Used for enrichment (furigana/romaji/translation) after local OCR succeeds.
+    /// Returns (results, Option<confidence>) where confidence is the mean token
+    /// probability from logprobs (0.0–1.0).  None when logprobs are unavailable.
+    pub fn call_api_text_only(
+        &self,
+        user_text: &str,
+    ) -> Result<(Vec<TranslationResult>, Option<f64>), Box<dyn std::error::Error>> {
+        let payload = self.generate_text_payload(user_text);
+        self.send_and_parse_with_confidence(payload)
+    }
+
+    fn generate_text_payload(&self, user_text: &str) -> Value {
+        let mut payload = json!({
+            "model": self.model,
+            "messages": [{
+                "role": "user",
+                "content": format!("{}\n\nText: {}", self.prompt, user_text)
+            }],
+            "temperature": 0.1,
+            "stream": true,
+            "logprobs": true
+        });
+        if let Some(ctx) = self.num_ctx {
+            payload["options"] = json!({"num_ctx": ctx});
+        }
+        payload
+    }
+
+    /// Like `send_and_parse` but also returns the mean token probability from logprobs.
+    fn send_and_parse_with_confidence(
+        &self,
+        payload: Value,
+    ) -> Result<(Vec<TranslationResult>, Option<f64>), Box<dyn std::error::Error>> {
+        let mut req = self
+            .client
+            .post(&self.endpoint)
+            .header("HTTP-Referer", "https://github.com/HidekiAI/lenzu");
+        if !self.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let res = req.json(&payload).send().map_err(|e| -> Box<dyn std::error::Error> {
+            use std::error::Error;
+            let root = e.source().map(|s| format!(" — {s}")).unwrap_or_default();
+            format!("{e}{root}").into()
+        })?;
+
+        let status = res.status();
+        if !status.is_success() {
+            let error_body = res.text().unwrap_or_default();
+            let snippet: String = error_body.chars().take(800).collect();
+            return Err(format!("API HTTP {} — {}", status, snippet).into());
+        }
+
+        let (content, confidence, finish_reason) = Self::read_sse_content(res)?;
+
+        let conf_str = confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
+        let fr_str = finish_reason.as_deref().unwrap_or("n/a");
+        eprintln!("[enrichment] LLM response: conf={conf_str} finish_reason={fr_str}");
+
+        if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
+            let _ = writeln!(f, "[{}] conf={} finish={} {}", Local::now().format("%H:%M:%S"),
+                conf_str, fr_str, content.trim());
+        }
+
+        let results = self.normalize_results(&Value::String(content))?;
+        Ok((results, confidence))
+    }
+
+    /// POST a payload to the LLM endpoint, read the SSE stream, and parse the
+    /// accumulated JSON content into `Vec<TranslationResult>`.
+    fn send_and_parse(
+        &self,
+        payload: Value,
+    ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
         let mut req = self
             .client
             .post(&self.endpoint)
@@ -180,11 +258,17 @@ impl OcrClient {
         // Successful responses are SSE streams (stream:true keeps the TCP connection
         // alive while ollama generates, preventing its 30-second write-timeout from
         // firing mid-inference).  Accumulate all delta.content tokens into one string.
-        let content = Self::read_sse_content(res)?;
+        let (content, confidence, finish_reason) = Self::read_sse_content(res)?;
+
+        // Log LLM confidence and finish_reason (all backends: local + remote)
+        let conf_str = confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
+        let fr_str = finish_reason.as_deref().unwrap_or("n/a");
+        eprintln!("[OCR] LLM response: conf={conf_str} finish_reason={fr_str}");
 
         // Write accumulated content to debug file.
         if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
-            let _ = writeln!(f, "[{}] {}", Local::now().format("%H:%M:%S"), content.trim());
+            let _ = writeln!(f, "[{}] conf={} finish={} {}", Local::now().format("%H:%M:%S"),
+                conf_str, fr_str, content.trim());
         }
 
         // The accumulated SSE content is the raw model output (JSON string).
@@ -192,18 +276,16 @@ impl OcrClient {
         self.normalize_results(&Value::String(content))
     }
 
-    /// Read an OpenAI-compatible SSE stream and return the accumulated content string.
-    ///
-    /// Each SSE line looks like:
-    ///   `data: {"choices":[{"delta":{"content":"..."},"finish_reason":null}]}`
-    /// Final line: `data: [DONE]`
-    ///
-    /// By reading tokens as they arrive the HTTP connection stays alive,
-    /// preventing ollama's server-side write timeout from firing.
-    fn read_sse_content(res: reqwest::blocking::Response) -> Result<String, Box<dyn std::error::Error>> {
+    /// Read an SSE stream and return (content, confidence, finish_reason).
+    /// - `confidence`: mean token probability from logprobs (0.0–1.0), None if unavailable
+    /// - `finish_reason`: last `finish_reason` from the stream ("stop", "length", etc.)
+    fn read_sse_content(res: reqwest::blocking::Response) -> Result<(String, Option<f64>, Option<String>), Box<dyn std::error::Error>> {
         use std::io::BufRead;
         let reader = std::io::BufReader::new(res);
         let mut content = String::new();
+        let mut logprob_sum: f64 = 0.0;
+        let mut logprob_count: u32 = 0;
+        let mut finish_reason: Option<String> = None;
         for line in reader.lines() {
             let line = line?;
             let trimmed = line.trim();
@@ -215,10 +297,28 @@ impl OcrClient {
                     if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
                         content.push_str(delta);
                     }
+                    // Accumulate logprobs if present
+                    if let Some(tokens) = chunk["choices"][0]["logprobs"]["content"].as_array() {
+                        for tok in tokens {
+                            if let Some(lp) = tok["logprob"].as_f64() {
+                                logprob_sum += lp;
+                                logprob_count += 1;
+                            }
+                        }
+                    }
+                    // Capture finish_reason from the final chunk
+                    if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
+                        finish_reason = Some(fr.to_string());
+                    }
                 }
             }
         }
-        Ok(content)
+        let mean_prob = if logprob_count > 0 {
+            Some((logprob_sum / logprob_count as f64).exp())
+        } else {
+            None
+        };
+        Ok((content, mean_prob, finish_reason))
     }
 
     /// Strip optional markdown code fences that some LLMs add around JSON output.
@@ -243,6 +343,35 @@ impl OcrClient {
         s
     }
 
+    /// Fix single-quoted JSON keys/values that some LLMs produce (e.g. `'original'`
+    /// instead of `"original"`).  Only activates when `serde_json::from_str` fails on
+    /// the raw output — avoids false positives when single quotes appear legitimately
+    /// inside double-quoted string values.
+    fn fix_single_quoted_json(raw: &str) -> Option<String> {
+        // Quick check: if there are no single quotes at all, nothing to fix.
+        if !raw.contains('\'') {
+            return None;
+        }
+        // Strategy: walk the string and replace ' with " when it's used as a JSON
+        // structural delimiter (key/value boundary), not inside an already-double-quoted
+        // string.  This handles the common LLM output pattern:
+        //   { 'original': "text with apostrophe's", 'english': "..." }
+        let mut result = String::with_capacity(raw.len());
+        let mut in_double_quote = false;
+        let chars: Vec<char> = raw.chars().collect();
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '"' && (i == 0 || chars[i - 1] != '\\') {
+                in_double_quote = !in_double_quote;
+                result.push(ch);
+            } else if ch == '\'' && !in_double_quote {
+                result.push('"');
+            } else {
+                result.push(ch);
+            }
+        }
+        Some(result)
+    }
+
     fn normalize_results(
         &self,
         val: &Value,
@@ -253,11 +382,24 @@ impl OcrClient {
             let raw = Self::strip_markdown_fences(raw);
             eprintln!("[OCR] content is a string, attempting inner parse (first 200 chars): {}",
                 raw.chars().take(200).collect::<String>());
-            serde_json::from_str(raw).map_err(|e| {
-                eprintln!("[OCR] inner JSON parse failed: {e}  raw snippet: {}",
-                    raw.chars().take(400).collect::<String>());
-                e
-            })?
+            // Try strict parse first; if it fails, fix single-quoted keys and retry.
+            match serde_json::from_str(raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    if let Some(fixed) = Self::fix_single_quoted_json(raw) {
+                        eprintln!("[OCR] retrying parse after fixing single-quoted JSON keys");
+                        serde_json::from_str(&fixed).map_err(|e2| {
+                            eprintln!("[OCR] inner JSON parse still failed after fix: {e2}  raw snippet: {}",
+                                raw.chars().take(400).collect::<String>());
+                            e2
+                        })?
+                    } else {
+                        eprintln!("[OCR] inner JSON parse failed: {e}  raw snippet: {}",
+                            raw.chars().take(400).collect::<String>());
+                        return Err(e.into());
+                    }
+                }
+            }
         } else {
             eprintln!("[OCR] content type: {}", if val.is_array() { "array" } else if val.is_object() { "object" } else { "other" });
             val.clone()
@@ -550,6 +692,98 @@ impl DualOcrClient {
     }
 }
 
+/// Minimum mean token probability for enrichment to be accepted.
+/// Below this threshold the enrichment is discarded (model is guessing).
+const ENRICHMENT_CONFIDENCE_GATE: f64 = 0.75;
+
+/// Enrich local OCR results with furigana, romaji, and translation by sending
+/// the raw text (not an image) to a local Ollama model.
+///
+/// Confidence gate: if the LLM's mean token probability (from logprobs) is
+/// below 75%, the enrichment is discarded — the model is guessing.
+///
+/// Field cascade: if furigana is null but romaji is present, furigana is
+/// populated with romaji as a fallback reading aid.
+///
+/// On failure (Ollama down, timeout, bad JSON, low confidence), leaves results
+/// unchanged — the caller still gets the raw OCR text.  Returns `true` if
+/// enrichment succeeded for at least one result.
+pub fn enrich_local_results(
+    results: &mut Vec<TranslationResult>,
+    endpoint: &str,
+    model: &str,
+    prompt: &str,
+    timeout_secs: u64,
+    num_ctx: Option<u32>,
+) -> bool {
+    if results.is_empty() {
+        return false;
+    }
+
+    eprintln!("[enrichment] model={model} timeout={timeout_secs}s results={}", results.len());
+
+    let client = OcrClient::new_with_options(
+        String::new(), // no API key — local only
+        endpoint.to_string(),
+        model.to_string(),
+        prompt.to_string(),
+        Some(timeout_secs),
+        num_ctx,
+        false, // no json_object format for local ollama
+    );
+
+    // Enrich each result individually — more reliable alignment than batching.
+    let mut any_enriched = false;
+    for result in results.iter_mut() {
+        if result.original.trim().is_empty() {
+            continue;
+        }
+        let t0 = std::time::Instant::now();
+        match client.call_api_text_only(&result.original) {
+            Ok((enriched_vec, confidence)) => {
+                let elapsed = t0.elapsed();
+                let conf_pct = confidence.map(|c| c * 100.0);
+
+                // Confidence gate: reject low-confidence enrichment
+                if let Some(c) = confidence {
+                    if c < ENRICHMENT_CONFIDENCE_GATE {
+                        eprintln!("[enrichment] rejected — confidence {:.0}% < {:.0}% gate ({:.1}s)",
+                            c * 100.0, ENRICHMENT_CONFIDENCE_GATE * 100.0, elapsed.as_secs_f64());
+                        continue;
+                    }
+                }
+
+                if let Some(e) = enriched_vec.into_iter().next() {
+                    let has_furigana = e.furigana.is_some();
+                    let has_romaji = e.romaji.is_some();
+                    let has_english = e.english.is_some();
+
+                    if has_furigana || has_romaji || has_english {
+                        // Cascade: furigana → romaji (if furigana is null, use romaji as reading aid)
+                        result.furigana = e.furigana
+                            .or(e.romaji.clone())  // fallback: romaji as reading aid
+                            .or(result.furigana.take());
+                        result.romaji = e.romaji.or(result.romaji.take());
+                        result.english = e.english.or(result.english.take());
+                        any_enriched = true;
+                        eprintln!("[enrichment] ok ({:.1}s) furigana={} romaji={} english={} conf={:.0}%",
+                            elapsed.as_secs_f64(), has_furigana, has_romaji, has_english,
+                            conf_pct.unwrap_or(0.0));
+                    } else {
+                        eprintln!("[enrichment] LLM returned no usable fields ({:.1}s) conf={:.0}%",
+                            elapsed.as_secs_f64(), conf_pct.unwrap_or(0.0));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[enrichment] failed for {:?}: {e} — returning raw text",
+                    result.original.chars().take(30).collect::<String>());
+            }
+        }
+    }
+    any_enriched
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,6 +918,44 @@ mod tests {
         assert!(results[0].english.is_none());
         assert!(results[0].furigana.is_none());
         assert!(results[0].romaji.is_none());
+    }
+
+    // ── single-quote JSON fix ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_normalization_single_quoted_json_keys() {
+        // Some LLMs (glm-ocr) produce single-quoted JSON: {'original': "text"}
+        // normalize_results should fix this and parse correctly.
+        let single_quoted = Value::String(
+            r#"{'original': "オレが最初に", 'english': "I'll be the first", 'debug_info': null}"#.to_string()
+        );
+        let results = client().normalize_results(&single_quoted).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].original, "オレが最初に");
+        assert_eq!(results[0].english.as_deref(), Some("I'll be the first"));
+    }
+
+    #[test]
+    fn test_single_quote_fix_preserves_apostrophes_in_values() {
+        // Single quotes inside double-quoted string values must NOT be replaced.
+        let input = r#"{'english': "I'll eat"}"#;
+        let fixed = OcrClient::fix_single_quoted_json(input).unwrap();
+        assert!(fixed.contains("I'll eat"), "apostrophe inside value must be preserved");
+        // The key quotes should be double:
+        assert!(fixed.contains("\"english\""), "key must have double quotes");
+    }
+
+    #[test]
+    fn test_normalization_mixed_quotes_with_furigana() {
+        // Full enrichment response with single-quoted keys
+        let response = Value::String(
+            r#"{'original': "食べる", 'furigana': "食[た]べる", 'romaji': "taberu", 'english': "to eat", 'debug_info': null}"#.to_string()
+        );
+        let results = client().normalize_results(&response).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].furigana.as_deref(), Some("食[た]べる"));
+        assert_eq!(results[0].romaji.as_deref(), Some("taberu"));
+        assert_eq!(results[0].english.as_deref(), Some("to eat"));
     }
 
     // ── degenerate inputs return Err, not panic ───────────────────────────────
@@ -857,6 +1129,34 @@ mod tests {
         let c = OcrClient::new("".into(), "http://localhost:11434/v1/chat/completions".into(), "gemma4:e2b".into(), "prompt".into());
         let payload = c.generate_payload("dGVzdA==");
         assert_eq!(payload["model"], "gemma4:e2b");
+    }
+
+    #[test]
+    fn test_text_payload_has_no_image_url() {
+        let c = OcrClient::new("".into(), "http://localhost:11434/v1/chat/completions".into(), "glm-ocr".into(), "Translate this".into());
+        let payload = c.generate_text_payload("食べる");
+        let payload_str = payload.to_string();
+        assert!(!payload_str.contains("image_url"), "text-only payload must never contain image_url");
+        assert!(!payload_str.contains("base64"), "text-only payload must never contain base64 data");
+        assert_eq!(payload["model"], "glm-ocr");
+        // Content must be a plain string, not an array of content blocks.
+        let content = &payload["messages"][0]["content"];
+        assert!(content.is_string(), "text-only content must be a plain string, not an array");
+        let content_str = content.as_str().unwrap();
+        assert!(content_str.contains("食べる"), "content must include the input text");
+        assert!(content_str.contains("Translate this"), "content must include the prompt");
+        // Text-only enrichment payload must request logprobs for confidence scoring
+        assert_eq!(payload["logprobs"], true, "text-only payload must request logprobs");
+    }
+
+    #[test]
+    fn test_text_payload_includes_num_ctx() {
+        let c = OcrClient::new_with_options(
+            "".into(), "http://localhost:11434/v1/chat/completions".into(),
+            "glm-ocr".into(), "prompt".into(), Some(8), Some(2048), false,
+        );
+        let payload = c.generate_text_payload("テスト");
+        assert_eq!(payload["options"]["num_ctx"], 2048);
     }
 
     /// The `Authorization` header must be omitted when api_key is empty string (ollama path).

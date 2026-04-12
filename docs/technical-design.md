@@ -186,8 +186,10 @@ This section outlines the modern approach to Japanese text extraction in manga, 
    - Confidence scoring for detected regions (jp_detect: per-box detection confidence 0–100%; manga-ocr-rs: per-result OCR confidence 0–100%)
    - Confidence gate: both scores must be >= 71% for local results to be accepted
    - Progressive enhancement:
-     1. Try local detection (jp_detect DBNet) + local OCR (manga-ocr-rs) — if both >= 71% confidence, done
-     2. If low confidence → local LLM (Ollama)
+     1. Try local detection (jp_detect DBNet) + local OCR (manga-ocr-rs) — if both >= 71% confidence:
+        - **Text enrichment** (if `enrichment_enabled`): send raw text (NOT image) to local Ollama for furigana/romaji/translation. This is a text-to-text call — no vision model needed. If Ollama is down or times out, raw OCR text is returned as-is (graceful degradation).
+        - Done — no image-based LLM call needed
+     2. If low confidence → local LLM (Ollama) with image
      3. If local LLM fails → free remote tier
      4. Final fallback → paid remote (Gemini 2.0 Flash)
 
@@ -426,7 +428,7 @@ Performance benchmarks and accuracy assessments across OCR engines:
 | glm-ocr (Ollama) | ~10–20 s | N/A (LLM fallback) | Accurate text, poor segmentation | Lumps text into one block |
 | Gemini 2.0 Flash (remote) | ~3–5 s | N/A (LLM fallback) | Best overall | Requires API key; images leave device |
 
-The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for LLM calls when both detection and OCR confidence scores pass the 71% gate. Low-confidence results fall through to the LLM chain automatically.
+The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. When enrichment is enabled, a lightweight text-only Ollama call adds furigana/romaji/translation to the raw OCR output — this uses the same local Ollama instance but sends plain text instead of an image, so it's fast (~1–5 s) and needs no vision model. Low-confidence results fall through to the image-based LLM chain automatically.
 
 ## 13. windows-rs Integration
 

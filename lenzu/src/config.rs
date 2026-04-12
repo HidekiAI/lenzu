@@ -59,6 +59,30 @@ const TRANSLATE_PROMPT_PER_REGION: &str =
     'debug_info' (string or null). \
     {extra_prompt}";
 
+// Text-only enrichment prompt: used after local OCR (manga-ocr-rs) succeeds.
+// Receives raw text (NOT an image) and returns furigana/romaji/translation.
+// {src}/{dest} are substituted at runtime.
+//
+// Unlike the OCR prompts, this does NOT use translate_extra_prompt — enrichment
+// needs ALL JSON fields listed together in one instruction.  The extra_prompt
+// pattern ("Each object must also include...") was designed for vision prompts and
+// reads poorly when spliced into a text-only prompt, causing smaller models to
+// ignore the addendum entirely.
+//
+// Language-specific: users override this entire prompt via enrichment_prompt config
+// field if they need different fields (e.g. pinyin for Chinese, no furigana for EN→JP).
+const DEFAULT_ENRICHMENT_PROMPT: &str =
+    "You are a {src}-to-{dest} language expert.\n\
+    Given the following {src} text, return ONLY a JSON object with these fields:\n\
+    - 'original': the exact input text, unchanged\n\
+    - 'furigana': add hiragana reading after each kanji word in brackets.\n\
+      Example: input \"食べ物が好き\" → furigana \"食[た]べ物[もの]が好[す]き\"\n\
+    - 'romaji': full romanization\n\
+      Example: input \"食べ物が好き\" → romaji \"tabemono ga suki\"\n\
+    - 'english': {dest} translation\n\
+    - 'debug_info': null\n\n\
+    Return ONLY the JSON object. No markdown, no explanation.";
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub lens_size: i32,
@@ -162,6 +186,29 @@ pub struct AppConfig {
     pub translate_dest: Language,
     pub translate_extra_prompt: String,
     pub overlay_render_mode: OverlayRenderMode,
+    // ── Text enrichment (post local-OCR) ─────────────────────────────────────
+    /// When `true`, local OCR results are enriched with furigana/romaji/translation
+    /// by sending the raw text (not an image) to a local Ollama model.
+    /// When `false` or Ollama is down, raw OCR text is returned as-is.
+    #[serde(default = "default_enrichment_enabled")]
+    pub enrichment_enabled: bool,
+    /// Ollama model for text enrichment.  Should be a TEXT-ONLY model, not a
+    /// vision model — enrichment sends plain text, not images.  Vision models
+    /// (glm-ocr, gemma4) are slow and produce poor structured JSON for text tasks.
+    /// `None` = use `llm_default_model` (not recommended if that's a vision model).
+    #[serde(default = "default_enrichment_model")]
+    pub enrichment_model: Option<String>,
+    /// Timeout in seconds for each enrichment request.  Default: 15 s.
+    /// Vision models (glm-ocr, gemma4) used for text-only enrichment need more time
+    /// than a dedicated text model would — increase if you see timeouts.
+    #[serde(default = "default_enrichment_timeout_secs")]
+    pub enrichment_timeout_secs: u64,
+    /// Override the entire enrichment prompt.  `None` = use the built-in default
+    /// (Japanese furigana/romaji/english).  Set this for non-Japanese source languages
+    /// or to customize the JSON fields.  Placeholders `{src}` and `{dest}` are resolved
+    /// from `translate_src`/`translate_dest`.
+    #[serde(default)]
+    pub enrichment_prompt: Option<String>,
 }
 
 fn default_free_remote_endpoint() -> String {
@@ -230,6 +277,15 @@ fn default_text_detection_max_capture_size() -> u32 {
 fn default_text_detection_crop_padding() -> u32 {
     16
 }
+fn default_enrichment_enabled() -> bool {
+    true
+}
+fn default_enrichment_model() -> Option<String> {
+    Some("qwen2.5:3b".to_string())
+}
+fn default_enrichment_timeout_secs() -> u64 {
+    15
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -277,6 +333,10 @@ impl Default for AppConfig {
                 "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation."
                     .to_string(),
             overlay_render_mode: OverlayRenderMode::Furigana,
+            enrichment_enabled: default_enrichment_enabled(),
+            enrichment_model: default_enrichment_model(),
+            enrichment_timeout_secs: default_enrichment_timeout_secs(),
+            enrichment_prompt: None,
         }
     }
 }
@@ -316,6 +376,17 @@ impl AppConfig {
             .replace("{src}", self.translate_src.to_name())
             .replace("{dest}", self.translate_dest.to_name())
             .replace("{extra_prompt}", &self.translate_extra_prompt)
+    }
+
+    /// Text-only enrichment prompt: sends raw text (not an image) to a local LLM
+    /// for furigana/romaji/translation after local OCR succeeds.
+    /// Uses `enrichment_prompt` override if set, otherwise the built-in default.
+    pub fn resolved_enrichment_prompt(&self) -> String {
+        let template = self.enrichment_prompt.as_deref()
+            .unwrap_or(DEFAULT_ENRICHMENT_PROMPT);
+        template
+            .replace("{src}", self.translate_src.to_name())
+            .replace("{dest}", self.translate_dest.to_name())
     }
 
     pub fn load() -> Self {
@@ -402,5 +473,64 @@ mod tests {
         assert!(!prompt.contains("{dest}"), "{{dest}} placeholder must be resolved");
         assert!(prompt.contains("Japanese"), "default src language should appear");
         assert!(prompt.contains("English"), "default dest language should appear");
+    }
+
+    #[test]
+    fn test_enrichment_prompt_resolves_placeholders() {
+        let cfg = AppConfig::default();
+        let prompt = cfg.resolved_enrichment_prompt();
+        assert!(!prompt.contains("{src}"), "{{src}} must be resolved");
+        assert!(!prompt.contains("{dest}"), "{{dest}} must be resolved");
+        assert!(prompt.contains("Japanese"), "default src language should appear");
+        assert!(prompt.contains("English"), "default dest language should appear");
+        // Default enrichment prompt explicitly lists furigana/romaji as required fields
+        assert!(prompt.contains("furigana"), "default enrichment prompt must mention furigana");
+        assert!(prompt.contains("romaji"), "default enrichment prompt must mention romaji");
+        assert!(prompt.contains("'original'"), "default enrichment prompt must list original field");
+        assert!(prompt.contains("'english'"), "default enrichment prompt must list english field");
+    }
+
+    #[test]
+    fn test_enrichment_prompt_override() {
+        let mut cfg = AppConfig::default();
+        cfg.enrichment_prompt = Some("Translate {src} to {dest}. Return JSON with 'original' and 'pinyin'.".to_string());
+        let prompt = cfg.resolved_enrichment_prompt();
+        assert!(prompt.contains("pinyin"), "custom enrichment prompt should be used");
+        assert!(prompt.contains("Japanese"), "{{src}} must still be resolved in custom prompt");
+        assert!(!prompt.contains("furigana"), "default furigana should not leak into custom prompt");
+    }
+
+    #[test]
+    fn test_enrichment_defaults() {
+        let cfg = AppConfig::default();
+        assert!(cfg.enrichment_enabled, "enrichment should be enabled by default");
+        assert_eq!(cfg.enrichment_model.as_deref(), Some("qwen2.5:3b"),
+            "enrichment_model should default to a text-only model, not a vision model");
+        assert_eq!(cfg.enrichment_timeout_secs, 15);
+    }
+
+    #[test]
+    fn test_old_config_without_enrichment_fields_loads_with_defaults() {
+        let json = r##"{
+            "lens_size": 400,
+            "ui_panel_height": 130,
+            "font_size": 13.0,
+            "hud_color_hex": "#00FFCC",
+            "show_romaji": true,
+            "show_furigana": true,
+            "overlay_enabled": true,
+            "overlay_udp_port": 7331,
+            "llm_api_endpoint": "http://localhost:11434/v1/chat/completions",
+            "llm_default_model": "gemma4:e2b",
+            "translate_src": "jpn",
+            "translate_dest": "eng",
+            "translate_extra_prompt": "",
+            "overlay_render_mode": "furigana"
+        }"##;
+        let cfg: AppConfig = serde_json::from_str(json).expect("old config must deserialize");
+        assert!(cfg.enrichment_enabled, "enrichment_enabled must default to true for old configs");
+        assert_eq!(cfg.enrichment_model.as_deref(), Some("qwen2.5:3b"),
+            "old configs must get the default text-only enrichment model");
+        assert_eq!(cfg.enrichment_timeout_secs, 15);
     }
 }
