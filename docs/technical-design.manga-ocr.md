@@ -139,11 +139,17 @@ The current fallback chain is:
 ```
 jp_detect (>= 71% detection confidence)
   → manga-ocr-rs (>= 71% OCR confidence)
-    → DONE (fully offline, no LLM)
+    → text enrichment (if enrichment_enabled)
+        Send raw text (NOT image) to local Ollama for furigana/romaji/translation.
+        Text-to-text only — no vision model needed, fast (~1–5 s).
+        If Ollama down/timeout → return raw OCR text as-is (graceful degradation).
+    → DONE (local:manga-ocr or local:manga-ocr+enriched)
   → gemma4:e2b (Ollama) → glm-ocr (Ollama) → free remote → paid remote (Gemini 2.0 Flash)
 ```
 
-manga-ocr-rs is the first tier in the pipeline, sitting before all LLM backends. When both detection and OCR confidence scores pass the 71% gate, results are returned immediately — no Ollama, no network. The LLM chain is only reached when confidence is too low.
+manga-ocr-rs is the first tier in the pipeline, sitting before all LLM backends. When both detection and OCR confidence scores pass the 71% gate, results are optionally enriched with furigana/romaji/translation via a text-only Ollama call (no image sent), then returned. The image-based LLM chain is only reached when confidence is too low.
+
+The enrichment prompt uses the same `{src}/{dest}/{extra_prompt}` placeholder mechanism as the OCR prompts, so it works for any language pair (JP→EN, EN→JP, JP→ES, etc.). Config fields: `enrichment_enabled` (default: true), `enrichment_model` (default: null = use `llm_default_model`), `enrichment_timeout_secs` (default: 15).
 
 This tier is active for ALL capture methods (Shift+Click and Ctrl+Shift+Click) when:
 - The text_detector is configured (jp_detect DBNet model loaded)
@@ -209,6 +215,7 @@ kept at the public API boundary.  Steps to publish as `manga-ocr-rs`:
 | Vertical text | None | Handled by the model natively (trained on manga); no rotation needed |
 | Hallucination on merged regions | OCR confidence drops below 71% gate; `truncated` flag fires | Beam search decoder runs away without EOS when input contains multiple text columns or mixed art — reliably caught by low confidence score |
 | Ambiguous/noisy input | Low OCR confidence triggers LLM fallback | Results with < 71% OCR confidence are not trusted; pipeline falls through to Ollama → OpenRouter chain |
+| No furigana/translation | N/A — manga-ocr-rs outputs raw text only | Addressed by text enrichment: when `enrichment_enabled`, raw text is sent to local Ollama for furigana/romaji/translation. Graceful degradation if Ollama is unavailable. |
 
 ---
 
