@@ -100,7 +100,8 @@ This section outlines the key libraries used in the project:
 
 ### Core Dependencies
 
-- **kakasi**: Used for Japanese text conversion from kanji to hiragana after OCR processing.
+- **MeCab** (`mecab` + `mecab-ipadic-utf8` / `mecab-naist-jdic`): Context-aware morphological analysis for furigana annotation and romaji generation. Replaces kakasi — MeCab understands word boundaries from neighboring characters, correctly segmenting compound words and conjugated verbs. Per-morpheme katakana readings are converted to hiragana (furigana) and romaji (via pure-Rust Hepburn table) without any external dependency. See `lenzu/src/furigana.rs`.
+- ~~**kakasi**~~: Previously used for kanji→hiragana conversion; replaced by MeCab (context-aware, better word boundaries, eliminates CLI dependency).
 - **tesseract**: Tesseract OCR engine for Linux and fallback scenarios; requires traineddata including `jpn_vert.traineddata`.
 - **windows-rs**: Enables integration with Windows Media OCR via `Media_Ocr` and `Globalization` features (Windows-only).
 - **leptonica**: Underlying library for Tesseract; required for building on Windows.
@@ -187,7 +188,9 @@ This section outlines the modern approach to Japanese text extraction in manga, 
    - Confidence gate: both scores must be >= 71% for local results to be accepted
    - Progressive enhancement:
      1. Try local detection (jp_detect DBNet) + local OCR (manga-ocr-rs) — if both >= 71% confidence:
-        - **Text enrichment** (if `enrichment_enabled`): send raw text (NOT image) to local Ollama for furigana/romaji/translation. This is a text-to-text call — no vision model needed. If Ollama is down or times out, raw OCR text is returned as-is (graceful degradation).
+        - **Phase 1**: raw text sent to HUD immediately (~1.7 s from click)
+        - **Phase 2 — MeCab annotation** (instant, ~5 ms): morphological analysis produces furigana (`最初[さいしょ]`) and romaji. No LLM, no network — pure dictionary lookup with context-aware word boundaries. HUD updates in-place.
+        - **Phase 3 — LLM enrichment** (if `enrichment_enabled`): send raw text (NOT image) to local Ollama for english translation. Text-to-text call — no vision model needed. If Ollama is down or times out, MeCab-annotated text is returned as-is (graceful degradation).
         - Done — no image-based LLM call needed
      2. If low confidence → local LLM (Ollama) with image
      3. If local LLM fails → free remote tier
@@ -393,7 +396,7 @@ A list of pending tasks and future enhancements:
 - Add online OCR fallback option via OAuth2 (Google Cloud Vision).
 - Develop image preprocessing pipeline (grayscale, denoise, contrast adjustment).
 - Integrate dictionary lookup for enhanced translation capabilities.
-- Replace the fake kakasi crate with the official version.
+- ~~Replace the fake kakasi crate with the official version.~~ Resolved: kakasi replaced entirely by MeCab morphological analysis (2026-04-12).
 
 ## 10. Post Mortem
 
@@ -409,7 +412,7 @@ Reflections on the development process including challenges faced and lessons le
 Notes on building and compiling the project including dependencies and platform-specific instructions:
 
 - **Target platform**: Debian-family Linux (`apt`/`dpkg`) is the only supported platform — Ubuntu 22.04+, Debian 12+, Mint, Pop!_OS, and derivatives. Fedora-family (`dnf`) is a planned future target. Windows support is historical only (MinGW64 + `Media_Ocr`; no longer maintained).
-- **Linux (Debian)**: Install `kakasi`, `tesseract-ocr`, and `leptonica` via apt; use cargo build commands.
+- **Linux (Debian)**: Install `mecab`, `mecab-ipadic-utf8`, `mecab-naist-jdic` via apt; use cargo build commands. (kakasi is no longer required — MeCab handles all furigana/romaji annotation.)
 - **Linux install script**: See `docs/planning.md` — Installation section. `scripts/install.sh` and `scripts/build.sh` are planned but not yet implemented; architecture is documented.
 - **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.
 
@@ -428,7 +431,13 @@ Performance benchmarks and accuracy assessments across OCR engines:
 | glm-ocr (Ollama) | ~10–20 s | N/A (LLM fallback) | Accurate text, poor segmentation | Lumps text into one block |
 | Gemini 2.0 Flash (remote) | ~3–5 s | N/A (LLM fallback) | Best overall | Requires API key; images leave device |
 
-The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. When enrichment is enabled, a lightweight text-only Ollama call adds furigana/romaji/translation to the raw OCR output — this uses the same local Ollama instance but sends plain text instead of an image, so it's fast (~1–5 s) and needs no vision model. Low-confidence results fall through to the image-based LLM chain automatically.
+The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. After local OCR succeeds, a 3-phase progressive rendering pipeline updates the HUD:
+
+1. **Phase 1 — raw text** (instant): OCR result displayed immediately
+2. **Phase 2 — MeCab furigana + romaji** (~5 ms): morphological analysis annotates kanji with hiragana readings (`最初[さいしょ]`) and generates romaji via pure-Rust Hepburn conversion. No LLM, no network — deterministic dictionary lookup with context-aware word boundaries.
+3. **Phase 3 — LLM translation** (if `enrichment_enabled`, ~15–30 s): text-only Ollama call for english translation. If Ollama is down or times out, Phase 2 results are shown as-is.
+
+The lens stays modal until the final phase completes, preventing request stacking. Low-confidence results fall through to the image-based LLM chain automatically.
 
 **Observability**: All LLM backends (local and remote) now report mean token probability (via logprobs) and `finish_reason` in stderr logs. Paid remote backends additionally log per-request and session-cumulative token counts (`prompt_tokens`, `completion_tokens`). The HUD color changes from configured → orange → red as session paid token usage crosses configurable thresholds (`token_warning_threshold`, `token_critical_threshold`).
 

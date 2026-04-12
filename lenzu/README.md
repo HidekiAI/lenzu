@@ -54,9 +54,18 @@ Lenzu is two processes:
 |---|---|---|---|
 | **jp_detect** >= 0.2.2 (DBNet) | Text detection with per-box confidence | 0-100% detection score | `--features onnx` build |
 | **manga-ocr-rs** >= 0.1.1 | Japanese OCR with per-result confidence | 0-100% OCR score | ~140 MB model files (auto-downloaded) |
+| **MeCab** + ipadic-utf8/naist-jdic | Morphological analysis → furigana + romaji | Deterministic (dictionary) | `mecab`, `mecab-ipadic-utf8`, `mecab-naist-jdic` |
 
-Both scores must be >= 71% to pass the confidence gate. When they do, results are returned
-immediately — no LLM, no Ollama, no network. Models loaded once at startup, shared via `Arc`.
+Both OCR scores must be >= 71% to pass the confidence gate. When they do, raw text is returned
+immediately — no LLM, no Ollama, no network. MeCab then annotates the text with furigana
+brackets (`最初[さいしょ]`) and romaji in a second instant pass (~5 ms). Models loaded once
+at startup, shared via `Arc`.
+
+**Why MeCab, not kakasi?** MeCab performs context-aware morphological analysis — it understands
+word boundaries from neighboring characters, so it correctly segments compound words and
+conjugated verbs. kakasi is a simple dictionary lookup that cannot disambiguate readings based
+on context. MeCab's per-morpheme output also gives us katakana readings directly, which a
+pure-Rust Hepburn converter turns into romaji — eliminating the kakasi CLI dependency entirely.
 
 ### LLM fallback chain (when local OCR confidence is too low)
 
@@ -95,6 +104,7 @@ immediately — no LLM, no Ollama, no network. Models loaded once at startup, sh
 | **Cargo** | Build system; manages all Rust deps |
 | **pnpm** | Node package manager for `lenzu_server` |
 | **`libgtk-3-dev`**, `libcairo2-dev`, `libpango1.0-dev` | System headers (Debian/Ubuntu) |
+| **`mecab`**, `mecab-ipadic-utf8`, `mecab-naist-jdic` | MeCab morphological analyzer + UTF-8 dictionaries (furigana/romaji) |
 | `fonts-noto-cjk`, `fonts-ipafont-gothic` | CJK font rendering |
 
 > **OpenCV is NOT required.** All image processing (resize, normalize, contour detection) is
@@ -135,15 +145,19 @@ Shift+Click
   │       │                                            │
   │       ├─ local OCR (manga-ocr-rs) per box         │
   │       │   ├─ ALL boxes: det >= 71% AND ocr >= 71% │
-  │       │   │   ├─ enrichment_enabled?               │
-  │       │   │   │   ├─ yes: text-only Ollama call    │
-  │       │   │   │   │   (furigana/romaji/translation)│
-  │       │   │   │   │   success → +enriched label    │
-  │       │   │   │   │   fail → raw text (graceful)   │
-  │       │   │   │   └─ no: raw text only             │
+  │       │   │   │                                    │
+  │       │   │   │  ┌── 3-phase progressive HUD ──┐   │
+  │       │   │   │  │ Phase 1: raw text (instant)  │  │
+  │       │   │   │  │   → HUD shows original text  │  │
+  │       │   │   │  │ Phase 2: MeCab (~5 ms)       │  │
+  │       │   │   │  │   → 最初[さいしょ] + romaji  │  │
+  │       │   │   │  │ Phase 3: LLM (if enabled)    │  │
+  │       │   │   │  │   → english translation      │  │
+  │       │   │   │  └─────────────────────────────┘   │
+  │       │   │   │                                    │
   │       │   │   └─ DONE ← return results ───────────┼──► format_for_overlay()
-  │       │   │       backend: "local:manga-ocr[+enriched]"    │
-  │       │   │                                        │        ├─ UDP JSON ──► lenzu_server
+  │       │   │       backend: "local:manga-ocr        │
+  │       │   │         [+furigana][+enriched]"        │        ├─ UDP JSON ──► lenzu_server
   │       │   └─ any box below gate                    │        ├─ clipboard
   │       │       │                                    │        └─ ocr_history.txt
   │       ├─ per-region LLM (per_region_prompt)        │
@@ -203,17 +217,21 @@ Ctrl+Shift+Click
   │       │
   │       ├─ local OCR (manga-ocr-rs) on chosen box
   │       │   ├─ det >= 71% AND ocr >= 71%
-  │       │   │   ├─ enrichment_enabled?
-  │       │   │   │   ├─ yes: text-only Ollama call
-  │       │   │   │   │   (furigana/romaji/translation)
-  │       │   │   │   │   success → +enriched label
-  │       │   │   │   │   fail → raw text (graceful)
-  │       │   │   │   └─ no: raw text only
+  │       │   │   │
+  │       │   │   │  ┌── 3-phase progressive HUD ──┐
+  │       │   │   │  │ Phase 1: raw text (instant)  │
+  │       │   │   │  │ Phase 2: MeCab (~5 ms)       │
+  │       │   │   │  │   → furigana + romaji        │
+  │       │   │   │  │ Phase 3: LLM (if enabled)    │
+  │       │   │   │  │   → english translation      │
+  │       │   │   │  └─────────────────────────────┘
+  │       │   │   │
   │       │   │   └─ DONE ← return results ──► format_for_overlay()
-  │       │   │       backend: "local:manga-ocr[+enriched]"
-  │       │   └─ below gate                            ├─ UDP ──► lenzu_server
-  │       │       │                                    ├─ clipboard
-  │       │       ▼                                    └─ ocr_history.txt
+  │       │   │       backend: "local:manga-ocr        ├─ UDP ──► lenzu_server
+  │       │   │         [+furigana][+enriched]"        ├─ clipboard
+  │       │   └─ below gate                            └─ ocr_history.txt
+  │       │       │
+  │       │       ▼
   │       ├─ crop chosen box → TextCropper
   │       │
   │       ▼
@@ -242,9 +260,10 @@ local timeout.
 ### Prerequisites
 
 ```bash
-# System dependencies (GTK3 + capture stack; no WebKit needed — Electron bundles its own Chromium)
+# System dependencies (GTK3 + capture stack + MeCab; no WebKit needed — Electron bundles its own Chromium)
 sudo apt install build-essential pkg-config libgtk-3-dev libcairo2-dev libpango1.0-dev \
                  libgdk-pixbuf-2.0-dev libx11-dev libssl-dev \
+                 mecab mecab-ipadic-utf8 mecab-naist-jdic \
                  fonts-noto-cjk fonts-ipafont-gothic
 
 # Node.js for lenzu_server — use repo ./lenzu_server/scripts/setup.sh or install Node + run npm install in lenzu_server
@@ -334,11 +353,12 @@ Optional file in the working directory. All fields have defaults if the file is 
   "translate_dest": "eng",
   "translate_extra_prompt": "Each object must also include: furigana (format: 漢字[かんじ]) and romaji fields, plus english translation.",
 
-  // Text enrichment (post local-OCR) — adds furigana/romaji/translation to
-  // raw manga-ocr-rs text via text-only Ollama call (no image, no vision model)
+  // LLM enrichment (post local-OCR) — adds english translation to raw manga-ocr-rs
+  // text via text-only Ollama call (no image, no vision model).
+  // Furigana and romaji are handled by MeCab (instant, no LLM) — see furigana.rs.
   "enrichment_enabled": true,
   "enrichment_model": "qwen2.5:3b",
-  "enrichment_timeout_secs": 15,
+  "enrichment_timeout_secs": 30,
 
   // Token spend warnings — HUD color changes when paid API token usage is high
   "token_warning_threshold": 100000,
@@ -365,10 +385,10 @@ Optional file in the working directory. All fields have defaults if the file is 
 | `text_detection_debug` | Write annotated debug PNG to `/dev/shm/lenzu/debug_detection.png` after each capture; draw box outlines on lens window | `false` |
 | `translate_src` / `translate_dest` | ISO 639-3 language codes (`"jpn"`, `"eng"`, `"kor"`, `"cmn"` …) | `"jpn"` / `"eng"` |
 | `translate_extra_prompt` | Appended to base prompt for language-specific fields | furigana/romaji hint |
-| `enrichment_enabled` | Enrich local OCR results with furigana/translation via text-only Ollama call | `true` |
+| `enrichment_enabled` | Enrich local OCR results with english translation via text-only Ollama call. Furigana/romaji are always handled by MeCab (instant, no LLM). | `true` |
 | `enrichment_model` | Text-only Ollama model for enrichment (not a vision model); `null` falls back to `llm_default_model` | `"qwen2.5:3b"` |
-| `enrichment_timeout_secs` | Timeout for each enrichment request | `15` |
-| `enrichment_prompt` | Override the entire enrichment prompt; `null` uses built-in (JP furigana/romaji). `{src}`/`{dest}` placeholders resolved. | `null` |
+| `enrichment_timeout_secs` | Timeout for each enrichment request | `30` |
+| `enrichment_prompt` | Override the entire enrichment prompt; `null` uses built-in. `{src}`/`{dest}` placeholders resolved. | `null` |
 | `token_warning_threshold` | Session paid tokens at which HUD turns orange (0 = disable) | `100000` |
 | `token_critical_threshold` | Session paid tokens at which HUD turns red (0 = disable) | `500000` |
 
@@ -387,6 +407,9 @@ The base prompt is hardcoded and language-agnostic:
 ```bash
 # All unit tests — no onnx feature needed
 cargo test -p lenzu
+
+# MeCab furigana/romaji tests (pure-function tests use synthetic MeCab output — no MeCab binary needed)
+cargo test -p lenzu -- furigana
 
 # Text detection pure-logic tests (merge, union, intersects, dimensions)
 cargo test -p lenzu -- ocr::text_detection
