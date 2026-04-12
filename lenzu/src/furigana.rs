@@ -372,9 +372,10 @@ mod imp {
         parse_mecab_output(&stdout)
     }
 
-    /// Annotate results with furigana + romaji using MeCab morphological analysis.
+    /// Annotate results with furigana (and romaji unless `furigana_only` is set)
+    /// using MeCab morphological analysis.
     /// Returns `true` if any result was enriched.
-    pub(super) fn annotate(results: &mut [super::TranslationResult]) -> bool {
+    pub(super) fn annotate(results: &mut [super::TranslationResult], furigana_only: bool) -> bool {
         let dict = find_mecab_dict();
         if dict.is_none() {
             eprintln!("[furigana] no MeCab UTF-8 dictionary found — skipping annotation");
@@ -390,13 +391,14 @@ mod imp {
 
             if let Some((furigana, romaji)) = mecab_analyze(text) {
                 eprintln!(
-                    "[furigana] mecab — furigana={} romaji={} dict={}",
+                    "[furigana] mecab — furigana={} romaji={} furigana_only={} dict={}",
                     !furigana.is_empty(),
                     !romaji.is_empty(),
+                    furigana_only,
                     dict.unwrap_or("?"),
                 );
                 result.furigana = Some(furigana);
-                if !romaji.is_empty() {
+                if !furigana_only && !romaji.is_empty() {
                     result.romaji = Some(romaji);
                 }
                 any = true;
@@ -410,17 +412,17 @@ mod imp {
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
-    pub(super) fn annotate(_results: &mut [super::TranslationResult]) -> bool {
+    pub(super) fn annotate(_results: &mut [super::TranslationResult], _furigana_only: bool) -> bool {
         false
     }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-/// Annotate results with furigana and romaji using MeCab morphological analysis.
+/// Annotate results with furigana (and romaji unless `furigana_only`) using MeCab.
 /// Linux-only; returns `false` on other platforms.
-pub fn annotate(results: &mut [TranslationResult]) -> bool {
-    imp::annotate(results)
+pub fn annotate(results: &mut [TranslationResult], furigana_only: bool) -> bool {
+    imp::annotate(results, furigana_only)
 }
 
 #[cfg(test)]
@@ -585,9 +587,21 @@ EOS
             original: "食べる".to_string(),
             ..Default::default()
         }];
-        if super::annotate(&mut results) {
+        if super::annotate(&mut results, false) {
             assert!(results[0].furigana.is_some(), "furigana should be set");
             assert!(results[0].romaji.is_some(), "romaji should be set");
+        }
+    }
+
+    #[test]
+    fn test_annotate_furigana_only_skips_romaji() {
+        let mut results = vec![TranslationResult {
+            original: "食べる".to_string(),
+            ..Default::default()
+        }];
+        if super::annotate(&mut results, true) {
+            assert!(results[0].furigana.is_some(), "furigana should be set");
+            assert!(results[0].romaji.is_none(), "romaji should be None in furigana_only mode");
         }
     }
 
@@ -597,7 +611,7 @@ EOS
             original: "".to_string(),
             ..Default::default()
         }];
-        assert!(!super::annotate(&mut results));
+        assert!(!super::annotate(&mut results, false));
         assert!(results[0].furigana.is_none());
     }
 }

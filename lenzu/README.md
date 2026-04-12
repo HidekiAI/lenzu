@@ -120,6 +120,12 @@ pure-Rust Hepburn converter turns into romaji — eliminating the kakasi CLI dep
 | **Ctrl + Shift + Left Click** | Full-desktop capture mode. Hides the lens window, grabs the entire desktop, runs DBNet to find text nearest the lens position, sends the best crop directly to the remote OCR backend. Use this for text that is too large or too spread out for the lens window. |
 | **Esc / Window Close** | Quit (also kills `lenzu_server`) |
 
+### CLI Flags
+
+| Flag | Description |
+|---|---|
+| `--furigana_only` | MeCab furigana only — skip romaji and LLM enrichment. Overrides `furigana_only` in config. Use via `scripts/run.sh --furigana_only`. |
+
 > **Screen capture approach** inspired by `xfce4-screenshooter`'s method of reading pixels
 > directly from the X11 root window, which correctly captures GPU-accelerated and
 > hardware-composited windows that traditional screenshot tools miss.
@@ -389,6 +395,7 @@ Optional file in the working directory. All fields have defaults if the file is 
 | `enrichment_model` | Text-only Ollama model for enrichment (not a vision model); `null` falls back to `llm_default_model` | `"qwen2.5:3b"` |
 | `enrichment_timeout_secs` | Timeout for each enrichment request | `30` |
 | `enrichment_prompt` | Override the entire enrichment prompt; `null` uses built-in. `{src}`/`{dest}` placeholders resolved. | `null` |
+| `furigana_only` | When `true`, use only MeCab furigana — skip romaji and LLM enrichment entirely. Instant results (~5 ms). Override via `--furigana_only` CLI flag. | `false` |
 | `token_warning_threshold` | Session paid tokens at which HUD turns orange (0 = disable) | `100000` |
 | `token_critical_threshold` | Session paid tokens at which HUD turns red (0 = disable) | `500000` |
 

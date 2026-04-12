@@ -285,7 +285,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         String::new()
     });
 
-    let cfg = config::AppConfig::load();
+    let mut cfg = config::AppConfig::load();
+
+    // CLI override: --furigana_only skips LLM enrichment and romaji
+    if std::env::args().any(|a| a == "--furigana_only") {
+        cfg.furigana_only = true;
+        eprintln!("[Config] --furigana_only: MeCab furigana only, LLM enrichment disabled");
+    }
+
     eprintln!(
         "[Config] llm={} | model={} | text_detection_model={} | threshold={} dilation={} pad={}x{}",
         cfg.llm_api_endpoint,
@@ -885,9 +892,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             preview: true,
                                                         })));
 
-                                                        // Phase 2: furigana + romaji (MeCab — instant)
-                                                        let furigana_ok = furigana::annotate(&mut t_results);
-                                                        if furigana_ok && enrichment_enabled {
+                                                        // Phase 2: furigana (+ romaji unless furigana_only) — MeCab, ~5ms
+                                                        let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
+                                                        let do_enrich = enrichment_enabled && !s_conf.furigana_only;
+                                                        if furigana_ok && do_enrich {
                                                             let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
                                                                 backend: "local:manga-ocr+furigana".to_string(),
                                                                 elapsed_ms: total_ocr_ms,
@@ -895,9 +903,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             })));
                                                         }
 
-                                                        // Phase 3: LLM enrichment (translation)
+                                                        // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
                                                         let mut enriched = false;
-                                                        if enrichment_enabled {
+                                                        if do_enrich {
                                                             let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
                                                             enriched = client::enrich_local_results(
                                                                 &mut t_results, &primary_endpoint, enrich_model,
@@ -1021,9 +1029,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         preview: true,
                                                     })));
 
-                                                    // Phase 2: furigana + romaji (MeCab — instant)
-                                                    let furigana_ok = furigana::annotate(&mut t_results);
-                                                    if furigana_ok && enrichment_enabled {
+                                                    // Phase 2: furigana (+ romaji unless furigana_only) — MeCab, ~5ms
+                                                    let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
+                                                    let do_enrich = enrichment_enabled && !s_conf.furigana_only;
+                                                    if furigana_ok && do_enrich {
                                                         let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
                                                             backend: "local:manga-ocr+furigana".to_string(),
                                                             elapsed_ms: total_ocr_ms,
@@ -1031,9 +1040,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         })));
                                                     }
 
-                                                    // Phase 3: LLM enrichment (translation)
+                                                    // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
                                                     let mut enriched = false;
-                                                    if enrichment_enabled {
+                                                    if do_enrich {
                                                         let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
                                                         enriched = client::enrich_local_results(
                                                             &mut t_results, &primary_endpoint, enrich_model,

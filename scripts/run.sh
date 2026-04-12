@@ -224,4 +224,13 @@ cargo build -p lenzu --features onnx
 echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
 # Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
 # trap from firing and leaving the ollama container running after lenzu exits.
-"$CLIENT_BINARY"
+
+# Pass through CLI flags (e.g. --furigana_only) to the binary.
+LENZU_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --furigana_only) LENZU_ARGS+=("--furigana_only") ;;
+    esac
+done
+
+"$CLIENT_BINARY" "${LENZU_ARGS[@]+"${LENZU_ARGS[@]}"}"

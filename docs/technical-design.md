@@ -448,3 +448,40 @@ Details on integrating Windows Media OCR via the `windows-rs` crate:
 - **Setup**: Enable `Media_Ocr` and `Globalization` features in `Cargo.toml`.
 - **Data Flow**: Uses `InMemoryRandomAccessStream` for passing image data to the OCR engine.
 - **Debugging Challenges**: Issues with stream detachment and resource management required careful handling during development.
+
+## 14. MeCab Morphological Analysis for Furigana
+
+MeCab replaced kakasi as the furigana engine (2026-04-12). The improvement is fundamental: kakasi is a character-by-character converter that cannot distinguish word boundaries, while MeCab performs context-aware morphological analysis — it understands that `知らない天井だ` is `知ら|ない|天井|だ` (four morphemes), not a flat string.
+
+### How It Works
+
+MeCab is invoked as a subprocess (`mecab -Oyomi` for the annotation path is NOT used — we use the default output format for per-morpheme control). For each morpheme, MeCab returns:
+
+```
+surface\tPOS,sub1,sub2,sub3,conj_type,conj_form,base,reading,pronunciation
+```
+
+Field index 7 (0-based) is the katakana reading. The pipeline:
+
+1. **Spawn MeCab** with the best available UTF-8 dictionary (naist-jdic preferred for person names, ipadic-utf8 fallback). Six standard paths are searched across `/usr/share`, `/usr/lib`, `/var/lib`.
+2. **Parse each morpheme**: surface (as-is text) + katakana reading from field 7.
+3. **Bracket kanji**: if the surface contains kanji (CJK Unified Ideographs U+4E00–U+9FFF), append `[hiragana]` — e.g. `天井[てんじょう]`. Kana-only surfaces pass through unchanged.
+4. **Romaji** (optional): a pure-Rust Hepburn romanization table converts the katakana reading to ASCII. Handles digraphs (`キャ`→`kya`), gemination (`ッ`→doubled consonant), long vowels (`ー`→repeat), and loanword extensions (`ファ`→`fa`).
+
+### Why Not an LLM?
+
+MeCab furigana is deterministic, instant (~5 ms), and correct. LLM-based furigana (tested with qwen2.5:3b) produced garbage readings (`ふところ[もく]まとって`) that failed even the 71% confidence gate. Dictionary-based morphological analysis is the right tool for this job — it's not a generation task, it's a lookup.
+
+### `furigana_only` Mode
+
+When `furigana_only: true` (config) or `--furigana_only` (CLI flag), the entire LLM enrichment pipeline is skipped. MeCab furigana is the final result — no romaji, no translation, no network call. This makes the capture-to-HUD latency effectively the OCR time (~1.7 s) plus ~5 ms for MeCab. For users who read Japanese and just need kanji readings, this is the ideal mode.
+
+### Implementation
+
+All MeCab logic lives in `lenzu/src/furigana.rs` — Linux-only (`#[cfg(target_os = "linux")]`), no-op stub on other platforms. Key functions:
+
+- `parse_mecab_output()` — pure function, fully unit-testable without MeCab binary
+- `kata_to_hira()` — Unicode shift (katakana → hiragana, -0x60)
+- `kata_to_romaji()` — pure-Rust Hepburn table, no external dependency
+- `has_kanji()` — CJK range check
+- `annotate()` — public API, annotates `TranslationResult` array in-place

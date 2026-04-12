@@ -209,6 +209,12 @@ pub struct AppConfig {
     /// from `translate_src`/`translate_dest`.
     #[serde(default)]
     pub enrichment_prompt: Option<String>,
+    // ── Furigana-only mode ────────────────────────────────────────────────────
+    /// When `true`, skip LLM enrichment and romaji entirely — only MeCab furigana
+    /// annotations are added to local OCR results.  Instant results (~5 ms after OCR).
+    /// Overrides `enrichment_enabled` when set.
+    #[serde(default)]
+    pub furigana_only: bool,
     // ── Token spend warnings ────────────────────────────────────────────────
     /// Session-total paid tokens (prompt + completion) at which the HUD color
     /// changes from its configured color to orange.  0 = disable warning.
@@ -352,6 +358,7 @@ impl Default for AppConfig {
             enrichment_model: default_enrichment_model(),
             enrichment_timeout_secs: default_enrichment_timeout_secs(),
             enrichment_prompt: None,
+            furigana_only: false,
             token_warning_threshold: default_token_warning_threshold(),
             token_critical_threshold: default_token_critical_threshold(),
         }

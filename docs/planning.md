@@ -477,11 +477,11 @@ The AI runtime binary and model storage are private to lenzu. Lenzu does not sha
 - Tesseract Training: https://tesseract-ocr.github.io/tessdoc/Training-Tesseract.html
 - Wayland Portals: https://flatpak.org/xdg-desktop-portal/
 - Manga109: http://www.manga109.org/
-- Kakasi: http://kakasi.namazu.org/
+- MeCab: https://taku910.github.io/mecab/
 
 ---
 
-**Last Updated**: 2026-04-05
+**Last Updated**: 2026-04-12
 **Maintainer**: Hideki AI
 **Status**: Active development — `feature/ocr-local-remote` branch, Phase 4 M7b-1 next
 
