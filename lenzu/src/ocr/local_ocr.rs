@@ -14,9 +14,9 @@ use std::time::Instant;
 use super::text_cropper::{CroppedRegion, TextCropper};
 use super::text_detection::TextBoundingBox;
 
-/// Confidence threshold — both detection and OCR must exceed this to skip the
-/// LLM chain.  71% = 0.71 (inclusive lower bound).
-const CONFIDENCE_GATE: f32 = 0.71;
+/// Confidence threshold — both detection and OCR must be strictly above this
+/// to skip the LLM chain.  70% or below = fail (model is guessing).
+const CONFIDENCE_GATE: f32 = 0.70;
 
 /// Maximum characters kept from a low-confidence OCR result that still gets
 /// passed downstream (to the LLM chain).
@@ -98,7 +98,7 @@ impl LocalOcrEngine {
 
         // Only attempt local OCR on boxes that passed the detection confidence gate.
         let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
-            crops.iter().partition(|c| c.source_box.confidence >= CONFIDENCE_GATE);
+            crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
         if confident_crops.is_empty() {
             eprintln!(
@@ -124,7 +124,7 @@ impl LocalOcrEngine {
         for crop in &confident_crops {
             match self.recognize_crop(&crop.image) {
                 Ok((rec, ms)) => {
-                    let ocr_confident = rec.confidence >= CONFIDENCE_GATE && !rec.truncated;
+                    let ocr_confident = rec.confidence > CONFIDENCE_GATE && !rec.truncated;
                     eprintln!(
                         "[local-ocr] box ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} «{}»  ({} ms)",
                         crop.source_box.x1, crop.source_box.y1,

@@ -95,6 +95,15 @@ struct SseResult {
     completion_tokens: Option<u64>,
 }
 
+/// Minimum mean token probability for LLM results to be accepted (all paths:
+/// OCR image calls, enrichment text calls, and local ONNX).  At or below this
+/// threshold the result is discarded — the model is guessing.
+///
+/// NOTE: many backends (ollama, free-tier OpenRouter, Gemini) do not return
+/// logprobs, so confidence will be `None` and the gate cannot fire.  The gate
+/// only activates when the backend actually provides logprobs.
+const LLM_CONFIDENCE_GATE: f64 = 0.70;
+
 /// Default timeout for the entire request (connect + read).
 /// Gemini/OpenRouter can be slow on large images; 60 s is generous but bounded.
 const REQUEST_TIMEOUT_SECS: u64 = 60;
@@ -243,6 +252,15 @@ impl OcrClient {
         let fr_str = sse.finish_reason.as_deref().unwrap_or("n/a");
         eprintln!("[enrichment] LLM response: conf={conf_str} finish_reason={fr_str}");
 
+        // Confidence gate: reject when the model is guessing (≤ 70%).
+        if let Some(c) = sse.confidence {
+            if c <= LLM_CONFIDENCE_GATE {
+                eprintln!("[enrichment] rejected — confidence {:.0}% <= {:.0}% gate",
+                    c * 100.0, LLM_CONFIDENCE_GATE * 100.0);
+                return Err(format!("confidence {:.0}% below gate", c * 100.0).into());
+            }
+        }
+
         if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
             let _ = writeln!(f, "[{}] conf={} finish={} {}", Local::now().format("%H:%M:%S"),
                 conf_str, fr_str, sse.content.trim());
@@ -296,6 +314,15 @@ impl OcrClient {
         let conf_str = sse.confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
         let fr_str = sse.finish_reason.as_deref().unwrap_or("n/a");
         eprintln!("[OCR] LLM response: conf={conf_str} finish_reason={fr_str}");
+
+        // Confidence gate: reject when the model is guessing (≤ 70%).
+        if let Some(c) = sse.confidence {
+            if c <= LLM_CONFIDENCE_GATE {
+                eprintln!("[OCR] rejected — confidence {:.0}% <= {:.0}% gate",
+                    c * 100.0, LLM_CONFIDENCE_GATE * 100.0);
+                return Err(format!("confidence {:.0}% below gate", c * 100.0).into());
+            }
+        }
 
         // Log and accumulate token usage for paid remote backends (has API key)
         if !self.api_key.is_empty() {
@@ -744,15 +771,11 @@ impl DualOcrClient {
     }
 }
 
-/// Minimum mean token probability for enrichment to be accepted.
-/// Below this threshold the enrichment is discarded (model is guessing).
-const ENRICHMENT_CONFIDENCE_GATE: f64 = 0.75;
-
 /// Enrich local OCR results with furigana, romaji, and translation by sending
 /// the raw text (not an image) to a local Ollama model.
 ///
-/// Confidence gate: if the LLM's mean token probability (from logprobs) is
-/// below 75%, the enrichment is discarded — the model is guessing.
+/// Confidence gate: `send_and_parse_with_confidence` rejects results with
+/// mean token probability ≤ 70% before they reach this function.
 ///
 /// Field cascade: if furigana is null but romaji is present, furigana is
 /// populated with romaji as a fallback reading aid.
@@ -795,15 +818,6 @@ pub fn enrich_local_results(
             Ok((enriched_vec, confidence)) => {
                 let elapsed = t0.elapsed();
                 let conf_pct = confidence.map(|c| c * 100.0);
-
-                // Confidence gate: reject low-confidence enrichment
-                if let Some(c) = confidence {
-                    if c < ENRICHMENT_CONFIDENCE_GATE {
-                        eprintln!("[enrichment] rejected — confidence {:.0}% < {:.0}% gate ({:.1}s)",
-                            c * 100.0, ENRICHMENT_CONFIDENCE_GATE * 100.0, elapsed.as_secs_f64());
-                        continue;
-                    }
-                }
 
                 if let Some(e) = enriched_vec.into_iter().next() {
                     let has_furigana = e.furigana.is_some();
