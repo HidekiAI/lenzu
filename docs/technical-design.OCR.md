@@ -12,7 +12,8 @@ With the shift to Linux as the primary platform, offline OCR becomes even more c
 
 This section outlines the key libraries used in the project:
 
-- **kakasi**: Used for Japanese text conversion from kanji to hiragana after OCR processing.
+- **MeCab** (`mecab` + `mecab-ipadic-utf8` / `mecab-naist-jdic`): Context-aware morphological analysis for furigana annotation and romaji generation. Replaces kakasi — MeCab understands word boundaries from neighboring characters. See `lenzu/src/furigana.rs`.
+- ~~**kakasi**~~: Previously used for kanji→hiragana conversion; replaced by MeCab (2026-04-12).
 - **tesseract**: Tesseract OCR engine for Linux and fallback scenarios; requires traineddata including `jpn_vert.traineddata`.
 - **windows-rs**: Enables integration with Windows Media OCR via `Media_Ocr` and `Globalization` features (Windows-only).
 - **leptonica**: Underlying library for Tesseract; required for building on Windows.
@@ -96,7 +97,7 @@ This section presents the comparative analysis of OCR solutions including perfor
 
 - **Performance Benchmarks**: Windows Media OCR processes images in ~2 seconds; Tesseract takes ~34 seconds on Linux with default settings and ~5 seconds with optimized Page Segmentation Mode (PSM 5); Manga-OCR processes in ~32 seconds but has complex installation.
 - **Accuracy Assessments**: Windows Media OCR demonstrated the highest accuracy for manga text; Tesseract performed adequately with preprocessing; Manga-OCR showed strong results but was finicky to install.
-- **Sample Outputs**: Examples of OCR results from different methods including raw text, line breakdown, and kakasi conversion outputs.
+- **Sample Outputs**: Examples of OCR results from different methods including raw text, line breakdown, and MeCab furigana/romaji annotation outputs.
 
 ## 5. windows-rs Integration
 
@@ -134,7 +135,7 @@ A list of pending tasks and future enhancements:
 - Add online OCR fallback option via OAuth2 (Google Cloud Vision).
 - Develop image preprocessing pipeline (grayscale, denoise, contrast adjustment).
 - Integrate dictionary lookup for enhanced translation capabilities.
-- Replace the fake kakasi crate with the official version.
+- ~~Replace the fake kakasi crate with the official version.~~ Resolved: kakasi replaced entirely by MeCab morphological analysis (2026-04-12).
 
 ## 9. Post Mortem
 
@@ -150,5 +151,5 @@ Reflections on the development process including challenges faced and lessons le
 Notes on building and compiling the project including dependencies and platform-specific instructions:
 
 - **Windows (MinGW64)**: Use `mingw64` toolchain; install packages via pacman; enable `Media_Ocr` feature.
-- **Linux (Debian)**: Install `kakasi`, `tesseract-ocr`, and `leptonica` via apt; use cargo build commands.
+- **Linux (Debian)**: Install `mecab`, `mecab-ipadic-utf8`, `mecab-naist-jdic` via apt; use cargo build commands. (kakasi is no longer required.)
 - **Debugging**: Conditional compilation writes `recognized_image.png` for offline inspection; use debug builds for testing.

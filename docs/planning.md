@@ -7,7 +7,7 @@
 - **UI**: GTK3 floating lens window (Cairo + Pango), transparent RGBA
 - **Capture**: X11 root window via `x11rb` (bypasses GPU-accelerated windows correctly)
 - **Overlay HUD**: Separate Electron process (`lenzu_server`) — transparent window, UDP IPC
-- **Interpreter**: Removed (was Kakasi); translation now handled entirely by the LLM
+- **Interpreter**: MeCab morphological analysis for furigana/romaji (replaced kakasi); LLM for english translation
 - **Config**: `lenzu_config.json` with `isolang` language codes and `OverlayRenderMode` enum
 - **Workspace**: Cargo workspace at repo root; members: `lenzu` (client) and prototypes; `lenzu_server` is a separate Node/Electron project
 
@@ -96,7 +96,8 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
 
 ### Recently completed
 
-- **Text-only LLM enrichment** (2026-04-12): After local OCR succeeds (both jp_detect >= 71% and manga-ocr-rs >= 71%), send raw text (not image) to local Ollama for furigana/romaji/translation. Text-to-text only — fast, no vision model. Graceful degradation if Ollama is unavailable. Language-configurable via `{src}/{dest}/{extra_prompt}` placeholders. Config: `enrichment_enabled`, `enrichment_model`, `enrichment_timeout_secs`. Prototype: `prototypes/text-enrichment-test/`.
+- **MeCab furigana + 3-phase progressive HUD** (2026-04-12): After local OCR succeeds, a 3-phase pipeline updates the HUD progressively: (1) raw text instant, (2) MeCab furigana+romaji in ~5 ms (deterministic, context-aware morphological analysis — no LLM), (3) LLM english translation if `enrichment_enabled`. MeCab replaces both kakasi (furigana) and LLM-based furigana (qwen2.5:3b produced garbage readings). Pure-Rust Hepburn romaji converter eliminates the kakasi CLI dependency entirely. Lens stays modal until final phase completes (no request stacking). Channel bounded(3) for 3-phase flow. See `lenzu/src/furigana.rs`.
+- **Text-only LLM enrichment** (2026-04-12): After local OCR succeeds, send raw text (not image) to local Ollama for english translation. Text-to-text only — fast, no vision model. Graceful degradation if Ollama is unavailable. Language-configurable via `{src}/{dest}/{extra_prompt}` placeholders. Config: `enrichment_enabled`, `enrichment_model`, `enrichment_timeout_secs`.
 
 ### Short-term — UI/UX
 
@@ -147,7 +148,7 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
    - Configurable font sizes and colors
 
 4. **Community & Ecosystem**
-   - Plugin system for interpreters (kakasi, mecab, kuromoji)
+   - Plugin system for interpreters (mecab is now built-in; kuromoji, juman++ as alternatives)
    - Shared traineddata repository
    - Translation backends (DeepL, Google Translate, offline dictionaries)
 
