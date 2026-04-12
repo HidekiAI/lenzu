@@ -78,6 +78,9 @@ pub struct OcrMeta {
     pub backend: String,
     /// Total round-trip time in milliseconds.
     pub elapsed_ms: u128,
+    /// When `true`, this is a preview result — more results are coming (e.g. enrichment).
+    /// The UI should show the text but keep the lens modal / spinner active.
+    pub preview: bool,
 }
 
 /// Parsed SSE stream result.
@@ -636,7 +639,7 @@ impl DualOcrClient {
         };
 
         if !needs_fb {
-            let meta = OcrMeta { backend: self.primary.label(), elapsed_ms: t0.elapsed().as_millis() };
+            let meta = OcrMeta { backend: self.primary.label(), elapsed_ms: t0.elapsed().as_millis(), preview: false };
             return primary_result.map(|r| (r, meta));
         }
 
@@ -664,7 +667,7 @@ impl DualOcrClient {
                 }
             };
             if ok {
-                let meta = OcrMeta { backend: local.label(), elapsed_ms: t0.elapsed().as_millis() };
+                let meta = OcrMeta { backend: local.label(), elapsed_ms: t0.elapsed().as_millis(), preview: false };
                 return result.map(|r| (r, meta));
             }
         }
@@ -683,7 +686,7 @@ impl DualOcrClient {
                 Err(e) => { eprintln!("[OCR] free remote failed ({e})"); false }
             };
             if ok {
-                return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() }));
+                return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false }));
             }
             // Fall through to paid remote if free remote failed or returned nothing useful.
             let fallback_b64_paid = encode_for_fallback(image, self.fallback_max_dimension);
@@ -695,12 +698,12 @@ impl DualOcrClient {
                     }
                     let meta_label = fb.label();
                     fb.call_api(&fallback_b64_paid).map(|r| {
-                        (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
+                        (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false })
                     })
                 }
                 None => {
                     eprintln!("[OCR] paid remote not configured (OPENROUTER_API_KEY not set) — returning free remote result");
-                    result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis() }))
+                    result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis(), preview: false }))
                 }
             }
         }
@@ -721,7 +724,7 @@ impl DualOcrClient {
             Err(e) => { eprintln!("[OCR] force-fallback free remote failed ({e})"); false }
         };
         if ok {
-            return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() }));
+            return result.map(|r| (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false }));
         }
 
         // Try paid remote
@@ -729,12 +732,12 @@ impl DualOcrClient {
             Some(fb) => {
                 let meta_label = fb.label();
                 fb.call_api(&b64).map(|r| {
-                    (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis() })
+                    (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false })
                 })
             }
             None => {
                 // Return whatever the free remote gave us (even if empty), or its error
-                result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis() }))
+                result.map(|r| (r, OcrMeta { backend: self.free_remote_fallback.label(), elapsed_ms: t0.elapsed().as_millis(), preview: false }))
                     .map_err(|_| "Remote override unavailable: OPENROUTER_API_KEY not set and free remote failed".into())
             }
         }

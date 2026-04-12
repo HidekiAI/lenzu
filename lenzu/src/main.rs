@@ -18,6 +18,7 @@ use isolang::Language;
 use lenzu::capture;
 use lenzu::client;
 use lenzu::config;
+use lenzu::furigana;
 use lenzu::ocr;
 use lenzu::utils;
 
@@ -418,7 +419,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
-    let (tx, rx) = async_channel::bounded::<Result<(Vec<client::TranslationResult>, client::OcrMeta), String>>(1);
+    let (tx, rx) = async_channel::bounded::<Result<(Vec<client::TranslationResult>, client::OcrMeta), String>>(3);
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
@@ -517,24 +518,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     glib::MainContext::default().spawn_local(async move {
         while let Ok(api_result) = rx.recv().await {
         let mut s = state_rx.borrow_mut();
-        s.is_loading = false;
         match api_result {
             Ok((results, meta)) => {
+                // Preview results show text immediately but keep the lens modal
+                // (is_loading stays true) so the user can't stack new requests.
+                if !meta.preview {
+                    s.is_loading = false;
+                }
+
                 let combined_english = results
                     .iter()
                     .map(|r| r.english.clone().unwrap_or_else(|| r.original.clone()))
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                let combined_original = results
-                    .iter()
-                    .map(|r| r.original.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
                 s.ocr_result = combined_english.clone();
-                s.status = format!("SUCCESS ({} items)", results.len());
-                let _ = s.clipboard.set_text(combined_original);
+                s.status = if meta.preview {
+                    format!("OCR done ({} items) — enriching…", results.len())
+                } else {
+                    format!("SUCCESS ({} items)", results.len())
+                };
 
                 if s.config.overlay_enabled {
                     let text = format_for_overlay(&results, &s.config.overlay_render_mode);
@@ -542,33 +545,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send_to_overlay(&text, s.config.overlay_udp_port);
                 }
 
-                let trimmed_english = combined_english.trim();
-                if !trimmed_english.is_empty() {
-                    if let Ok(mut f) = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(HISTORY_PATH)
-                    {
-                        let combined_original = results
-                            .iter()
-                            .map(|r| r.original.clone())
-                            .collect::<Vec<_>>()
-                            .join(" / ");
-                        let _ = writeln!(
-                            f,
-                            "[{}] ({}, {:.1}s) {} → {}",
-                            chrono::Local::now().format("%H:%M:%S"),
-                            meta.backend,
-                            meta.elapsed_ms as f64 / 1000.0,
-                            combined_original.trim(),
-                            trimmed_english
-                        );
-                    } else {
-                        eprintln!("[history] failed to open {}", HISTORY_PATH);
+                // Only update clipboard and history on final results (not preview)
+                if !meta.preview {
+                    let combined_original = results
+                        .iter()
+                        .map(|r| r.original.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let _ = s.clipboard.set_text(combined_original);
+
+                    let trimmed_english = combined_english.trim();
+                    if !trimmed_english.is_empty() {
+                        if let Ok(mut f) = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(HISTORY_PATH)
+                        {
+                            let combined_original = results
+                                .iter()
+                                .map(|r| r.original.clone())
+                                .collect::<Vec<_>>()
+                                .join(" / ");
+                            let _ = writeln!(
+                                f,
+                                "[{}] ({}, {:.1}s) {} → {}",
+                                chrono::Local::now().format("%H:%M:%S"),
+                                meta.backend,
+                                meta.elapsed_ms as f64 / 1000.0,
+                                combined_original.trim(),
+                                trimmed_english
+                            );
+                        } else {
+                            eprintln!("[history] failed to open {}", HISTORY_PATH);
+                        }
                     }
                 }
             }
             Err(e) => {
+                s.is_loading = false;
                 eprintln!("[OCR] API/parse error: {}", e);
                 s.status = format!("API Error: {}", e);
             }
@@ -864,23 +878,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         }).collect();
                                                         let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                         eprintln!("[OCR] fullscreen local-first succeeded — skipping LLM chain");
-                                                        let backend = if enrichment_enabled {
+                                                        // Phase 1: raw text preview
+                                                        let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                            backend: "local:manga-ocr".to_string(),
+                                                            elapsed_ms: total_ocr_ms,
+                                                            preview: true,
+                                                        })));
+
+                                                        // Phase 2: furigana + romaji (MeCab — instant)
+                                                        let furigana_ok = furigana::annotate(&mut t_results);
+                                                        if furigana_ok && enrichment_enabled {
+                                                            let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                                backend: "local:manga-ocr+furigana".to_string(),
+                                                                elapsed_ms: total_ocr_ms,
+                                                                preview: true,
+                                                            })));
+                                                        }
+
+                                                        // Phase 3: LLM enrichment (translation)
+                                                        let mut enriched = false;
+                                                        if enrichment_enabled {
                                                             let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
-                                                            if client::enrich_local_results(
+                                                            enriched = client::enrich_local_results(
                                                                 &mut t_results, &primary_endpoint, enrich_model,
                                                                 &enrichment_prompt, enrichment_timeout_secs,
                                                                 s_conf.primary_num_ctx,
-                                                            ) {
-                                                                "local:manga-ocr+enriched".to_string()
-                                                            } else {
-                                                                "local:manga-ocr".to_string()
-                                                            }
-                                                        } else {
-                                                            "local:manga-ocr".to_string()
+                                                            );
+                                                        }
+
+                                                        // Final send (via closure return → line 1140)
+                                                        let backend = match (furigana_ok, enriched) {
+                                                            (true, true)  => "local:manga-ocr+furigana+enriched",
+                                                            (true, false) => "local:manga-ocr+furigana",
+                                                            (false, true) => "local:manga-ocr+enriched",
+                                                            (false, false) => "local:manga-ocr",
                                                         };
                                                         return Ok((t_results, client::OcrMeta {
-                                                            backend,
+                                                            backend: backend.to_string(),
                                                             elapsed_ms: total_ocr_ms,
+                                                            preview: false,
                                                         }));
                                                     }
                                                     eprintln!("[OCR] fullscreen local-first: confidence below gate — falling through to LLM");
@@ -978,25 +1014,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     }).collect();
                                                     let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                     eprintln!("[OCR] local-first pipeline succeeded — {} results, skipping LLM chain", t_results.len());
-                                                    let backend = if enrichment_enabled {
+                                                    // Phase 1: raw text preview
+                                                    let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                        backend: "local:manga-ocr".to_string(),
+                                                        elapsed_ms: total_ocr_ms,
+                                                        preview: true,
+                                                    })));
+
+                                                    // Phase 2: furigana + romaji (MeCab — instant)
+                                                    let furigana_ok = furigana::annotate(&mut t_results);
+                                                    if furigana_ok && enrichment_enabled {
+                                                        let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                            backend: "local:manga-ocr+furigana".to_string(),
+                                                            elapsed_ms: total_ocr_ms,
+                                                            preview: true,
+                                                        })));
+                                                    }
+
+                                                    // Phase 3: LLM enrichment (translation)
+                                                    let mut enriched = false;
+                                                    if enrichment_enabled {
                                                         let enrich_model = enrichment_model.as_deref().unwrap_or(&primary_model);
-                                                        if client::enrich_local_results(
+                                                        enriched = client::enrich_local_results(
                                                             &mut t_results, &primary_endpoint, enrich_model,
                                                             &enrichment_prompt, enrichment_timeout_secs,
                                                             s_conf.primary_num_ctx,
-                                                        ) {
-                                                            "local:manga-ocr+enriched".to_string()
-                                                        } else {
-                                                            "local:manga-ocr".to_string()
-                                                        }
-                                                    } else {
-                                                        "local:manga-ocr".to_string()
+                                                        );
+                                                    }
+
+                                                    // Final send (via closure return → line 1140)
+                                                    let backend = match (furigana_ok, enriched) {
+                                                        (true, true)  => "local:manga-ocr+furigana+enriched",
+                                                        (true, false) => "local:manga-ocr+furigana",
+                                                        (false, true) => "local:manga-ocr+enriched",
+                                                        (false, false) => "local:manga-ocr",
                                                     };
-                                                    let meta = client::OcrMeta {
-                                                        backend,
+                                                    return Ok((t_results, client::OcrMeta {
+                                                        backend: backend.to_string(),
                                                         elapsed_ms: total_ocr_ms,
-                                                    };
-                                                    return Ok((t_results, meta));
+                                                        preview: false,
+                                                    }));
                                                 }
                                                 eprintln!("[OCR] local-first pipeline: confidence below gate — falling through to LLM chain");
                                             }

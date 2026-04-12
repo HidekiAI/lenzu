@@ -293,7 +293,7 @@ fn default_enrichment_model() -> Option<String> {
     Some("qwen2.5:3b".to_string())
 }
 fn default_enrichment_timeout_secs() -> u64 {
-    15
+    30 // cold start + model swap (ollama unloads primary to load enrichment model)
 }
 fn default_token_warning_threshold() -> u64 {
     100_000 // ~$0.01–0.04 depending on model pricing
@@ -523,7 +523,7 @@ mod tests {
         assert!(cfg.enrichment_enabled, "enrichment should be enabled by default");
         assert_eq!(cfg.enrichment_model.as_deref(), Some("qwen2.5:3b"),
             "enrichment_model should default to a text-only model, not a vision model");
-        assert_eq!(cfg.enrichment_timeout_secs, 15);
+        assert_eq!(cfg.enrichment_timeout_secs, 30);
     }
 
     #[test]
@@ -548,6 +548,6 @@ mod tests {
         assert!(cfg.enrichment_enabled, "enrichment_enabled must default to true for old configs");
         assert_eq!(cfg.enrichment_model.as_deref(), Some("qwen2.5:3b"),
             "old configs must get the default text-only enrichment model");
-        assert_eq!(cfg.enrichment_timeout_secs, 15);
+        assert_eq!(cfg.enrichment_timeout_secs, 30);
     }
 }

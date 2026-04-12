@@ -43,6 +43,7 @@ OLLAMA_VOLUME="lenzu-ollama-data"
 # All models pulled during setup.  Listed in priority order (primary first).
 #   gemma4:e2b  — primary OCR/translation (large, GPU recommended)
 #   glm-ocr     — OCR specialist, fast, great layout understanding (~2.2 GB)
+#   qwen2.5:3b  — text-only enrichment model (furigana/romaji/translation after local OCR)
 # Excluded:
 #   qwen2.5vl:3b  — CPU-bound on 4GB VRAM, 2+ min per query
 #   moondream     — captioning model, returns prose not structured OCR JSON
@@ -50,6 +51,7 @@ OLLAMA_VOLUME="lenzu-ollama-data"
 OLLAMA_MODELS=(
     "gemma4:e2b"
     "glm-ocr"
+    "qwen2.5:3b"
 )
 OLLAMA_MODEL="${OLLAMA_MODELS[0]}"  # legacy var used by version/CUDA checks
 
@@ -67,7 +69,9 @@ sudo apt install -y \
     libssl-dev \
     libgtk-4-dev \
     libgraphene-1.0-dev \
-    libkakasi2-dev \
+    mecab \
+    mecab-ipadic-utf8 \
+    mecab-naist-jdic \
     fonts-noto-cjk \
     fonts-ipafont-gothic
 
@@ -216,11 +220,10 @@ else
 
     pull_model_native() {
         for model in "${OLLAMA_MODELS[@]}"; do
-            # Check if model is already fully present before pulling.
-            if ollama list 2>/dev/null | awk '{print $1}' | grep -qx "$model"; then
-                echo "  $model already present — skipping."
-                continue
-            fi
+            # Always run `ollama pull` — it's idempotent: fully-present models
+            # return instantly ("up to date"), partial downloads resume.
+            # We cannot rely on `ollama list` because it shows models whose
+            # manifest was fetched even when layers are only partially downloaded.
             echo "  Pulling $model..."
             if ollama pull "$model"; then
                 echo "  $model ready."
@@ -305,91 +308,51 @@ else
     echo "$REQUESTED_MODE" > "$MODE_FILE"
     echo "  Ollama mode: $REQUESTED_MODE (saved to .ollama_mode)"
 
-    # ── decision tree ─────────────────────────────────────────────────────────
+    # ── ensure ollama is installed ──────────────────────────────────────────
     #
-    #  Priority:
-    #   1. ollama API already up (native running or Docker container running)
-    #      → pull the model if needed; warn if binary lacks CUDA in GPU mode
-    #   2. ollama binary installed but not running
-    #      → start it in the background, pull model
-    #   3. Docker available
-    #      → pull image + model into a named volume
-    #   4. Nothing available
-    #      → install native ollama via official install script, then pull model
-    #
-    # GPU mode + linuxbrew binary: the linuxbrew build has no CUDA support.
-    # We install the official binary so GPU inference is actually possible.
+    # 1. Install if missing (native preferred, Docker fallback)
+    # 2. Upgrade if below minimum version
+    # 3. Replace with CUDA build if GPU mode and binary lacks CUDA
+    # 4. Kill any running instance and start fresh
+    # 5. If it doesn't come up → something is seriously wrong, exit
 
-    # Upgrade native ollama if it's installed but below minimum version.
-    if ollama_binary_ok && ! ollama_version_ok; then
-        upgrade_ollama_native
+    if ! ollama_binary_ok && ! docker_ok; then
+        echo "  Neither ollama nor Docker found — installing native ollama..."
+        curl -fsSL https://ollama.com/install.sh | sh
     fi
 
-    # GPU mode: if the installed binary has no CUDA, replace it with the official build,
-    # then restart so the running process is the new CUDA-capable one.
-    if [[ "$REQUESTED_MODE" == "gpu" ]] && ollama_binary_ok && ! ollama_has_cuda; then
-        echo "  GPU mode selected but current binary ($(which ollama)) has no CUDA support."
-        echo "  Stopping running ollama..."
+    if ollama_binary_ok; then
+        if ! ollama_version_ok; then
+            upgrade_ollama_native
+        fi
+
+        # GPU mode: replace binary with CUDA build if needed
+        if [[ "$REQUESTED_MODE" == "gpu" ]] && ! ollama_has_cuda; then
+            echo "  GPU mode selected but current binary ($(which ollama)) has no CUDA support."
+            echo "  Installing official ollama (CUDA-enabled)..."
+            curl -fsSL https://ollama.com/install.sh | sh
+        fi
+
+        # ── fresh restart ────────────────────────────────────────────────────
+        # Kill whatever is running and start clean.  Guarantees the running
+        # process matches the binary we just verified/installed.
+        echo "  Restarting ollama..."
         pkill -x ollama 2>/dev/null || true
         sleep 1
-        echo "  Installing official ollama (CUDA-enabled)..."
-        curl -fsSL https://ollama.com/install.sh | sh
-        # The official installer creates a systemd service and starts it.
-        # If systemd is not available (or didn't start it), start manually.
-        echo -n "  Waiting for ollama to start..."
-        for i in $(seq 1 15); do
-            if ollama_api_up; then echo " ready."; break; fi
-            sleep 1; echo -n "."
-        done
-        if ! ollama_api_up; then
-            echo ""
-            echo "  Starting ollama manually..."
-            /usr/local/bin/ollama serve &>/dev/null &
-            sleep 2
-        fi
-    elif [[ "$REQUESTED_MODE" == "gpu" ]] && ollama_binary_ok && ollama_has_cuda; then
-        # Binary already has CUDA but the running process might be an old no-CUDA instance.
-        running_bin=$(ps -eo cmd= | grep "ollama serve" | grep -v grep | awk '{print $1}' | head -1)
-        if [[ -n "$running_bin" ]] && ! strings "$running_bin" 2>/dev/null | grep -q "CUDA_VISIBLE_DEVICES"; then
-            echo "  Running process ($running_bin) has no CUDA — restarting with CUDA binary..."
-            pkill -x ollama 2>/dev/null || true
-            sleep 1
-            /usr/local/bin/ollama serve &>/dev/null &
-            echo -n "  Waiting for ollama to restart..."
-            for i in $(seq 1 15); do
-                if ollama_api_up; then echo " ready."; break; fi
-                sleep 1; echo -n "."
-            done
-        fi
-    fi
-
-    if ollama_api_up; then
-        echo "  ollama already running at http://localhost:11434/"
-        if [[ "$REQUESTED_MODE" == "gpu" ]] && ! ollama_has_cuda; then
-            echo "  WARNING: running ollama still has no CUDA — restart it after this script finishes."
-        fi
-        if ollama_binary_ok; then
-            pull_model_native
-        else
-            # API is up (probably a Docker container someone started manually).
-            echo "  NOTE: ollama binary not in PATH; model pull skipped."
-            echo "        Run 'ollama pull $OLLAMA_MODEL' manually if needed."
-        fi
-
-    elif ollama_binary_ok; then
-        echo "  ollama installed ($(ollama --version)) but not running — starting it..."
         ollama serve &>/dev/null &
-        echo -n "  Waiting for ollama to start..."
-        for i in $(seq 1 15); do
+        echo -n "  Waiting for ollama..."
+        for i in $(seq 1 20); do
             if ollama_api_up; then echo " ready."; break; fi
             sleep 1; echo -n "."
         done
+
         if ! ollama_api_up; then
             echo ""
-            echo "  WARNING: ollama did not start in time. Try 'ollama serve' manually, then re-run setup.sh."
-        else
-            pull_model_native
+            echo "  ERROR: ollama failed to start. Check 'ollama serve' manually."
+            exit 1
         fi
+
+        pull_model_native
 
     elif docker_ok; then
         echo "  Docker found — using Docker for ollama."
@@ -400,21 +363,8 @@ else
         pull_model_docker
 
     else
-        echo "  Neither ollama nor Docker found — installing native ollama..."
-        curl -fsSL https://ollama.com/install.sh | sh
-        echo "  Starting ollama..."
-        ollama serve &>/dev/null &
-        echo -n "  Waiting for ollama to start..."
-        for i in $(seq 1 15); do
-            if ollama_api_up; then echo " ready."; break; fi
-            sleep 1; echo -n "."
-        done
-        if ! ollama_api_up; then
-            echo ""
-            echo "  WARNING: ollama did not start. Try 'ollama serve' manually, then re-run setup.sh."
-        else
-            pull_model_native
-        fi
+        echo "  ERROR: ollama installation failed and Docker is unavailable."
+        exit 1
     fi
 fi
 

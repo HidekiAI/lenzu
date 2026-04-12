@@ -144,31 +144,23 @@ check_gpu_support() {
     fi
 }
 
-# Quick smoke-test: send the bundled unit-test image to the model and verify
-# it returns at least one non-empty line of text.  Reports pass/fail without
-# blocking the startup if the model is slow.
-smoke_test_model() {
-    local sample_img="${REPO_ROOT}/assets/Unit-test-sample-texts.png"
-    if [[ ! -f "$sample_img" ]]; then
-        echo "==> Smoke-test image not found — skipping."
-        return
-    fi
-    echo -n "==> Smoke-testing ${OLLAMA_MODEL} with sample OCR image... "
-    local b64
-    b64=$(base64 -w0 "$sample_img")
+# Warm up the enrichment model (qwen2.5:3b) so it's loaded into VRAM before
+# the first capture.  Local OCR (manga-ocr-rs) is the primary path and doesn't
+# use ollama, but enrichment does — pre-loading avoids a 30-60s model swap on
+# the first capture.  Uses a trivial text-only request (no image, no vision model).
+ENRICHMENT_MODEL="${ENRICHMENT_MODEL:-qwen2.5:3b}"
+
+warmup_enrichment_model() {
+    echo -n "==> Warming up enrichment model (${ENRICHMENT_MODEL})... "
     local response
-    # Use || true so a curl failure (timeout, HTTP error, SSE rejection) never exits the script.
-    response=$(curl -s -m 30 -X POST "http://localhost:${OLLAMA_PORT}/v1/chat/completions" \
+    response=$(curl -s -m 60 -X POST "http://localhost:${OLLAMA_PORT}/v1/chat/completions" \
         -H "Content-Type: application/json" \
-        -d "{\"model\":\"${OLLAMA_MODEL}\",\"stream\":false,\"temperature\":0.1,
-             \"messages\":[{\"role\":\"user\",\"content\":[
-               {\"type\":\"text\",\"text\":\"List all text visible in this image, one line per block.\"},
-               {\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${b64}\"}}
-             ]}]}" 2>/dev/null) || true
+        -d "{\"model\":\"${ENRICHMENT_MODEL}\",\"stream\":false,\"temperature\":0.1,
+             \"messages\":[{\"role\":\"user\",\"content\":\"Reply with: ok\"}]}" 2>/dev/null) || true
     if echo "$response" | grep -q '"content"'; then
-        echo "PASS"
+        echo "ready"
     else
-        echo "SKIP (no response within 30s — model may be loading; lenzu will still run)"
+        echo "SKIP (model may still be loading; enrichment will retry on first capture)"
     fi
 }
 
@@ -195,12 +187,12 @@ if ollama_api_healthy; then
     echo "==> ollama already available at http://localhost:${OLLAMA_PORT}/ — skipping Docker."
     ensure_model
     check_gpu_support
-    smoke_test_model
+    warmup_enrichment_model
 elif command -v docker &>/dev/null && docker_daemon_running; then
     start_ollama
     ensure_model
     check_gpu_support
-    smoke_test_model
+    warmup_enrichment_model
 else
     echo "WARNING: ollama not running and Docker unavailable."
     if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
