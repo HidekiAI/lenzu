@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLIENT_BINARY="$REPO_ROOT/target/debug/lenzu"
+CLIENT_BINARY="$REPO_ROOT/target/release/lenzu"
 
 OLLAMA_CONTAINER="lenzu-ollama"
 OLLAMA_IMAGE="ollama/ollama"
@@ -219,7 +219,7 @@ pnpm run build
 
 echo "==> Building lenzu client..."
 cd "$REPO_ROOT"
-cargo build -p lenzu --features onnx
+cargo build -p lenzu --features onnx --release
 
 echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
 # Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
