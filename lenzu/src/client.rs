@@ -5,10 +5,27 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::utils::{encode_for_fallback, save_prewire_debug};
 
 const API_DEBUG_PATH: &str = "/dev/shm/lenzu/api_debug.txt";
+
+// ── Session-level paid token accumulator ─────────────────────────────────────
+// Tracks cumulative prompt and completion tokens for paid remote backends
+// across the entire session.  Updated by `send_and_parse` when the backend
+// reports `usage` and the request used an API key (= paid).
+static SESSION_PAID_PROMPT_TOKENS: AtomicU64 = AtomicU64::new(0);
+static SESSION_PAID_COMPLETION_TOKENS: AtomicU64 = AtomicU64::new(0);
+
+/// Returns cumulative (prompt_tokens, completion_tokens) for paid remote
+/// backends in this session.
+pub fn session_paid_tokens() -> (u64, u64) {
+    (
+        SESSION_PAID_PROMPT_TOKENS.load(Ordering::Relaxed),
+        SESSION_PAID_COMPLETION_TOKENS.load(Ordering::Relaxed),
+    )
+}
 
 pub struct OcrClient {
     api_key: String,
@@ -61,6 +78,18 @@ pub struct OcrMeta {
     pub backend: String,
     /// Total round-trip time in milliseconds.
     pub elapsed_ms: u128,
+}
+
+/// Parsed SSE stream result.
+struct SseResult {
+    content: String,
+    /// Mean token probability from logprobs (0.0–1.0), None if backend didn't return logprobs.
+    confidence: Option<f64>,
+    /// Last `finish_reason` from the stream ("stop", "length", etc.).
+    finish_reason: Option<String>,
+    /// Token counts from the `usage` field (typically in the final SSE chunk).
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
 }
 
 /// Default timeout for the entire request (connect + read).
@@ -205,19 +234,19 @@ impl OcrClient {
             return Err(format!("API HTTP {} — {}", status, snippet).into());
         }
 
-        let (content, confidence, finish_reason) = Self::read_sse_content(res)?;
+        let sse = Self::read_sse_content(res)?;
 
-        let conf_str = confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
-        let fr_str = finish_reason.as_deref().unwrap_or("n/a");
+        let conf_str = sse.confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
+        let fr_str = sse.finish_reason.as_deref().unwrap_or("n/a");
         eprintln!("[enrichment] LLM response: conf={conf_str} finish_reason={fr_str}");
 
         if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
             let _ = writeln!(f, "[{}] conf={} finish={} {}", Local::now().format("%H:%M:%S"),
-                conf_str, fr_str, content.trim());
+                conf_str, fr_str, sse.content.trim());
         }
 
-        let results = self.normalize_results(&Value::String(content))?;
-        Ok((results, confidence))
+        let results = self.normalize_results(&Value::String(sse.content))?;
+        Ok((results, sse.confidence))
     }
 
     /// POST a payload to the LLM endpoint, read the SSE stream, and parse the
@@ -258,34 +287,45 @@ impl OcrClient {
         // Successful responses are SSE streams (stream:true keeps the TCP connection
         // alive while ollama generates, preventing its 30-second write-timeout from
         // firing mid-inference).  Accumulate all delta.content tokens into one string.
-        let (content, confidence, finish_reason) = Self::read_sse_content(res)?;
+        let sse = Self::read_sse_content(res)?;
 
         // Log LLM confidence and finish_reason (all backends: local + remote)
-        let conf_str = confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
-        let fr_str = finish_reason.as_deref().unwrap_or("n/a");
+        let conf_str = sse.confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
+        let fr_str = sse.finish_reason.as_deref().unwrap_or("n/a");
         eprintln!("[OCR] LLM response: conf={conf_str} finish_reason={fr_str}");
+
+        // Log and accumulate token usage for paid remote backends (has API key)
+        if !self.api_key.is_empty() {
+            if let (Some(pt), Some(ct)) = (sse.prompt_tokens, sse.completion_tokens) {
+                SESSION_PAID_PROMPT_TOKENS.fetch_add(pt, Ordering::Relaxed);
+                SESSION_PAID_COMPLETION_TOKENS.fetch_add(ct, Ordering::Relaxed);
+                let (sp, sc) = session_paid_tokens();
+                eprintln!("[OCR] tokens: prompt={pt} completion={ct} | session: prompt={sp} completion={sc} total={}",
+                    sp + sc);
+            }
+        }
 
         // Write accumulated content to debug file.
         if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
             let _ = writeln!(f, "[{}] conf={} finish={} {}", Local::now().format("%H:%M:%S"),
-                conf_str, fr_str, content.trim());
+                conf_str, fr_str, sse.content.trim());
         }
 
         // The accumulated SSE content is the raw model output (JSON string).
         // normalize_results already handles the stringified-JSON path.
-        self.normalize_results(&Value::String(content))
+        self.normalize_results(&Value::String(sse.content))
     }
 
-    /// Read an SSE stream and return (content, confidence, finish_reason).
-    /// - `confidence`: mean token probability from logprobs (0.0–1.0), None if unavailable
-    /// - `finish_reason`: last `finish_reason` from the stream ("stop", "length", etc.)
-    fn read_sse_content(res: reqwest::blocking::Response) -> Result<(String, Option<f64>, Option<String>), Box<dyn std::error::Error>> {
+    /// Read an SSE stream and return parsed content, confidence, finish_reason, and token usage.
+    fn read_sse_content(res: reqwest::blocking::Response) -> Result<SseResult, Box<dyn std::error::Error>> {
         use std::io::BufRead;
         let reader = std::io::BufReader::new(res);
         let mut content = String::new();
         let mut logprob_sum: f64 = 0.0;
         let mut logprob_count: u32 = 0;
         let mut finish_reason: Option<String> = None;
+        let mut prompt_tokens: Option<u64> = None;
+        let mut completion_tokens: Option<u64> = None;
         for line in reader.lines() {
             let line = line?;
             let trimmed = line.trim();
@@ -310,15 +350,24 @@ impl OcrClient {
                     if let Some(fr) = chunk["choices"][0]["finish_reason"].as_str() {
                         finish_reason = Some(fr.to_string());
                     }
+                    // Capture token usage (typically in the final chunk)
+                    if let Some(usage) = chunk.get("usage") {
+                        if let Some(pt) = usage["prompt_tokens"].as_u64() {
+                            prompt_tokens = Some(pt);
+                        }
+                        if let Some(ct) = usage["completion_tokens"].as_u64() {
+                            completion_tokens = Some(ct);
+                        }
+                    }
                 }
             }
         }
-        let mean_prob = if logprob_count > 0 {
+        let confidence = if logprob_count > 0 {
             Some((logprob_sum / logprob_count as f64).exp())
         } else {
             None
         };
-        Ok((content, mean_prob, finish_reason))
+        Ok(SseResult { content, confidence, finish_reason, prompt_tokens, completion_tokens })
     }
 
     /// Strip optional markdown code fences that some LLMs add around JSON output.

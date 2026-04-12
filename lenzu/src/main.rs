@@ -423,7 +423,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
         let s = state_draw.borrow();
-        let (r, g, b) = hex_to_rgb(&s.config.hud_color_hex);
+        // HUD color: override based on session paid token spend
+        let (r, g, b) = {
+            let (sp, sc) = client::session_paid_tokens();
+            let total = sp + sc;
+            if s.config.token_critical_threshold > 0 && total >= s.config.token_critical_threshold {
+                (1.0, 0.27, 0.27) // red (#FF4444)
+            } else if s.config.token_warning_threshold > 0 && total >= s.config.token_warning_threshold {
+                (1.0, 0.65, 0.0) // orange (#FFA600)
+            } else {
+                hex_to_rgb(&s.config.hud_color_hex)
+            }
+        };
 
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);

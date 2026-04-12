@@ -430,6 +430,8 @@ Performance benchmarks and accuracy assessments across OCR engines:
 
 The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. When enrichment is enabled, a lightweight text-only Ollama call adds furigana/romaji/translation to the raw OCR output — this uses the same local Ollama instance but sends plain text instead of an image, so it's fast (~1–5 s) and needs no vision model. Low-confidence results fall through to the image-based LLM chain automatically.
 
+**Observability**: All LLM backends (local and remote) now report mean token probability (via logprobs) and `finish_reason` in stderr logs. Paid remote backends additionally log per-request and session-cumulative token counts (`prompt_tokens`, `completion_tokens`). The HUD color changes from configured → orange → red as session paid token usage crosses configurable thresholds (`token_warning_threshold`, `token_critical_threshold`).
+
 ## 13. windows-rs Integration
 
 Details on integrating Windows Media OCR via the `windows-rs` crate:

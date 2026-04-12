@@ -209,6 +209,15 @@ pub struct AppConfig {
     /// from `translate_src`/`translate_dest`.
     #[serde(default)]
     pub enrichment_prompt: Option<String>,
+    // ── Token spend warnings ────────────────────────────────────────────────
+    /// Session-total paid tokens (prompt + completion) at which the HUD color
+    /// changes from its configured color to orange.  0 = disable warning.
+    #[serde(default = "default_token_warning_threshold")]
+    pub token_warning_threshold: u64,
+    /// Session-total paid tokens at which the HUD color changes to red.
+    /// 0 = disable critical warning.
+    #[serde(default = "default_token_critical_threshold")]
+    pub token_critical_threshold: u64,
 }
 
 fn default_free_remote_endpoint() -> String {
@@ -286,6 +295,12 @@ fn default_enrichment_model() -> Option<String> {
 fn default_enrichment_timeout_secs() -> u64 {
     15
 }
+fn default_token_warning_threshold() -> u64 {
+    100_000 // ~$0.01–0.04 depending on model pricing
+}
+fn default_token_critical_threshold() -> u64 {
+    500_000 // ~$0.05–0.20 depending on model pricing
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -337,6 +352,8 @@ impl Default for AppConfig {
             enrichment_model: default_enrichment_model(),
             enrichment_timeout_secs: default_enrichment_timeout_secs(),
             enrichment_prompt: None,
+            token_warning_threshold: default_token_warning_threshold(),
+            token_critical_threshold: default_token_critical_threshold(),
         }
     }
 }

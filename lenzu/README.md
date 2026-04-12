@@ -337,8 +337,12 @@ Optional file in the working directory. All fields have defaults if the file is 
   // Text enrichment (post local-OCR) — adds furigana/romaji/translation to
   // raw manga-ocr-rs text via text-only Ollama call (no image, no vision model)
   "enrichment_enabled": true,
-  "enrichment_model": "qwen2.5:1.5b",
-  "enrichment_timeout_secs": 15
+  "enrichment_model": "qwen2.5:3b",
+  "enrichment_timeout_secs": 15,
+
+  // Token spend warnings — HUD color changes when paid API token usage is high
+  "token_warning_threshold": 100000,
+  "token_critical_threshold": 500000
 }
 ```
 
@@ -362,9 +366,11 @@ Optional file in the working directory. All fields have defaults if the file is 
 | `translate_src` / `translate_dest` | ISO 639-3 language codes (`"jpn"`, `"eng"`, `"kor"`, `"cmn"` …) | `"jpn"` / `"eng"` |
 | `translate_extra_prompt` | Appended to base prompt for language-specific fields | furigana/romaji hint |
 | `enrichment_enabled` | Enrich local OCR results with furigana/translation via text-only Ollama call | `true` |
-| `enrichment_model` | Text-only Ollama model for enrichment (not a vision model); `null` falls back to `llm_default_model` | `"qwen2.5:1.5b"` |
+| `enrichment_model` | Text-only Ollama model for enrichment (not a vision model); `null` falls back to `llm_default_model` | `"qwen2.5:3b"` |
 | `enrichment_timeout_secs` | Timeout for each enrichment request | `15` |
 | `enrichment_prompt` | Override the entire enrichment prompt; `null` uses built-in (JP furigana/romaji). `{src}`/`{dest}` placeholders resolved. | `null` |
+| `token_warning_threshold` | Session paid tokens at which HUD turns orange (0 = disable) | `100000` |
+| `token_critical_threshold` | Session paid tokens at which HUD turns red (0 = disable) | `500000` |
 
 ### How the prompt is built
 
