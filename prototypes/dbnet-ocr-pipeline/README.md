@@ -53,7 +53,7 @@ Auto-scaled params: threshold=0.35, dilation=6, pad=16 (longest edge 1635 — me
 |-----|------|-------|-------|----------|------|-------|-------|
 | [0] red | 672x581 | 99% | 13% | `いや、いや...いやいやぁっ、こういう最近人気の...` (hallucinated) | 29 s | No | Merged multiple panels; OCR hallucinated, truncated at 32 chars |
 | [1] green | 313x523 | 99% | 90% | `ああたしのオススメはうぶんちゅ` | 1.7 s | Yes | Clean single bubble, both scores well above 71% |
-| [2] blue | 117x106 | 84% | 74% | `その` | 0.8 s | Yes | Small fragment; both scores pass 71% gate |
+| [2] blue | 117x106 | 84% | 74% | `その` | 0.8 s | **False positive** | DBNet false positive — character hair/line art resembles katakana strokes; manga-ocr-rs hallucinates `その` at 74% (barely above 71% gate) |
 | [3] orange | 86x150 | 97% | 100% | `却下!` | 24 s | Yes | Tight single-word box, perfect OCR confidence |
 | [4] magenta | 236x218 | 97% | 8% | `よけんなこのっ!!!...` (hallucinated) | 27 s | No | Mixed art/text; OCR confidence collapsed, truncated |
 | [5] cyan | 227x195 | 97% | 16% | `いモリなからケーカしないで~~~っ!!!...` (hallucinated) | 39 s | No | Too much content; OCR hallucinated, truncated at 32 chars |
@@ -64,7 +64,14 @@ Auto-scaled params: threshold=0.35, dilation=6, pad=16 (longest edge 1635 — me
 **Det %** = jp_detect per-box confidence (mean probability of thresholded pixels).
 **OCR %** = manga-ocr-rs dimension-adjusted confidence. **Pass** = both >= 71% (the confidence gate used by lenzu's local-first pipeline).
 
-The pattern is clear: boxes that pass both confidence gates ([1], [2], [3], [7]) produce accurate text.
+The pattern is clear: boxes that pass both confidence gates with high scores ([1], [3], [7])
+produce accurate text. Box [2] is a **false positive** — DBNet detects character hair/line art
+as text (the high-contrast strokes resemble katakana), and manga-ocr-rs hallucinates `その`
+at 74% confidence, barely clearing the 71% gate. This is a known limitation of DBNet on
+manga art where character hair, speed lines, and hatching patterns create text-like edge
+gradients. Raising the gate to ~80% would filter it, at the cost of also filtering legitimate
+small fragments.
+
 High-confidence crops complete in 0.8–1.7 s. Low-confidence crops take 25–40 s because the
 decoder runs away generating garbage — the confidence gate catches these reliably.
 
@@ -118,12 +125,14 @@ The quality bottleneck is detection precision, not OCR accuracy.
 ### Confidence scores predict accuracy
 
 From the full-page run:
-- **High-confidence boxes** ([1], [3], [7]): both detection and OCR scores above 71% — all produced accurate text
+- **High-confidence boxes** ([1], [3], [7]): both scores well above 71% — all produced accurate text
+- **False positive** ([2]): det 84%, ocr 74% — DBNet detected character hair as katakana; manga-ocr-rs hallucinated `その` at barely-passing confidence. Art with high-contrast strokes (hair, speed lines, hatching) triggers this.
 - **Low-confidence boxes** ([0], [4], [5], [6], [8]): at least one score below 71% — all were hallucinated or partial
 
-The confidence gate at 71% cleanly separates accurate results from garbage. This is the
-threshold used by lenzu's local-first pipeline to decide whether manga-ocr-rs output can be
-trusted or must fall through to the LLM chain.
+The confidence gate at 71% catches most garbage, but borderline false positives like [2]
+(art misdetected as text) can slip through when OCR confidence lands in the 71–80% range.
+Raising the gate to ~80% would filter these at the cost of also rejecting legitimate
+small text fragments.
 
 Size alone doesn't predict accuracy — a large box with a single speech bubble scores high,
 while a small box that overlaps art scores low. The confidence scores capture this nuance.
