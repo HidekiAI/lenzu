@@ -1180,11 +1180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
 
-                            // MeCab overwrite: re-annotate furigana on LLM fallback results
+                            // MeCab overwrite: re-annotate furigana on LLM fallback results,
+                            // logging timing and MATCH/MISMATCH vs LLM furigana.
                             if s_conf.mecab_overwrite {
                                 if let Ok((ref mut results, _)) = result {
-                                    let overwritten = furigana::annotate(results, false);
-                                    eprintln!("[mecab-overwrite] fallback results: overwritten={overwritten}");
+                                    furigana::overwrite_with_comparison(results);
                                 }
                             }
 
