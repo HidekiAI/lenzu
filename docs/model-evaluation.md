@@ -8,13 +8,18 @@ using `scripts/test-ocr.sh --no-timeout` on hardware with 4GB VRAM (NVIDIA).
 ```
 jp_detect (>= 71% det confidence)
   → manga-ocr-rs (>= 71% OCR confidence)
-    → DONE (fully offline, no LLM)
+    → text enrichment (if enrichment_enabled): text-only Ollama call
+        adds furigana/romaji/translation — no image, no vision model
+        graceful degradation if Ollama unavailable
+    → DONE (local:manga-ocr or local:manga-ocr+enriched)
   → gemma4:e2b  →  glm-ocr  →  free remote  →  paid remote (Gemini 2.0 Flash)
 ```
 
-The local-first path (jp_detect + manga-ocr-rs) runs before any LLM. When both
-detection and OCR confidence are >= 71%, results are returned immediately — no
-Ollama, no network. The LLM chain is only reached when confidence is too low.
+The local-first path (jp_detect + manga-ocr-rs) runs before any image-based LLM.
+When both detection and OCR confidence are >= 71%, the raw text is optionally
+enriched with furigana/romaji/translation via a text-only Ollama call (no image
+sent — just plain text), then returned. The image-based LLM chain is only reached
+when confidence is too low.
 
 ---
 
@@ -76,8 +81,13 @@ Ollama, no network. The LLM chain is only reached when confidence is too low.
 - **Confidence scores**: Detection confidence = mean probability of thresholded DBNet pixels.
   OCR confidence = dimension-adjusted geometric mean of per-token probabilities.
   `truncated` flag fires when decoder runs away without EOS (strong hallucination signal).
-- **Notes**: Loaded once at startup, shared via `Arc`. No network, no API key. This is
-  the preferred path — the LLM chain exists as fallback for low-confidence cases only.
+- **Text enrichment**: When `enrichment_enabled` (default: true), raw OCR text is sent to
+  local Ollama as text-only (no image) for furigana/romaji/translation. Uses `enrichment_model`
+  (default: `llm_default_model`) with `enrichment_timeout_secs` (default: 15 s). If enrichment
+  fails, raw text is returned as-is. The enrichment prompt supports `{src}/{dest}/{extra_prompt}`
+  placeholders for any language pair.
+- **Notes**: Loaded once at startup, shared via `Arc`. No network, no API key for OCR itself.
+  This is the preferred path — the image-based LLM chain exists as fallback for low-confidence cases only.
 
 ### gemma4:e2b (primary local LLM fallback)
 - **Size**: ~7.2 GB

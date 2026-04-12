@@ -94,6 +94,10 @@ _Grayscale applies to all captures (local + remote); downscale applies only befo
 
 - **DBNet pre-detection + adaptive capture** (`M7`): find text bounding boxes locally before any API call. On every **Shift+Click** the capture area is an oversample (`max(lens_size × 2, 640)` px); DBNet finds text within the original lens region; the union bounding box of the detected text is the actual crop sent to OCR — smaller than the lens when text is small (token savings ~80–93%), larger than the lens when text extends past it. On **Ctrl+Shift+Click** the entire desktop is captured (lens window is hidden first to avoid obstruction), DBNet finds text nearest to the lens position, and the remote OCR backend is forced. Model: `assets/stabrise-text_detection_dbnet_ml_v02_model.onnx` (already committed). COCO YOLOv8n ruled out — no text/speech-bubble class. Design: `docs/technical-design.phase4-predetect.md` §3–4.
 
+### Recently completed
+
+- **Text-only LLM enrichment** (2026-04-12): After local OCR succeeds (both jp_detect >= 71% and manga-ocr-rs >= 71%), send raw text (not image) to local Ollama for furigana/romaji/translation. Text-to-text only — fast, no vision model. Graceful degradation if Ollama is unavailable. Language-configurable via `{src}/{dest}/{extra_prompt}` placeholders. Config: `enrichment_enabled`, `enrichment_model`, `enrichment_timeout_secs`. Prototype: `prototypes/text-enrichment-test/`.
+
 ### Short-term — UI/UX
 
 - Overlay position: configurable top/bottom via `hud_config.json`

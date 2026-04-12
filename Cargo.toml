@@ -16,4 +16,5 @@ members = [
   "prototypes/dbnet-test",
   "prototypes/manga-ocr-test",
   "prototypes/dbnet-ocr-pipeline",
+  "prototypes/text-enrichment-test",
 ]
