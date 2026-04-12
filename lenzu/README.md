@@ -115,6 +115,116 @@ immediately — no LLM, no Ollama, no network. Models loaded once at startup, sh
 > hardware-composited windows that traditional screenshot tools miss.
 > Source: https://gitlab.xfce.org/apps/xfce4-screenshooter
 
+## OCR Pipeline Flow
+
+Both capture paths share the same confidence-gated decision chain. The pipeline exits
+as soon as any tier produces a result; later tiers are only reached on failure.
+
+### Shift+Click (lens capture)
+
+```
+Shift+Click
+  │
+  ├─ hide lens window, sleep 400 ms (avoid capturing self)
+  ├─ capture_x11(lens_rect)  ← lens-sized region under cursor
+  ├─ grayscale()
+  │
+  ├─ DBNet detect (jp_detect)
+  │   ├─ no boxes found ──────────────────────────────┐
+  │   └─ N boxes found                                │
+  │       │                                            │
+  │       ├─ local OCR (manga-ocr-rs) per box         │
+  │       │   ├─ ALL boxes: det >= 71% AND ocr >= 71% │
+  │       │   │   └─ DONE ← return results ───────────┼──► format_for_overlay()
+  │       │   │       backend: "local:manga-ocr"       │        │
+  │       │   └─ any box below gate                    │        ├─ UDP JSON ──► lenzu_server
+  │       │       │                                    │        ├─ clipboard
+  │       │       ▼                                    │        └─ ocr_history.txt
+  │       ├─ per-region LLM (per_region_prompt)        │
+  │       │   ├─ any region succeeds                   │
+  │       │   │   └─ DONE ← return results ────────────┼──► format_for_overlay() ──► ...
+  │       │   └─ all per-region calls fail             │
+  │       │       │                                    │
+  │       ▼       ▼                                    │
+  │   ┌───────────────────────────────────────┐        │
+  │   │ OPT-1: crop to union bbox of          │◄───────┘
+  │   │ detected boxes (or full lens image    │
+  │   │ if no boxes were found)               │
+  │   └───────────┬───────────────────────────┘
+  │               │
+  │               ▼
+  │   ┌─ LLM fallback chain (full_prompt) ────────────────────────┐
+  │   │                                                            │
+  │   │  1. Ollama primary (glm-ocr, 3 s timeout)                 │
+  │   │     ├─ success ──► DONE                                    │
+  │   │     └─ fail/timeout ──► kill stale runner                  │
+  │   │                                                            │
+  │   │  2. Ollama local fallbacks (gemma4:e2b, ..., 3 s each)    │
+  │   │     ├─ any succeeds ──► DONE                               │
+  │   │     └─ all fail ──► kill stale runner                      │
+  │   │                                                            │
+  │   │  3. Free remote (openrouter/free, 15 s)                   │
+  │   │     ├─ success ──► DONE                                    │
+  │   │     └─ fail/empty                                          │
+  │   │                                                            │
+  │   │  4. Paid remote (Gemini 2.0 Flash, 60 s)                  │
+  │   │     ├─ success ──► DONE                                    │
+  │   │     └─ fail ──► return error                               │
+  │   │                                                            │
+  │   └──── every DONE ──► format_for_overlay() ──► UDP ──► HUD ──┘
+  │
+  └─ show lens window, display result for result_display_secs
+```
+
+### Ctrl+Shift+Click (full-desktop capture)
+
+```
+Ctrl+Shift+Click
+  │
+  ├─ hide lens window, sleep 400 ms
+  ├─ capture_x11(0, 0, screen_w, screen_h)  ← entire desktop
+  ├─ grayscale()
+  │
+  ├─ DBNet detect (jp_detect) on full desktop
+  │   ├─ no boxes found ──► return "No text detected near cursor"
+  │   └─ N boxes found
+  │       │
+  │       ├─ closest_box_to_point(cursor_x, cursor_y) → chosen box
+  │       │
+  │       ├─ BUG-4 check: chosen box > 60% of screen?
+  │       │   └─ yes: re-run DBNet on sub-crop with tighter params
+  │       │          if more boxes found → update chosen box
+  │       │
+  │       ├─ local OCR (manga-ocr-rs) on chosen box
+  │       │   ├─ det >= 71% AND ocr >= 71%
+  │       │   │   └─ DONE ← return results ──► format_for_overlay()
+  │       │   │       backend: "local:manga-ocr"       │
+  │       │   └─ below gate                            ├─ UDP ──► lenzu_server
+  │       │       │                                    ├─ clipboard
+  │       │       ▼                                    └─ ocr_history.txt
+  │       ├─ crop chosen box → TextCropper
+  │       │
+  │       ▼
+  │   ┌─ Remote fallback chain (call_api_force_fallback) ─────────┐
+  │   │                                                            │
+  │   │  1. Free remote (openrouter/free, 15 s)                   │
+  │   │     ├─ success ──► DONE                                    │
+  │   │     └─ fail/empty                                          │
+  │   │                                                            │
+  │   │  2. Paid remote (Gemini 2.0 Flash, 60 s)                  │
+  │   │     ├─ success ──► DONE                                    │
+  │   │     └─ fail ──► return error                               │
+  │   │                                                            │
+  │   └──── every DONE ──► format_for_overlay() ──► UDP ──► HUD ──┘
+  │
+  └─ show lens window, display result
+```
+
+**Key difference**: Ctrl+Shift+Click skips local Ollama entirely (`call_api_force_fallback`)
+and goes straight to remote backends after the local OCR gate. This is intentional — the
+full-desktop path is for when local models struggle, so there's no point waiting 3 s per
+local timeout.
+
 ## 🚀 Running
 
 ### Prerequisites
