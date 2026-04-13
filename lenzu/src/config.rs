@@ -219,9 +219,11 @@ pub struct AppConfig {
     /// When `true`, MeCab re-annotates furigana on results from the LLM
     /// fallback chain (DualOcrClient), overwriting whatever the LLM returned.
     /// MeCab is dictionary-based (~5 ms) and produces correct readings for
-    /// standard vocabulary.  Disabled by default; enable via config or
-    /// `--mecab_overwrite` CLI flag.
-    #[serde(default)]
+    /// standard vocabulary.  Enabled by default; disable via config or
+    /// `--nomecab_overwrite` CLI flag.
+    /// MeCab comparison always runs regardless of this flag — mismatches are
+    /// always logged as warnings for reliability analysis.
+    #[serde(default = "default_mecab_overwrite")]
     pub mecab_overwrite: bool,
     // ── Token spend warnings ────────────────────────────────────────────────
     /// Session-total paid tokens (prompt + completion) at which the HUD color
@@ -309,6 +311,9 @@ fn default_enrichment_model() -> Option<String> {
 fn default_enrichment_timeout_secs() -> u64 {
     30 // cold start + model swap (ollama unloads primary to load enrichment model)
 }
+fn default_mecab_overwrite() -> bool {
+    true
+}
 fn default_token_warning_threshold() -> u64 {
     100_000 // ~$0.01–0.04 depending on model pricing
 }
@@ -367,7 +372,7 @@ impl Default for AppConfig {
             enrichment_timeout_secs: default_enrichment_timeout_secs(),
             enrichment_prompt: None,
             furigana_only: false,
-            mecab_overwrite: false,
+            mecab_overwrite: true,
             token_warning_threshold: default_token_warning_threshold(),
             token_critical_threshold: default_token_critical_threshold(),
         }

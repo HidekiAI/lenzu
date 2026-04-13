@@ -293,10 +293,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("[Config] --furigana_only: MeCab furigana only, LLM enrichment disabled");
     }
 
-    // CLI override: --mecab_overwrite re-annotates furigana via MeCab on LLM fallback results
-    if std::env::args().any(|a| a == "--mecab_overwrite") {
-        cfg.mecab_overwrite = true;
-        eprintln!("[Config] --mecab_overwrite: MeCab will overwrite LLM furigana on fallback results");
+    // CLI override: --nomecab_overwrite disables MeCab furigana overwrite on LLM fallback results
+    // (comparison + warning logging still runs regardless)
+    if std::env::args().any(|a| a == "--nomecab_overwrite") {
+        cfg.mecab_overwrite = false;
+        eprintln!("[Config] --nomecab_overwrite: MeCab will compare but NOT overwrite LLM furigana");
     }
 
     eprintln!(
@@ -1184,12 +1185,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
 
-                            // MeCab overwrite: re-annotate furigana on LLM fallback results,
-                            // logging timing and MATCH/MISMATCH vs LLM furigana.
-                            if s_conf.mecab_overwrite {
-                                if let Ok((ref mut results, _)) = result {
-                                    furigana::overwrite_with_comparison(results);
-                                }
+                            // MeCab check: always compare LLM furigana against MeCab's
+                            // dictionary-based readings (logs timing + MATCH/MISMATCH).
+                            // Overwrites LLM furigana with MeCab's unless --nomecab_overwrite.
+                            if let Ok((ref mut results, _)) = result {
+                                furigana::compare_and_maybe_overwrite(results, s_conf.mecab_overwrite);
                             }
 
                             let _ = tx_clone.send_blocking(result);

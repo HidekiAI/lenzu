@@ -407,14 +407,18 @@ mod imp {
         any
     }
 
-    /// Re-annotate furigana via MeCab on results that already have LLM furigana,
-    /// comparing before overwriting.  Logs timing and mismatches.
-    /// Returns `true` if any result was overwritten.
-    pub(super) fn overwrite_with_comparison(results: &mut [super::TranslationResult]) -> bool {
+    /// Compare LLM furigana against MeCab's dictionary-based readings.
+    /// Always logs timing and MATCH/MISMATCH (warnings on mismatch).
+    /// When `overwrite` is true, replaces the LLM furigana with MeCab's.
+    /// Returns `true` if any result was processed.
+    pub(super) fn compare_and_maybe_overwrite(
+        results: &mut [super::TranslationResult],
+        overwrite: bool,
+    ) -> bool {
         use std::time::Instant;
 
         if find_mecab_dict().is_none() {
-            eprintln!("[mecab-overwrite] no MeCab UTF-8 dictionary found — skipping");
+            eprintln!("[mecab-check] no MeCab UTF-8 dictionary found — skipping");
             return false;
         }
 
@@ -435,27 +439,30 @@ mod imp {
                 let matched = llm_furigana == mecab_furigana;
                 if matched {
                     eprintln!(
-                        "[mecab-overwrite] {:.1}ms MATCH «{}»",
+                        "[mecab-check] {:.1}ms MATCH «{}»",
                         elapsed_ms,
                         truncate_display(&mecab_furigana, 60),
                     );
                 } else {
                     eprintln!(
-                        "[mecab-overwrite] {:.1}ms MISMATCH\n  llm:   «{}»\n  mecab: «{}»",
+                        "[mecab-check] {:.1}ms WARNING MISMATCH (overwrite={})\n  llm:   «{}»\n  mecab: «{}»",
                         elapsed_ms,
+                        overwrite,
                         truncate_display(llm_furigana, 80),
                         truncate_display(&mecab_furigana, 80),
                     );
                 }
 
-                result.furigana = Some(mecab_furigana);
-                if !mecab_romaji.is_empty() {
-                    result.romaji = Some(mecab_romaji);
+                if overwrite {
+                    result.furigana = Some(mecab_furigana);
+                    if !mecab_romaji.is_empty() {
+                        result.romaji = Some(mecab_romaji);
+                    }
                 }
                 any = true;
             } else {
                 eprintln!(
-                    "[mecab-overwrite] {:.1}ms MeCab returned nothing for «{}»",
+                    "[mecab-check] {:.1}ms MeCab returned nothing for «{}»",
                     elapsed_ms,
                     truncate_display(text, 40),
                 );
@@ -480,7 +487,10 @@ mod imp {
     pub(super) fn annotate(_results: &mut [super::TranslationResult], _furigana_only: bool) -> bool {
         false
     }
-    pub(super) fn overwrite_with_comparison(_results: &mut [super::TranslationResult]) -> bool {
+    pub(super) fn compare_and_maybe_overwrite(
+        _results: &mut [super::TranslationResult],
+        _overwrite: bool,
+    ) -> bool {
         false
     }
 }
@@ -493,11 +503,12 @@ pub fn annotate(results: &mut [TranslationResult], furigana_only: bool) -> bool 
     imp::annotate(results, furigana_only)
 }
 
-/// Re-annotate furigana via MeCab, comparing against existing LLM furigana.
-/// Logs timing (ms) and MATCH/MISMATCH per result before overwriting.
+/// Compare LLM furigana against MeCab and optionally overwrite.
+/// Always logs timing and MATCH/MISMATCH (warnings on mismatch).
+/// When `overwrite` is true, replaces the LLM furigana with MeCab's.
 /// Linux-only; returns `false` on other platforms.
-pub fn overwrite_with_comparison(results: &mut [TranslationResult]) -> bool {
-    imp::overwrite_with_comparison(results)
+pub fn compare_and_maybe_overwrite(results: &mut [TranslationResult], overwrite: bool) -> bool {
+    imp::compare_and_maybe_overwrite(results, overwrite)
 }
 
 #[cfg(test)]
