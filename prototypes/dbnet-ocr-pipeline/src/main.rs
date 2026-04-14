@@ -267,7 +267,14 @@ fn run(
             continue;
         }
 
-        let crop = img.crop_imm(bbox.x1, bbox.y1, w, h);
+        // 10% proportional padding — prevents edge-character hallucination/hangs.
+        let pad_x = (w as f32 * 0.10) as u32;
+        let pad_y = (h as f32 * 0.10) as u32;
+        let cx1 = bbox.x1.saturating_sub(pad_x);
+        let cy1 = bbox.y1.saturating_sub(pad_y);
+        let cx2 = (bbox.x2 + pad_x).min(img_w);
+        let cy2 = (bbox.y2 + pad_y).min(img_h);
+        let crop = img.crop_imm(cx1, cy1, cx2 - cx1, cy2 - cy1);
 
         // Save individual crop
         if let Some(dir) = save_crops {

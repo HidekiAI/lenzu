@@ -26,11 +26,20 @@ pub struct TextCropper {
     /// Skip crops whose area (width × height) is below this pixel threshold.
     /// Default: 256 px² (16×16).  Prevents sending furigana / single-character noise.
     pub min_area: u32,
+    /// Proportional padding as a fraction of each box dimension (0.0–1.0).
+    /// Per-box effective padding = max(self.pad, dimension * pad_percent).
+    /// Default: 0.0 (disabled — fixed `pad` only).
+    pub pad_percent: f32,
 }
 
 impl TextCropper {
     pub fn new(pad: u32, min_area: u32) -> Self {
-        TextCropper { pad, min_area }
+        TextCropper { pad, min_area, pad_percent: 0.0 }
+    }
+
+    pub fn with_pad_percent(mut self, pct: f32) -> Self {
+        self.pad_percent = pct;
+        self
     }
 
     /// Crop `image` at each bounding box, apply padding (clamped to image bounds),
@@ -40,10 +49,14 @@ impl TextCropper {
         let mut regions = Vec::new();
 
         for bbox in boxes {
-            let x1 = bbox.x1.saturating_sub(self.pad);
-            let y1 = bbox.y1.saturating_sub(self.pad);
-            let x2 = (bbox.x2 + self.pad).min(img_w);
-            let y2 = (bbox.y2 + self.pad).min(img_h);
+            let box_w = bbox.x2.saturating_sub(bbox.x1);
+            let box_h = bbox.y2.saturating_sub(bbox.y1);
+            let pad_x = self.pad.max((box_w as f32 * self.pad_percent) as u32);
+            let pad_y = self.pad.max((box_h as f32 * self.pad_percent) as u32);
+            let x1 = bbox.x1.saturating_sub(pad_x);
+            let y1 = bbox.y1.saturating_sub(pad_y);
+            let x2 = (bbox.x2 + pad_x).min(img_w);
+            let y2 = (bbox.y2 + pad_y).min(img_h);
             let w = x2.saturating_sub(x1);
             let h = y2.saturating_sub(y1);
 

@@ -944,7 +944,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding, 256,
-                                            );
+                                            ).with_pad_percent(0.10);
                                             if let Some(crop) = cropper
                                                 .crop(&dyn_image, &[boxes[idx].clone()])
                                                 .into_iter()
@@ -1081,7 +1081,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding,
                                                 256,
-                                            );
+                                            ).with_pad_percent(0.10);
                                             let crops = cropper.crop(&dyn_image, &boxes);
                                             if !crops.is_empty() {
                                                 let dual_region = client::DualOcrClient::new(
@@ -1169,7 +1169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         .and_then(|union| {
                                             let cropper = ocr::text_cropper::TextCropper::new(
                                                 s_conf.text_detection_crop_padding, 0,
-                                            );
+                                            ).with_pad_percent(0.10);
                                             cropper.crop(&dyn_image, &[union])
                                                 .into_iter().next().map(|c| c.image)
                                         })

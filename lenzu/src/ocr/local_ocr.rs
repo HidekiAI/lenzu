@@ -89,7 +89,7 @@ impl LocalOcrEngine {
         crop_pad: u32,
         min_crop_area: u32,
     ) -> (Option<Vec<LocalOcrResult>>, Vec<LocalOcrResult>) {
-        let cropper = TextCropper::new(crop_pad, min_crop_area);
+        let cropper = TextCropper::new(crop_pad, min_crop_area).with_pad_percent(0.10);
         let crops = cropper.crop(image, boxes);
 
         if crops.is_empty() {
