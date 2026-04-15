@@ -31,7 +31,7 @@ against 3 standard test PNGs.
 
 **Prototype**: `prototypes/umi-ocr-eval/`
 
-**Results: 0/3 PASS**
+**Results: 0/3 PASS** (pre-rescale oversized images — yokogaki 711×389, tategaki/tegaki 2760×1504)
 
 | Image | Orientation | Expected | Got | Score | Time (ms) |
 |---|---|---|---|---|---|
@@ -41,6 +41,7 @@ against 3 standard test PNGs.
 
 **Verdict**: Not viable for manga OCR. Vertical text completely broken (maintainer
 acknowledges this in issue #434). Even horizontal text has character-level errors.
+Images were rescaled on 2026-04-15 — re-evaluation with smaller inputs pending.
 
 ---
 
@@ -51,7 +52,7 @@ via llama.cpp server against the same 3 PNGs.
 
 **Prototype**: `prototypes/paddleocr-vl-manga/`
 
-**Results: 2/3 PASS** (CPU-only, no CUDA toolkit — BF16 on Xeon E5-2670v3)
+**Results: 2/3 PASS** (CPU-only, no CUDA toolkit — BF16 on Xeon E5-2670v3; pre-rescale images)
 
 | Image | Orientation | Expected | Got | Tokens | Time (ms) |
 |---|---|---|---|---|---|
@@ -63,6 +64,7 @@ via llama.cpp server against the same 3 PNGs.
 Tategaki has correct text present but with hallucinated prefix — potentially fixable
 with max_tokens tuning or post-processing. CPU times are slow (100+ seconds) due to
 BF16 without CUDA — expect ~1-5s with GPU.
+Images were rescaled on 2026-04-15 — re-evaluation with smaller inputs pending.
 
 ### Why llama-server, not Ollama?
 
@@ -118,15 +120,15 @@ Key findings:
 
 ---
 
-## 7. Test Image Size Concern
+## 7. Test Image Size Concern (resolved 2026-04-15)
 
-The tategaki and tegaki PNGs are 2760x1504 (4.6-4.7 MB) — full compositor screenshots,
-not realistic manga bubble crops. This likely contributed to:
-- Slow inference (large image encoding overhead)
-- Tategaki hallucination (model fills in context for mostly-blank image)
-- Umi-OCR base64 "argument list too long" errors (fixed with temp file approach)
-
-The yokogaki at 711x389 is more realistic and was consistently the fastest/most accurate.
+The tategaki and tegaki PNGs were 2760x1504 (4.6-4.7 MB) — full compositor screenshots,
+not realistic manga bubble crops. This was fixed on 2026-04-15: images rescaled to
+manga-bubble-realistic sizes (yokogaki 360×197, tategaki 480×262, tegaki 480×262,
+sample-texts 640×349). With the rescaled images:
+- manga-ocr-rs: 3/3 correct text (tategaki bracket-style 「」vs『』 only diff)
+- DBNet+manga-ocr pipeline: 3/3 exact match with high confidence (95-99% OCR)
+- Inference time per crop: ~1.0-1.5 s (was 25-40 s for oversized images)
 
 ---
 

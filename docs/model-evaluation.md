@@ -1,6 +1,6 @@
 # OCR Model Evaluation Log
 
-Models tested against `assets/Unit-test-sample-texts.png` (640px max-dim, grayscale)
+Models tested against `assets/Unit-test-sample-texts.png` (640×349 px, grayscale)
 using `scripts/test-ocr.sh --no-timeout` on hardware with 4GB VRAM (NVIDIA).
 
 ## Current chain
@@ -73,11 +73,20 @@ when confidence is too low.
 ### jp_detect + manga-ocr-rs (local-first, no LLM)
 - **Crates**: `jp_detect >= 0.2.2`, `manga-ocr-rs >= 0.1.1`
 - **Size**: ~4.7 MB (DBNet) + ~140 MB (manga-ocr encoder+decoder)
-- **Speed**: ~700-1500 ms detection + ~0.8-2 s OCR per high-confidence crop (CPU); 25-40 s for low-confidence crops (decoder runaway); much faster with GPU
+- **Speed**: ~700-1500 ms detection + ~1.0-1.5 s OCR per crop (CPU); much faster with GPU
 - **Quality**: Excellent for clean, isolated text regions. Per-box confidence scores
   (0.0-1.0) reliably predict accuracy — boxes passing the 71% gate on both detection
   and OCR are consistently correct. Fails gracefully on merged/ambiguous regions by
   reporting low confidence, triggering fallback to the LLM chain.
+- **Benchmark (2026-04-15)** — rescaled manga-bubble-sized test images:
+
+  | Image | Size | Det % | OCR % | Text | Time |
+  |---|---|---|---|---|---|
+  | yokogaki | 360×197 | 99.5% | 95.0% | `データを正確に読み取る` (exact) | 1.0 s |
+  | tategaki | 480×262 | 97.0% | 99.5% | `『言語モデルのテスト』` (exact) | 1.1 s |
+  | tegaki | 480×262 | 99.4% | 88.7% | `手書きの文字サンプル` (exact) | 1.0 s |
+
+  All three pass the 71% confidence gate on both detection and OCR.
 - **Confidence scores**: Detection confidence = mean probability of thresholded DBNet pixels.
   OCR confidence = dimension-adjusted geometric mean of per-token probabilities.
   `truncated` flag fires when decoder runs away without EOS (strong hallucination signal).

@@ -73,6 +73,8 @@ These companion crates were developed as part of this project and are available 
 - [`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs) — Japanese manga OCR via ViT encoder + BERT decoder (ONNX). Converts image crops to Japanese text.
 - [`mecab-furigana-rs`](https://crates.io/crates/mecab-furigana-rs) — MeCab-based furigana and romaji annotation. Dictionary-accurate readings at ~5 ms per call, with word segmentation and morpheme data.
 
+See [OCR Accuracy Scores](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for unified benchmark results across all engines and prototypes.
+
 ## Libraries & Dependencies
 
 - [`gtk` 0.18](https://crates.io/crates/gtk) — GTK3 bindings (gtk-rs). **GTK3, not GTK4.**
