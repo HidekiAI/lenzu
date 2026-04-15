@@ -1,8 +1,8 @@
 {
   "crop_file": "tegaki_cut.png",
   "text": "手書きの文字サンプル",
-  "top_xy": [20, 50],
-  "bot_xy": [780, 250],
+  "top_xy": [3, 9],
+  "bot_xy": [136, 43],
   "orientation": "horizontal",
   "note": "Black calligraphy style; usually processed as horizontal."
 }

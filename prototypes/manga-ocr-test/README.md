@@ -28,6 +28,22 @@ cargo run -p manga-ocr-test -- path/to/image.png /path/to/models
 
 ---
 
+## Test Results (2026-04-15)
+
+Rescaled test images (manga-bubble-realistic sizes).
+
+| Image | Size | Expected | Got | OCR Time | Result |
+|---|---|---|---|---|---|
+| Unit-test-yokogaki.png | 360×197 | `データを正確に読み取る` | `データを正確に読み取る` | ~1.4 s | **PASS** (exact) |
+| Unit-test-tategaki.png | 480×262 | `『言語モデルのテスト』` | `「言語モデルのテスト」` | ~1.5 s | **PASS** (bracket variant) |
+| Unit-test-tegaki.png | 480×262 | `手書きの文字サンプル` | `手書きの文字サンプル` | ~1.5 s | **PASS** (exact) |
+
+**3/3 PASS.** Tategaki reads the correct text but uses single corner brackets `「」`
+instead of double `『』` — the bracket style is ambiguous at this resolution.
+When cropped tighter by DBNet (142×262), manga-ocr-rs returns the correct `『』`.
+
+See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for comparison across all OCR engines.
+
 ## Credits
 
 ONNX model: [mayocream/manga-ocr-onnx](https://huggingface.co/mayocream/manga-ocr-onnx)  

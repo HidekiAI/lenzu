@@ -216,6 +216,74 @@ kept at the public API boundary.  Steps to publish as `manga-ocr-rs`:
 | Hallucination on merged regions | OCR confidence drops below 71% gate; `truncated` flag fires | Beam search decoder runs away without EOS when input contains multiple text columns or mixed art — reliably caught by low confidence score |
 | Ambiguous/noisy input | Low OCR confidence triggers LLM fallback | Results with < 71% OCR confidence are not trusted; pipeline falls through to Ollama → OpenRouter chain |
 | No furigana/translation | N/A — manga-ocr-rs outputs raw text only | Addressed by text enrichment: when `enrichment_enabled`, raw text is sent to local Ollama for furigana/romaji/translation. Graceful degradation if Ollama is unavailable. |
+| Input dimensions matter | Oversized inputs degrade accuracy | See §7.1 below |
+
+### 7.1 Input dimension sensitivity (2026-04-15 findings)
+
+The ViT encoder resizes all inputs to 224×224 via `resize_exact`. This makes the model
+sensitive to the **aspect ratio and scale** of the source image relative to the text
+it contains. Testing revealed stark accuracy differences between oversized "billboard"
+images and realistic manga-bubble-sized inputs.
+
+#### Before/after rescaling
+
+Test images were originally generated at full compositor resolution (yokogaki 711×389,
+tategaki 2760×1504, tegaki 2760×1504). On 2026-04-15 they were rescaled to
+manga-bubble-realistic sizes (yokogaki 360×197, tategaki 480×262, tegaki 480×262).
+
+**manga-ocr-rs standalone** (full image, no DBNet crop):
+
+| Image | Old size | Old result | New size | New result |
+|---|---|---|---|---|
+| yokogaki | 711×389 | exact match | 360×197 | exact match |
+| tategaki | 2760×1504 | `ラスト` instead of `テスト` (character confusion) | 480×262 | correct text, `「」` bracket variant |
+| tegaki | 2760×1504 | exact match | 480×262 | exact match |
+
+**DBNet + manga-ocr-rs pipeline** (tight crop, then OCR):
+
+| Image | Size | Det % | OCR % | Text | Time |
+|---|---|---|---|---|---|
+| yokogaki | 360×197 | 99.5% | 95.0% | `データを正確に読み取る` (exact) | 1.0 s |
+| tategaki | 480×262 | 97.0% | 99.5% | `『言語モデルのテスト』` (exact, correct brackets) | 1.1 s |
+| tegaki | 480×262 | 99.4% | 88.7% | `手書きの文字サンプル` (exact) | 1.0 s |
+
+#### Why oversized inputs fail
+
+When a 2760×1504 image is squish-resized to 224×224, the text occupies only a
+fraction of the 14×14 patch grid (196 patches total). Most patches see blank
+background. The model:
+
+1. **Loses fine character detail** — katakana テ and ラ differ by one stroke
+   direction; at 224px the compressed patches can't resolve this.
+2. **Hallucinates context** — large blank areas trigger the decoder to fill in
+   plausible but wrong content (e.g., PaddleOCR-VL hallucinated a prefix before
+   the actual text on the oversized tategaki image).
+3. **Inference time balloons** — the decoder runs away on ambiguous inputs.
+   Per-crop OCR time dropped from 25-40 s (oversized) to ~1.0-1.5 s (realistic).
+
+#### Why the DBNet crop path gives better results than standalone
+
+Even with realistically-sized images, DBNet provides a tighter crop around just
+the text region. The tategaki image at 480×262 contains text in only the left
+~30% of the frame. Standalone manga-ocr receives the full 480×262 and produces
+`「」` brackets (single corner). DBNet crops to 142×262 (just the text column),
+and manga-ocr returns the correct `『』` brackets (double corner). The tighter
+crop means the text fills more of the 224×224 patch grid, improving accuracy.
+
+#### Design implications
+
+1. **Always crop before OCR** — never send full screenshots or compositor captures
+   directly to manga-ocr-rs. DBNet detection → tight crop → OCR is the correct
+   pipeline. The standalone model is a fallback, not the primary path.
+2. **Pad crops conservatively** — enough padding to avoid clipping characters (the
+   current proportional 10% bbox padding), but not so much that text becomes small
+   relative to the 224×224 grid.
+3. **Test fixtures must be realistic** — use manga-bubble-sized images (200-500px),
+   not billboard-scale screenshots. Oversized fixtures give misleading accuracy
+   numbers and unrealistic inference times.
+4. **Composite images merge at small scale** — the 640×349 sample-texts image
+   (3 text regions in one frame) produces 1 merged detection box at dilation=16.
+   Individual text images are the correct unit for OCR benchmarking.
 
 ---
 

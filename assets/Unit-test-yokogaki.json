@@ -1,8 +1,8 @@
 {
   "crop_file": "yokogaki_cut.png",
   "text": "データを正確に読み取る",
-  "top_xy": [15, 40],
-  "bot_xy": [785, 210],
+  "top_xy": [8, 20],
+  "bot_xy": [345, 106],
   "orientation": "horizontal",
   "note": "Blue clean font; standard horizontal OCR."
 }

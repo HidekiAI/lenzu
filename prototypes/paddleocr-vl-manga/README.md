@@ -31,9 +31,14 @@ served via llama.cpp as a GGUF model for Japanese manga OCR.
 ./eval.sh
 ```
 
-## Results (2026-04-14)
+## Results (2026-04-14, pre-rescale images)
 
 Engine: llama-server (CPU-only, no CUDA toolkit — BF16 on Xeon E5-2670v3 / Quadro M4000).
+
+> **Note**: These results were obtained with the original oversized images (yokogaki 711×389,
+> tategaki/tegaki 2760×1504). The images were rescaled on 2026-04-15 to manga-bubble-realistic
+> sizes (yokogaki 360×197, tategaki/tegaki 480×262). Smaller inputs should improve tategaki
+> accuracy and reduce inference time. Re-run `./eval.sh` with llama-server to update.
 
 | Image | Orientation | Expected | Got | Result | Tokens | Time (ms) |
 |---|---|---|---|---|---|---|
@@ -51,17 +56,19 @@ Engine: llama-server (CPU-only, no CUDA toolkit — BF16 on Xeon E5-2670v3 / Qua
   due to CPU-only BF16 inference.
 - **Tegaki** (calligraphy): Perfect match (trivial leading space). 104s CPU penalty.
 
-### Comparison vs Umi-OCR (PaddleOCR)
+### Comparison vs other engines (pre-rescale images)
 
-| Image | Umi-OCR | PaddleOCR-VL GGUF |
-|---|---|---|
-| Yokogaki | FAIL (`デー々を...`) | **PASS** (exact) |
-| Tategaki | FAIL (garbage) | **FAIL** (correct text + hallucinated prefix) |
-| Tegaki | FAIL (`チ書きの丈字...`) | **PASS** (exact) |
+| Image | Umi-OCR | PaddleOCR-VL GGUF | manga-ocr-rs (2026-04-15, rescaled) |
+|---|---|---|---|
+| Yokogaki | FAIL (`デー々を...`) | **PASS** (exact) | **PASS** (exact, 95% conf) |
+| Tategaki | FAIL (garbage) | **FAIL** (correct text + hallucinated prefix) | **PASS** (exact, 99.5% conf) |
+| Tegaki | FAIL (`チ書きの丈字...`) | **PASS** (exact) | **PASS** (exact, 88.7% conf) |
 
-PaddleOCR-VL-For-Manga is significantly better. The tategaki failure is partial — the correct
-text is present, just with extra output. With `max_tokens` tuning and post-processing (strip
-prefix before first `『`), this could likely pass.
+PaddleOCR-VL-For-Manga is significantly better than Umi-OCR. manga-ocr-rs with the rescaled
+images achieves 3/3 exact match through the DBNet+OCR pipeline. The Umi-OCR and PaddleOCR-VL
+results above are from the pre-rescale oversized images — re-evaluation pending.
+
+See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for the full cross-engine comparison.
 
 ### Performance note
 
