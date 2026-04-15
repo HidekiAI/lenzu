@@ -41,6 +41,7 @@ tags
 # Large model binaries — download via scripts/setup.sh, never commit
 assets/manga-ocr/
 assets/manga-ocr-2025/
+prototypes/paddleocr-vl-manga/model/
 
 .config/
 .local/

@@ -12,6 +12,7 @@
 # Flags:
 #   --skip-ollama      skip Docker/Ollama setup (use if you prefer OpenRouter only)
 #   --skip-manga-ocr   skip manga-ocr-2025 model download
+#   --skip-paddleocr   skip PaddleOCR-VL-For-Manga GGUF download
 #   --gpu              force GPU mode (error if no CUDA GPU found)
 #   --no-gpu           force CPU-only mode even when a GPU is present
 #
@@ -25,14 +26,16 @@ MODE_FILE="$REPO_ROOT/.ollama_mode"
 
 SKIP_OLLAMA=false
 SKIP_MANGA_OCR=false
+SKIP_PADDLEOCR=false
 FORCE_GPU=false
 FORCE_CPU=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --skip-ollama)    SKIP_OLLAMA=true ;;
-        --skip-manga-ocr) SKIP_MANGA_OCR=true ;;
-        --gpu)            FORCE_GPU=true ;;
-        --no-gpu)         FORCE_CPU=true ;;
+        --skip-ollama)     SKIP_OLLAMA=true ;;
+        --skip-manga-ocr)  SKIP_MANGA_OCR=true ;;
+        --skip-paddleocr)  SKIP_PADDLEOCR=true ;;
+        --gpu)             FORCE_GPU=true ;;
+        --no-gpu)          FORCE_CPU=true ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
     shift
@@ -73,7 +76,8 @@ sudo apt install -y \
     mecab-ipadic-utf8 \
     mecab-naist-jdic \
     fonts-noto-cjk \
-    fonts-ipafont-gothic
+    fonts-ipafont-gothic \
+    nvidia-cuda-toolkit
 
 echo ""
 echo "System dependencies installed."
@@ -133,6 +137,51 @@ else
         else
             echo "  Some files failed. Re-run setup.sh to retry, or download manually:"
             echo "    curl -fL -o assets/manga-ocr/<file> $MANGA_OCR_BASE/<file>"
+        fi
+    fi
+fi
+
+# ── PaddleOCR-VL-For-Manga GGUF models (~1.8 GB) ────────────────────────────
+# adambarbato/PaddleOCR-VL-For-Manga-GGUF — served via llama.cpp for manga OCR.
+# Two files: main model (~936 MB) + multimodal projector (~882 MB).
+echo ""
+if [[ "$SKIP_PADDLEOCR" == "true" ]]; then
+    echo "Skipping PaddleOCR-VL-For-Manga download (--skip-paddleocr)."
+else
+    PADDLEOCR_DIR="$REPO_ROOT/prototypes/paddleocr-vl-manga/model"
+    PADDLEOCR_BASE="https://huggingface.co/adambarbato/PaddleOCR-VL-For-Manga-GGUF/resolve/main"
+    PADDLEOCR_FILES=(
+        "PaddleOCR-VL-For-Manga-BF16.gguf"
+        "PaddleOCR-VL-For-Manga-mmproj-BF16.gguf"
+    )
+
+    all_present=true
+    for f in "${PADDLEOCR_FILES[@]}"; do
+        [[ -f "$PADDLEOCR_DIR/$f" ]] || { all_present=false; break; }
+    done
+
+    if [[ "$all_present" == "true" ]]; then
+        echo "PaddleOCR-VL-For-Manga GGUF models already present — skipping."
+    else
+        echo "Downloading PaddleOCR-VL-For-Manga GGUF models (~1.8 GB)..."
+        mkdir -p "$PADDLEOCR_DIR"
+        download_ok=true
+        for f in "${PADDLEOCR_FILES[@]}"; do
+            if [[ -f "$PADDLEOCR_DIR/$f" ]]; then
+                echo "  $f — already present, skipping."
+                continue
+            fi
+            echo "  Downloading $f..."
+            if ! curl -fL --progress-bar -o "$PADDLEOCR_DIR/$f" "$PADDLEOCR_BASE/$f"; then
+                echo "  WARNING: failed to download $f"
+                rm -f "$PADDLEOCR_DIR/$f"
+                download_ok=false
+            fi
+        done
+        if [[ "$download_ok" == "true" ]]; then
+            echo "PaddleOCR-VL-For-Manga GGUF models ready."
+        else
+            echo "  Some files failed. Re-run setup.sh to retry."
         fi
     fi
 fi
