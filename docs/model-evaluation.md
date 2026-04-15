@@ -113,3 +113,33 @@ when confidence is too low.
 - **Quality**: Detects all 3 text blocks including vertical CJK; correct text; best results.
 - **Notes**: Only used when both local models fail or `OPENROUTER_API_KEY` is set and
   Ctrl+Shift+Click override is active. Images leave the device on this path.
+
+---
+
+## To evaluate: alternative OCR models
+
+### Umi-OCR (PaddleOCR-based)
+
+- **Repo**: https://github.com/hiroi-sora/Umi-OCR
+- **Engine**: PaddleOCR-json (PaddlePaddle C++ inference) or RapidOCR-json (ONNX Runtime)
+- **Status**: Not yet tested. Maintainer warns vertical Japanese is poor (issue #434).
+  Recommends manga-ocr for manga. Worth a quick eval via Docker HTTP API.
+- **Prototype**: `prototypes/umi-ocr-eval/`
+
+### HuggingFace manga OCR models
+
+Models worth evaluating as potential upgrades or alternatives to the current manga-ocr-rs pipeline:
+
+| Model | Link | Type | Integration path |
+|---|---|---|---|
+| manga-ocr (original) | https://huggingface.co/mayocream/manga-ocr/tree/main | PyTorch weights | What manga-ocr-rs already uses |
+| manga-ocr ONNX full | https://huggingface.co/xingliao/manga-ocr-onnx-full/tree/main | ONNX export | Check for quantized/INT8 variant; drop-in for manga-ocr-rs via ort |
+| PaddleOCR-VL-For-Manga (GGUF) | https://huggingface.co/adambarbato/PaddleOCR-VL-For-Manga-GGUF/tree/main | GGUF quantized | Best speed/accuracy — needs llama-cpp-rs instead of ort |
+| PaddleOCR-VL-For-Manga (base) | https://huggingface.co/jzhang533/PaddleOCR-VL-For-Manga/tree/main | Original weights | Base model for the GGUF above |
+| PaddleOCRv5 Det For Manga | https://huggingface.co/bluolightning/PaddleOCRv5-Server-Det-For-Manga/tree/main | Detection model | Lighter alternative to DBNet for text detection |
+
+### Recommended upgrade path (from external advice)
+
+1. **Quick fix now**: `xingliao/manga-ocr-onnx-full` — check for quantized variant, keep ort backend, ensure `max_decode_steps=50` to prevent 40s hangs
+2. **Best speed/accuracy**: `adambarbato/PaddleOCR-VL-For-Manga-GGUF` — switch backend from ort to llama-cpp-rs; this model is specifically built for manga OCR
+3. **Pure Rust / lightweight**: `bluolightning/PaddleOCRv5-Server-Det-For-Manga` — PaddleOCR Rust implementation, much lighter than transformer-based models
