@@ -5,7 +5,7 @@
 //! threshold, results are returned immediately without hitting any remote or
 //! local LLM service.
 
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 pub use manga_ocr_rs::{MangaOcr, Recognition};
 use std::path::Path;
 use std::sync::Arc;
@@ -21,6 +21,13 @@ const CONFIDENCE_GATE: f32 = 0.70;
 /// Maximum characters kept from a low-confidence OCR result that still gets
 /// passed downstream (to the LLM chain).
 const LOW_CONF_MAX_CHARS: usize = 32;
+
+/// manga-ocr-rs squish-resizes input to 224×224.  Crops whose longest edge
+/// exceeds this limit are pre-downscaled with Lanczos3 (better for large
+/// reductions) so the final squish is gentler and preserves fine strokes.
+/// 2× the model input (448) is the sweet spot: crops ≤448 go through as-is,
+/// larger ones get a high-quality pre-shrink.
+const OCR_MAX_EDGE: u32 = 448;
 
 /// Result of running the local OCR pipeline on a single crop.
 #[derive(Debug, Clone)]
@@ -66,9 +73,28 @@ impl LocalOcrEngine {
     }
 
     /// Run OCR on a single crop image.
+    ///
+    /// If the crop's longest edge exceeds `OCR_MAX_EDGE`, it is proportionally
+    /// downscaled with Lanczos3 before recognition.  This avoids a harsh
+    /// squish-resize from large crops directly to 224×224 inside manga-ocr-rs
+    /// (which uses bilinear), preserving fine kanji strokes.
     pub fn recognize_crop(&self, crop: &DynamicImage) -> anyhow::Result<(Recognition, u128)> {
         let t = Instant::now();
-        let rec = self.inner.recognize_with_score(crop)?;
+        let (w, h) = crop.dimensions();
+        let longest = w.max(h);
+        let rec = if longest > OCR_MAX_EDGE {
+            let scale = OCR_MAX_EDGE as f32 / longest as f32;
+            let nw = ((w as f32 * scale).round() as u32).max(1);
+            let nh = ((h as f32 * scale).round() as u32).max(1);
+            eprintln!(
+                "[local-ocr] pre-scale crop {}×{} → {}×{} (Lanczos3)",
+                w, h, nw, nh,
+            );
+            let scaled = crop.resize(nw, nh, image::imageops::FilterType::Lanczos3);
+            self.inner.recognize_with_score(&scaled)?
+        } else {
+            self.inner.recognize_with_score(crop)?
+        };
         Ok((rec, t.elapsed().as_millis()))
     }
 
