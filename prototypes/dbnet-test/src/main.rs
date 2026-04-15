@@ -12,7 +12,7 @@
 ///   pad_y      = 32   (extra pixels added to each side vertically,   at original-image scale)
 ///
 /// --test runs two cases:
-///   1. Unit-test-sample-texts.png  — 3 distinct text regions (lens-crop simulation)
+///   1. Unit-test-sample-texts.png  — 640×349 composite with 3 text regions (lens-crop simulation)
 ///   2. OCR-Demo-JP2EN.png          — real game screenshot (fullscreen capture simulation)
 ///
 /// Output PNGs → /dev/shm/lenzu/

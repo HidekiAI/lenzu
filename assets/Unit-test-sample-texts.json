@@ -1,24 +1,24 @@
 [
   {
     "label": "vertical_text",
-    "top_xy": [76, 45],
-    "bot_xy": [210, 935],
+    "top_xy": [17, 10],
+    "bot_xy": [48, 213],
     "text": "『言語モデルのテスト』",
     "romaji": "gengo MODERU no TESUTO",
     "furigana": "『言[げん]語[ご]MODERU no TESUTO』"
   },
   {
     "label": "yokogaki_printed",
-    "top_xy": [270, 120],
-    "bot_xy": [940, 245],
+    "top_xy": [61, 27],
+    "bot_xy": [214, 56],
     "text": "データを正確に読み取る",
     "romaji": "DE-TA o seikaku ni yomitoru",
     "furigana": "DE-TAを正[せい]確[かく]に読[よ]み取[と]る"
   },
   {
     "label": "horizontal_handwritten",
-    "top_xy": [270, 410],
-    "bot_xy": [910, 540],
+    "top_xy": [61, 93],
+    "bot_xy": [207, 123],
     "text": "手書きの文字サンプル",
     "romaji": "tegaki no moji SANPURU",
     "furigana": "手[て]書[が]きの文[も]字[じ]SANPURU"

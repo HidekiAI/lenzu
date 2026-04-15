@@ -3,9 +3,14 @@
 Quick evaluation of [Umi-OCR](https://github.com/hiroi-sora/Umi-OCR) (PaddleOCR-based)
 for Japanese manga text recognition.
 
-## Results (2026-04-14)
+## Results (2026-04-14, pre-rescale images)
 
 Engine: PaddleOCR-json (via Docker, headless HTTP API on port 1224).
+
+> **Note**: These results were obtained with the original oversized images (yokogaki 711×389,
+> tategaki/tegaki 2760×1504). The images were rescaled on 2026-04-15 to manga-bubble-realistic
+> sizes (yokogaki 360×197, tategaki/tegaki 480×262). Results may improve with smaller inputs.
+> Re-run `./eval.sh` with the Umi-OCR server to update.
 
 | Image | Orientation | Expected | Got | Result | Score | Time (ms) |
 |---|---|---|---|---|---|---|
@@ -13,7 +18,7 @@ Engine: PaddleOCR-json (via Docker, headless HTTP API on port 1224).
 | Unit-test-tategaki.png | Vertical | `『言語モデルのテスト』` | `き転でげんの テスイ` | **FAIL** | 0.554, 0.253 | 2360 |
 | Unit-test-tegaki.png | Horizontal (calligraphy) | `手書きの文字サンプル` | `チ書きの丈字サンプル` | **FAIL** | 0.903 | 2116 |
 
-**Summary: 0/3 PASS.**
+**Summary: 0/3 PASS.** See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for comparison across all engines.
 
 ### Analysis
 

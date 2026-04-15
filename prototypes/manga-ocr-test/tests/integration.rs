@@ -2,9 +2,9 @@
 //!
 //! Uses three purpose-built fixtures in `assets/`:
 //!
-//!   Unit-test-yokogaki.png    — `データを正確に読み取る`  (600×80, IPAGothic)
-//!   Unit-test-tategaki.png    — `言語モデルのテスト`       (70×450, IPAGothic)
-//!   Unit-test-tegaki.png      — `手書きの文字サンプル`     (500×80, Dejima-Mincho)
+//!   Unit-test-yokogaki.png    — `データを正確に読み取る`  (360×197 px, IPAGothic)
+//!   Unit-test-tategaki.png    — `言語モデルのテスト`       (480×262 px, IPAGothic)
+//!   Unit-test-tegaki.png      — `手書きの文字サンプル`     (480×262 px, Dejima-Mincho)
 //!
 //! Each image is clean black text on white — the same class of input the model
 //! was trained on (scanned manga).  Ground truth is known, so EXPECTED_* constants
@@ -74,7 +74,7 @@ fn assert_ocr_exact(label: &str, ocr: &MangaOcr, path: &str, expected: &str) {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 /// Horizontal printed text — `データを正確に読み取る`.
-/// Clean IPAGothic on white, 600×80 px.
+/// Clean IPAGothic on white, 360×197 px.
 #[test]
 fn test_yokogaki() {
     if !models_present() {
@@ -86,12 +86,10 @@ fn test_yokogaki() {
 
 /// Tategaki (vertical) text — `言語モデルのテスト`.
 ///
-/// HACK: The fixture is a large image (2760×1504) where the vertical text
-/// occupies a small region.  When squish-resized to 224×224, the model
-/// confuses the visually similar katakana テ and ラ, producing `ラスト`
-/// instead of `テスト`.  We accept either until the fixture is replaced
-/// with a properly cropped image.  The correct expected value remains
-/// EXPECTED_TATEGAKI (`『言語モデルのテスト』`).
+/// The fixture is a 480×262 image where the vertical text occupies
+/// the left region.  At this size the model reads the correct characters
+/// but may confuse the bracket style: `『』` (double corner) vs `「」`
+/// (single corner).  We accept either.
 #[test]
 fn test_tategaki() {
     if !models_present() {
@@ -106,14 +104,14 @@ fn test_tategaki() {
         .unwrap_or_else(|e| panic!("tategaki: OCR failed: {e}"));
     let ms = t.elapsed().as_millis();
     println!("tategaki ({ms} ms): {text:?}  (expected: {EXPECTED_TATEGAKI:?})");
-    // HACK: accept ラスト variant until fixture is properly cropped.
+    // Accept 「」 variant — model reads correct text but may confuse bracket style.
     let accepted = text == EXPECTED_TATEGAKI
-        || text == EXPECTED_TATEGAKI.replace("テスト", "ラスト");
-    assert!(accepted, "tategaki: got {text:?}, expected {EXPECTED_TATEGAKI:?} (or ラスト variant)");
+        || text == EXPECTED_TATEGAKI.replace('『', "「").replace('』', "」");
+    assert!(accepted, "tategaki: got {text:?}, expected {EXPECTED_TATEGAKI:?} (or 「」bracket variant)");
 }
 
 /// Tegaki (handwritten-style) text — `手書きの文字サンプル`.
-/// Dejima-Mincho font, 500×80 px.
+/// Dejima-Mincho font, 480×262 px.
 #[test]
 fn test_tegaki() {
     if !models_present() {

@@ -292,7 +292,7 @@ fn run_backend_test(
 
     // ── Check 4: expected text substrings present ─────────────────────────────
     // Coordinate checks are informational WARN only — the expected JSON uses
-    // original-image coords (2816×1536) while the model sees a scaled copy.
+    // original-image coords (640×349) while the model sees a scaled copy.
     println!("--- Check 4: expected text blocks present");
     for entry in expected {
         let text_len = entry.text.chars().count();
