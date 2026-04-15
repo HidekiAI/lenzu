@@ -19,6 +19,7 @@ onnx = ["jp_detect/onnx"]
 anyhow = "1.0"
 jp_detect = "0.2.2"
 manga-ocr-rs = "0.1.1"
+mecab-furigana-rs = "0.1.0"
 gtk = { version = "0.18", features = ["v3_24"] }
 gdk = { version = "0.18", features = ["v3_24"] }
 glib = "0.18"

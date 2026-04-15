@@ -71,6 +71,7 @@ These companion crates were developed as part of this project and are available 
 
 - [`jp_detect`](https://crates.io/crates/jp_detect) — real-time scene text detection using DBNet (ONNX). Locates text bounding boxes in manga panels and screenshots.
 - [`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs) — Japanese manga OCR via ViT encoder + BERT decoder (ONNX). Converts image crops to Japanese text.
+- [`mecab-furigana-rs`](https://crates.io/crates/mecab-furigana-rs) — MeCab-based furigana and romaji annotation. Dictionary-accurate readings at ~5 ms per call, with word segmentation and morpheme data.
 
 ## Libraries & Dependencies
 

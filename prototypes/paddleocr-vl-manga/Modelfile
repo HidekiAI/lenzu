@@ -1,0 +1,5 @@
+FROM ./model/PaddleOCR-VL-For-Manga-BF16.gguf
+PROJECTOR ./model/PaddleOCR-VL-For-Manga-mmproj-BF16.gguf
+
+PARAMETER temperature 0
+PARAMETER num_ctx 32768

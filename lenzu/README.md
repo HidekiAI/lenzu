@@ -54,18 +54,18 @@ Lenzu is two processes:
 |---|---|---|---|
 | **jp_detect** >= 0.2.2 (DBNet) | Text detection with per-box confidence | 0-100% detection score | `--features onnx` build |
 | **manga-ocr-rs** >= 0.1.1 | Japanese OCR with per-result confidence | 0-100% OCR score | ~140 MB model files (auto-downloaded) |
-| **MeCab** + ipadic-utf8/naist-jdic | Morphological analysis → furigana + romaji | Deterministic (dictionary) | `mecab`, `mecab-ipadic-utf8`, `mecab-naist-jdic` |
+| [**mecab-furigana-rs**](https://crates.io/crates/mecab-furigana-rs) | Morphological analysis → furigana + romaji | Deterministic (dictionary) | `mecab`, `mecab-ipadic-utf8` or `mecab-naist-jdic` |
 
 Both OCR scores must be >= 71% to pass the confidence gate. When they do, raw text is returned
-immediately — no LLM, no Ollama, no network. MeCab then annotates the text with furigana
-brackets (`最初[さいしょ]`) and romaji in a second instant pass (~5 ms). Models loaded once
-at startup, shared via `Arc`.
+immediately — no LLM, no Ollama, no network. `mecab-furigana-rs` then annotates the text with
+furigana brackets (`最初[さいしょ]`) and romaji in a second instant pass (~5 ms), plus
+word segmentation and per-morpheme data. Models loaded once at startup, shared via `Arc`.
 
 **Why MeCab, not kakasi?** MeCab performs context-aware morphological analysis — it understands
 word boundaries from neighboring characters, so it correctly segments compound words and
 conjugated verbs. kakasi is a simple dictionary lookup that cannot disambiguate readings based
-on context. MeCab's per-morpheme output also gives us katakana readings directly, which a
-pure-Rust Hepburn converter turns into romaji — eliminating the kakasi CLI dependency entirely.
+on context. `mecab-furigana-rs` uses MeCab's per-morpheme katakana readings and a pure-Rust
+Hepburn converter to produce romaji — no kakasi CLI dependency needed.
 
 ### LLM fallback chain (when local OCR confidence is too low)
 
