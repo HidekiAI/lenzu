@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-jp_detect = { version = "0.2.2", features = ["onnx"] }
+jp_detect = { version = "0.2.3", features = ["onnx"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imageproc = "0.25"
 anyhow = "1.0"
