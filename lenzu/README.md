@@ -434,12 +434,12 @@ ONNX Runtime is downloaded automatically at build time by the `ort` crate — no
 # Both DBNet detection tests
 cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect
 
-# Lens-crop image only  →  expects 1 merged box  (Unit-test-sample-texts.png, 640×349)
+# Lens-crop image only  →  expects 2 boxes: tategaki separate, yokogaki+tegaki merged
 # See full benchmark: https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md
-cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect_lens_crop_returns_three_boxes
+cargo test -p jp_detect --features onnx -- test_detect_lens_crop_separates_tategaki
 
 # Fullscreen image only  →  expects 2 boxes  (OCR-Demo-JP2EN.png, 2816×1536)
-cargo test -p lenzu --features onnx -- ocr::text_detection::tests::test_detect_fullscreen_returns_two_boxes
+cargo test -p jp_detect --features onnx -- test_detect_fullscreen_returns_two_boxes
 
 # All onnx tests (detection + any future onnx unit tests)
 cargo test -p lenzu --features onnx

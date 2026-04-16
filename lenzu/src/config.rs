@@ -276,12 +276,15 @@ fn default_detection_scale_table() -> Vec<DetectionScaleEntry> {
     //   text regions separate.  DBNet always runs at 640×640 internally, so
     //   a dilation of N pixels at 640-res represents N*(original/640) pixels
     //   in the original image — much more blur for large inputs.
+    // - Padding increases for larger images because inter-line gaps (in
+    //   original coordinates) grow with resolution.  Orientation-aware merging
+    //   in jp_detect prevents vertical/horizontal cross-merging.
     vec![
         DetectionScaleEntry { max_dimension:   800, dilation: 16, threshold: 0.20, pad_x: 32, pad_y: 32 },
-        DetectionScaleEntry { max_dimension:  1280, dilation: 10, threshold: 0.25, pad_x: 24, pad_y: 24 },
-        DetectionScaleEntry { max_dimension:  1920, dilation:  6, threshold: 0.35, pad_x: 16, pad_y: 16 },
-        DetectionScaleEntry { max_dimension:  2560, dilation:  3, threshold: 0.45, pad_x: 12, pad_y: 12 },
-        DetectionScaleEntry { max_dimension: u32::MAX, dilation: 0, threshold: 0.50, pad_x: 8, pad_y: 8 },
+        DetectionScaleEntry { max_dimension:  1280, dilation: 10, threshold: 0.25, pad_x: 32, pad_y: 32 },
+        DetectionScaleEntry { max_dimension:  1920, dilation:  6, threshold: 0.35, pad_x: 32, pad_y: 32 },
+        DetectionScaleEntry { max_dimension:  2560, dilation:  3, threshold: 0.45, pad_x: 40, pad_y: 40 },
+        DetectionScaleEntry { max_dimension: u32::MAX, dilation: 0, threshold: 0.50, pad_x: 48, pad_y: 48 },
     ]
 }
 fn default_text_detection_dilation() -> u8 {

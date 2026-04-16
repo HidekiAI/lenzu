@@ -95,10 +95,10 @@ The pipeline uses the same lookup table as the main lenzu app:
 | Longest edge | Dilation | Threshold | Pad | Use case |
 |-------------|----------|-----------|-----|----------|
 | <= 800      | 16       | 0.20      | 32  | Small lens crops — merge nearby character blobs |
-| <= 1280     | 10       | 0.25      | 24  | Medium screenshots |
-| <= 1920     | 6        | 0.35      | 16  | Full HD captures, manga pages |
-| <= 2560     | 3        | 0.45      | 12  | 2K/QHD |
-| > 2560      | 0        | 0.50      | 8   | 4K — almost no dilation needed |
+| <= 1280     | 10       | 0.25      | 32  | Medium screenshots |
+| <= 1920     | 6        | 0.35      | 32  | Full HD captures, manga pages |
+| <= 2560     | 3        | 0.45      | 40  | 2K/QHD |
+| > 2560      | 0        | 0.50      | 48  | 4K — almost no dilation needed |
 
 CLI flags `--threshold`, `--dilation`, `--pad` override the auto-scaled values.
 

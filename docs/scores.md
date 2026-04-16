@@ -89,15 +89,18 @@ Key improvements:
 
 | Old size | Old result | New size | New result |
 |---|---|---|---|
-| 2816×1536 | 3 separate boxes | 640×349 | 1 merged box (99.2% confidence) |
+| 2816×1536 | 3 separate boxes | 640×349 | 2 boxes (tategaki separate, yokogaki+tegaki merged) |
 
-At the smaller size, dilation=16 merges the three text regions into one box.
-This is correct behavior for lens-sized crops — one box per bubble is desired.
+With orientation-aware merging, vertical (tategaki) boxes never merge with
+horizontal (yokogaki/tegaki) boxes — mixing reading directions produces garbage
+OCR and can split kanji across boxes (e.g. 日本 → 日 + 本, changing the meaning).
+Horizontal regions that overlap after padding still merge, keeping multi-line
+text intact.
 
 ### Fullscreen (OCR-Demo-JP2EN.png, 2816×1536 — unchanged)
 
-5 boxes detected (from jp_detect detect_and_draw example), 2 boxes (from dbnet-test `--test`).
-No change — this fixture was not rescaled.
+3 boxes detected (from jp_detect detect_and_draw example with auto-scaled
+pad=48), 2 boxes (from test with pad=32 — multi-line dialogue merges correctly).
 
 ---
 
