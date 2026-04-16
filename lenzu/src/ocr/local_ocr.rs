@@ -124,6 +124,8 @@ impl LocalOcrEngine {
             return (None, vec![]);
         }
 
+        eprintln!("[local-ocr] {} boxes detected", crops.len());
+
         // Only attempt local OCR on boxes that passed the detection confidence gate.
         let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
@@ -149,28 +151,31 @@ impl LocalOcrEngine {
         let mut results = Vec::with_capacity(confident_crops.len());
         let mut all_confident = true;
 
-        for crop in &confident_crops {
+        for (box_idx, crop) in confident_crops.iter().enumerate() {
+            let box_num = box_idx + 1;
             match self.recognize_crop(&crop.image) {
                 Ok((rec, ms)) => {
                     let ocr_confident = rec.confidence > CONFIDENCE_GATE && !rec.truncated;
+                    let char_count = rec.text.chars().count();
                     eprintln!(
-                        "[local-ocr] box ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} «{}»  ({} ms)",
+                        "[local-ocr] [box {}] ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} {} chars «{}»  ({} ms)",
+                        box_num,
                         crop.source_box.x1, crop.source_box.y1,
                         crop.source_box.x2, crop.source_box.y2,
                         crop.source_box.confidence * 100.0,
                         rec.confidence * 100.0,
                         if rec.truncated { " TRUNCATED" } else { "" },
-                        if rec.text.chars().count() > 40 {
-                            format!("{}...", rec.text.chars().take(40).collect::<String>())
-                        } else {
-                            rec.text.clone()
-                        },
+                        char_count,
+                        rec.text,
                         ms,
                     );
 
                     // Apply truncation for low-confidence long strings.
-                    let char_count = rec.text.chars().count();
                     let text = if !ocr_confident && char_count >= max_chars {
+                        eprintln!(
+                            "[local-ocr] [box {}] truncated {} → {} chars",
+                            box_num, char_count, max_chars,
+                        );
                         rec.text.chars().take(max_chars).collect()
                     } else {
                         rec.text.clone()
@@ -189,7 +194,7 @@ impl LocalOcrEngine {
                     });
                 }
                 Err(e) => {
-                    eprintln!("[local-ocr] recognize failed: {e}");
+                    eprintln!("[local-ocr] [box {}] recognize failed: {e}", box_num);
                     all_confident = false;
                 }
             }
@@ -226,6 +231,8 @@ impl LocalOcrEngine {
             return (None, vec![]);
         }
 
+        eprintln!("[local-ocr] {} boxes detected", crops.len());
+
         let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
@@ -250,27 +257,30 @@ impl LocalOcrEngine {
         let mut results = Vec::with_capacity(confident_crops.len());
         let mut all_confident = true;
 
-        for crop in &confident_crops {
+        for (box_idx, crop) in confident_crops.iter().enumerate() {
+            let box_num = box_idx + 1;
             match self.recognize_crop(&crop.image) {
                 Ok((rec, ms)) => {
                     let ocr_confident = rec.confidence > CONFIDENCE_GATE && !rec.truncated;
+                    let char_count = rec.text.chars().count();
                     eprintln!(
-                        "[local-ocr] box ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} «{}»  ({} ms)",
+                        "[local-ocr] [box {}] ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} {} chars «{}»  ({} ms)",
+                        box_num,
                         crop.source_box.x1, crop.source_box.y1,
                         crop.source_box.x2, crop.source_box.y2,
                         crop.source_box.confidence * 100.0,
                         rec.confidence * 100.0,
                         if rec.truncated { " TRUNCATED" } else { "" },
-                        if rec.text.chars().count() > 40 {
-                            format!("{}...", rec.text.chars().take(40).collect::<String>())
-                        } else {
-                            rec.text.clone()
-                        },
+                        char_count,
+                        rec.text,
                         ms,
                     );
 
-                    let char_count = rec.text.chars().count();
                     let text = if !ocr_confident && char_count >= max_chars {
+                        eprintln!(
+                            "[local-ocr] [box {}] truncated {} → {} chars",
+                            box_num, char_count, max_chars,
+                        );
                         rec.text.chars().take(max_chars).collect()
                     } else {
                         rec.text.clone()
@@ -292,7 +302,7 @@ impl LocalOcrEngine {
                     on_progress(&results);
                 }
                 Err(e) => {
-                    eprintln!("[local-ocr] recognize failed: {e}");
+                    eprintln!("[local-ocr] [box {}] recognize failed: {e}", box_num);
                     all_confident = false;
                 }
             }

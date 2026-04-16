@@ -485,11 +485,16 @@ impl OcrClient {
         };
 
         // 2. Handle array, or object (json_object mode often wraps the array in a key).
-        if actual_json.is_array() {
-            let results: Vec<TranslationResult> = serde_json::from_value(actual_json).map_err(|e| {
-                eprintln!("[OCR] array deserialize failed: {e}");
-                e
-            })?;
+        if let Some(arr) = actual_json.as_array() {
+            // Deserialize element-by-element so one malformed entry
+            // doesn't discard all the valid results in the array.
+            let mut results: Vec<TranslationResult> = Vec::new();
+            for (i, item) in arr.iter().enumerate() {
+                match serde_json::from_value::<TranslationResult>(item.clone()) {
+                    Ok(r) => results.push(r),
+                    Err(e) => eprintln!("[OCR] array[{i}] skipped: {e}"),
+                }
+            }
             return Ok(results);
         }
 
@@ -507,9 +512,16 @@ impl OcrClient {
             ];
             for key in WRAPPER_KEYS {
                 if let Some(Value::Array(arr)) = obj.get(*key) {
-                    let results: Vec<TranslationResult> =
-                        serde_json::from_value(Value::Array(arr.clone()))?;
-                    return Ok(results);
+                    let mut results: Vec<TranslationResult> = Vec::new();
+                    for (i, item) in arr.iter().enumerate() {
+                        match serde_json::from_value::<TranslationResult>(item.clone()) {
+                            Ok(r) => results.push(r),
+                            Err(e) => eprintln!("[OCR] {key}[{i}] skipped: {e}"),
+                        }
+                    }
+                    if !results.is_empty() {
+                        return Ok(results);
+                    }
                 }
             }
 
