@@ -281,9 +281,10 @@ crop means the text fills more of the 224×224 patch grid, improving accuracy.
 3. **Test fixtures must be realistic** — use manga-bubble-sized images (200-500px),
    not billboard-scale screenshots. Oversized fixtures give misleading accuracy
    numbers and unrealistic inference times.
-4. **Composite images merge at small scale** — the 640×349 sample-texts image
-   (3 text regions in one frame) produces 1 merged detection box at dilation=16.
-   Individual text images are the correct unit for OCR benchmarking.
+4. **Orientation-aware merging separates tategaki from yokogaki** — the
+   640×349 sample-texts image produces 2 boxes: tategaki stays separate,
+   yokogaki+tegaki merge (both horizontal).  Vertical boxes never merge with
+   horizontal boxes to prevent garbled OCR and kanji splitting.
 
 ---
 
