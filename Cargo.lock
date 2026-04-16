@@ -2212,9 +2212,9 @@ dependencies = [
 
 [[package]]
 name = "jp_detect"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3455428fffea6c9dd122fa0552a46bfd9d3edbf16d834b492832b30282518a"
+checksum = "0114f7ff8185aad8adcc7a1df973056875637caac753c03e8088269cc1ac512e"
 dependencies = [
  "anyhow",
  "image 0.25.10",
