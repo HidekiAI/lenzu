@@ -2,7 +2,8 @@ use base64::{engine::general_purpose, Engine as _};
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, ImageFormat, Rgb};
 use std::io::Cursor;
 
-const DEBUG_IMAGE_PATH: &str = "/dev/shm/lenzu/debug_lens.png";
+const DEBUG_LENS_PATH: &str = "/dev/shm/lenzu/debug_lens.png";
+const DEBUG_PREWIRE_PATH: &str = "/dev/shm/lenzu/debug_prewire.png";
 
 pub fn raw_to_rgb(raw: &[u8]) -> Vec<u8> {
     let mut rgb = Vec::with_capacity((raw.len() / 4) * 3);
@@ -33,7 +34,7 @@ pub fn swap_bytes_for_pixbuf(raw: &mut [u8]) {
 /// payload rather than the raw RGB lens capture.
 pub fn save_prewire_debug(image: &DynamicImage) {
     let gray = image.grayscale();
-    let _ = gray.save(DEBUG_IMAGE_PATH);
+    let _ = gray.save(DEBUG_PREWIRE_PATH);
 }
 
 /// Encode as **grayscale** PNG → base64.
@@ -71,6 +72,79 @@ pub fn encode_to_base64(rgb_data: &[u8], w: u32, h: u32) -> String {
     let mut buffer = Cursor::new(Vec::new());
     img.write_to(&mut buffer, ImageFormat::Png).unwrap();
     general_purpose::STANDARD.encode(buffer.into_inner())
+}
+
+/// Save debug image for Shift+Click lens capture with bounding boxes.
+///
+/// Writes `/dev/shm/lenzu/debug_lens.png` — the RGB lens capture (NOT greyscale)
+/// with every detected bounding box drawn as a colour-coded hollow rectangle,
+/// same palette as fullscreen debug.  This replaces the old `save_prewire_debug`
+/// which only saved the greyscale crop without any box overlay.
+pub fn save_lens_debug(
+    image: &DynamicImage,
+    boxes: &[crate::ocr::text_detection::TextBoundingBox],
+) {
+    let mut rgb = image.to_rgb8();
+    let (img_w, img_h) = rgb.dimensions();
+
+    let palette: &[Rgb<u8>] = &[
+        Rgb([255, 0, 0]),    // red
+        Rgb([0, 220, 0]),    // green
+        Rgb([0, 120, 255]),  // blue
+        Rgb([255, 200, 0]),  // yellow
+        Rgb([255, 0, 255]),  // magenta
+        Rgb([0, 220, 220]),  // cyan
+    ];
+
+    for (i, b) in boxes.iter().enumerate() {
+        let color = palette[i % palette.len()];
+        let x1 = b.x1.min(img_w.saturating_sub(1));
+        let y1 = b.y1.min(img_h.saturating_sub(1));
+        let x2 = b.x2.min(img_w.saturating_sub(1));
+        let y2 = b.y2.min(img_h.saturating_sub(1));
+
+        for t in 0u32..2 {
+            let lx = x1.saturating_sub(t);
+            let ly = y1.saturating_sub(t);
+            let rx = (x2 + t).min(img_w - 1);
+            let ry = (y2 + t).min(img_h - 1);
+            for x in lx..=rx {
+                rgb.put_pixel(x, ly, color);
+                rgb.put_pixel(x, ry, color);
+            }
+            for y in ly..=ry {
+                rgb.put_pixel(lx, y, color);
+                rgb.put_pixel(rx, y, color);
+            }
+        }
+    }
+
+    let _ = rgb.save(DEBUG_LENS_PATH);
+
+    // Also write JSON metadata for the lens boxes.
+    let json_boxes: Vec<serde_json::Value> = boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            serde_json::json!({
+                "idx": i,
+                "x1": b.x1,
+                "y1": b.y1,
+                "x2": b.x2,
+                "y2": b.y2,
+                "width": b.x2.saturating_sub(b.x1),
+                "height": b.y2.saturating_sub(b.y1),
+                "confidence": format!("{:.2}", b.confidence),
+            })
+        })
+        .collect();
+
+    if let Ok(s) = serde_json::to_string_pretty(&serde_json::json!({
+        "count": boxes.len(),
+        "boxes": json_boxes,
+    })) {
+        let _ = std::fs::write("/dev/shm/lenzu/debug_lens.json", s);
+    }
 }
 
 /// Save debug files for Ctrl+Shift+Click fullscreen scan.

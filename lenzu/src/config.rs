@@ -225,6 +225,12 @@ pub struct AppConfig {
     /// always logged as warnings for reliability analysis.
     #[serde(default = "default_mecab_overwrite")]
     pub mecab_overwrite: bool,
+    // ── Local OCR truncation ────────────────────────────────────────────────
+    /// Maximum characters kept from a low-confidence manga-ocr-rs result.
+    /// When OCR confidence is below the gate (71%) and the text is longer than
+    /// this limit, only the first N characters are kept.  Default: 64.
+    #[serde(default = "default_low_conf_max_chars")]
+    pub low_conf_max_chars: usize,
     // ── Token spend warnings ────────────────────────────────────────────────
     /// Session-total paid tokens (prompt + completion) at which the HUD color
     /// changes from its configured color to orange.  0 = disable warning.
@@ -317,6 +323,9 @@ fn default_enrichment_timeout_secs() -> u64 {
 fn default_mecab_overwrite() -> bool {
     true
 }
+fn default_low_conf_max_chars() -> usize {
+    64
+}
 fn default_token_warning_threshold() -> u64 {
     100_000 // ~$0.01–0.04 depending on model pricing
 }
@@ -376,6 +385,7 @@ impl Default for AppConfig {
             enrichment_prompt: None,
             furigana_only: false,
             mecab_overwrite: true,
+            low_conf_max_chars: default_low_conf_max_chars(),
             token_warning_threshold: default_token_warning_threshold(),
             token_critical_threshold: default_token_critical_threshold(),
         }

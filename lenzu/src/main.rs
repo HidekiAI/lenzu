@@ -879,6 +879,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     let (local_result, _) = engine.try_local_pipeline(
                                                         &dyn_image, &[chosen.clone()],
                                                         s_conf.text_detection_crop_padding, 256,
+                                                        Some(s_conf.low_conf_max_chars),
                                                     );
                                                     if let Some(results) = local_result {
                                                         let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
@@ -999,6 +1000,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
                                         let boxes = det.detect(&gray_image);
+                                        // Save lens debug image with bounding boxes
+                                        // regardless of whether boxes were found.
+                                        utils::save_lens_debug(&dyn_image, &boxes);
+
                                         if !boxes.is_empty() {
                                             detected_boxes = boxes.clone();
 
@@ -1010,11 +1015,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
                                                     std::sync::Arc::clone(mocr),
                                                 );
-                                                let (local_result, _partials) = engine.try_local_pipeline(
+                                                // Incremental: send each box's result to
+                                                // HUD as it completes so text accumulates
+                                                // on screen instead of flashing.
+                                                let tx_progress = tx_clone.clone();
+                                                let furigana_only_flag = s_conf.furigana_only;
+                                                let (local_result, _partials) = engine.try_local_pipeline_incremental(
                                                     &dyn_image,
                                                     &boxes,
                                                     s_conf.text_detection_crop_padding,
                                                     256,
+                                                    Some(s_conf.low_conf_max_chars),
+                                                    |accumulated| {
+                                                        // Show all results as preview — even low-
+                                                        // confidence garbage — so the HUD indicates
+                                                        // the system is working while the LLM fallback
+                                                        // chain produces the final accurate result.
+                                                        let mut t_results: Vec<client::TranslationResult> = accumulated.iter().map(|r| {
+                                                            client::TranslationResult {
+                                                                original: r.text.clone(),
+                                                                top_xy: Some(format!("{},{}", r.source_box.x1, r.source_box.y1)),
+                                                                bot_xy: Some(format!("{},{}", r.source_box.x2, r.source_box.y2)),
+                                                                debug_info: Some(format!(
+                                                                    "local-ocr det:{:.0}% ocr:{:.1}% {}ms",
+                                                                    r.source_box.confidence * 100.0,
+                                                                    r.confidence * 100.0,
+                                                                    r.ocr_ms,
+                                                                )),
+                                                                ..Default::default()
+                                                            }
+                                                        }).collect();
+                                                        furigana::annotate(&mut t_results, furigana_only_flag);
+                                                        let total_ms: u128 = accumulated.iter().map(|r| r.ocr_ms).sum();
+                                                        let _ = tx_progress.send_blocking(Ok((t_results, client::OcrMeta {
+                                                            backend: format!("local:manga-ocr+furigana ({}/{})", accumulated.len(), accumulated.len()),
+                                                            elapsed_ms: total_ms,
+                                                            preview: true,
+                                                        })));
+                                                    },
                                                 );
                                                 if let Some(results) = local_result {
                                                     let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
@@ -1033,12 +1071,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     }).collect();
                                                     let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                     eprintln!("[OCR] local-first pipeline succeeded — {} results, skipping LLM chain", t_results.len());
-                                                    // Phase 1: raw text preview
-                                                    let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
-                                                        backend: "local:manga-ocr".to_string(),
-                                                        elapsed_ms: total_ocr_ms,
-                                                        preview: true,
-                                                    })));
 
                                                     // Phase 2: furigana (+ romaji unless furigana_only) — MeCab, ~5ms
                                                     let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
@@ -1062,7 +1094,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         );
                                                     }
 
-                                                    // Final send (via closure return → line 1140)
+                                                    // Final send (via closure return)
                                                     let backend = match (furigana_ok, enriched) {
                                                         (true, true)  => "local:manga-ocr+furigana+enriched",
                                                         (true, false) => "local:manga-ocr+furigana",

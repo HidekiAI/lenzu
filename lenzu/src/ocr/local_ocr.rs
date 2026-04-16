@@ -16,11 +16,11 @@ use super::text_detection::TextBoundingBox;
 
 /// Confidence threshold — both detection and OCR must be strictly above this
 /// to skip the LLM chain.  70% or below = fail (model is guessing).
-const CONFIDENCE_GATE: f32 = 0.70;
+pub const CONFIDENCE_GATE: f32 = 0.70;
 
-/// Maximum characters kept from a low-confidence OCR result that still gets
-/// passed downstream (to the LLM chain).
-const LOW_CONF_MAX_CHARS: usize = 32;
+/// Default maximum characters kept from a low-confidence OCR result.
+/// Overridden at runtime via `AppConfig::low_conf_max_chars`.
+const DEFAULT_LOW_CONF_MAX_CHARS: usize = 64;
 
 /// manga-ocr-rs squish-resizes input to 224×224.  Crops whose longest edge
 /// exceeds this limit are pre-downscaled with Lanczos3 (better for large
@@ -114,7 +114,9 @@ impl LocalOcrEngine {
         boxes: &[TextBoundingBox],
         crop_pad: u32,
         min_crop_area: u32,
+        low_conf_max_chars: Option<usize>,
     ) -> (Option<Vec<LocalOcrResult>>, Vec<LocalOcrResult>) {
+        let max_chars = low_conf_max_chars.unwrap_or(DEFAULT_LOW_CONF_MAX_CHARS);
         let cropper = TextCropper::new(crop_pad, min_crop_area).with_pad_percent(0.10);
         let crops = cropper.crop(image, boxes);
 
@@ -168,8 +170,8 @@ impl LocalOcrEngine {
 
                     // Apply truncation for low-confidence long strings.
                     let char_count = rec.text.chars().count();
-                    let text = if !ocr_confident && char_count >= LOW_CONF_MAX_CHARS {
-                        rec.text.chars().take(LOW_CONF_MAX_CHARS).collect()
+                    let text = if !ocr_confident && char_count >= max_chars {
+                        rec.text.chars().take(max_chars).collect()
                     } else {
                         rec.text.clone()
                     };
@@ -185,6 +187,109 @@ impl LocalOcrEngine {
                         ocr_ms: ms,
                         source_box: crop.source_box.clone(),
                     });
+                }
+                Err(e) => {
+                    eprintln!("[local-ocr] recognize failed: {e}");
+                    all_confident = false;
+                }
+            }
+        }
+
+        if all_confident && !results.is_empty() {
+            (Some(results.clone()), results)
+        } else {
+            (None, results)
+        }
+    }
+
+    /// Like [`try_local_pipeline`] but calls `on_progress` after each box is
+    /// recognised, passing the accumulated results so far.  This lets the
+    /// caller send incremental previews to the HUD so text grows on screen
+    /// rather than appearing all at once (or flashing when boxes are fast).
+    pub fn try_local_pipeline_incremental<F>(
+        &self,
+        image: &DynamicImage,
+        boxes: &[TextBoundingBox],
+        crop_pad: u32,
+        min_crop_area: u32,
+        low_conf_max_chars: Option<usize>,
+        on_progress: F,
+    ) -> (Option<Vec<LocalOcrResult>>, Vec<LocalOcrResult>)
+    where
+        F: Fn(&[LocalOcrResult]),
+    {
+        let max_chars = low_conf_max_chars.unwrap_or(DEFAULT_LOW_CONF_MAX_CHARS);
+        let cropper = TextCropper::new(crop_pad, min_crop_area).with_pad_percent(0.10);
+        let crops = cropper.crop(image, boxes);
+
+        if crops.is_empty() {
+            return (None, vec![]);
+        }
+
+        let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
+            crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
+
+        if confident_crops.is_empty() {
+            eprintln!(
+                "[local-ocr] all {} boxes below detection confidence gate ({:.0}%)",
+                crops.len(),
+                CONFIDENCE_GATE * 100.0,
+            );
+            return (None, vec![]);
+        }
+
+        if !weak_crops.is_empty() {
+            eprintln!(
+                "[local-ocr] {} of {} boxes below detection confidence gate — falling through to LLM",
+                weak_crops.len(),
+                crops.len(),
+            );
+            return (None, vec![]);
+        }
+
+        let mut results = Vec::with_capacity(confident_crops.len());
+        let mut all_confident = true;
+
+        for crop in &confident_crops {
+            match self.recognize_crop(&crop.image) {
+                Ok((rec, ms)) => {
+                    let ocr_confident = rec.confidence > CONFIDENCE_GATE && !rec.truncated;
+                    eprintln!(
+                        "[local-ocr] box ({},{})→({},{}) det:{:.0}% ocr:{:.1}%{} «{}»  ({} ms)",
+                        crop.source_box.x1, crop.source_box.y1,
+                        crop.source_box.x2, crop.source_box.y2,
+                        crop.source_box.confidence * 100.0,
+                        rec.confidence * 100.0,
+                        if rec.truncated { " TRUNCATED" } else { "" },
+                        if rec.text.chars().count() > 40 {
+                            format!("{}...", rec.text.chars().take(40).collect::<String>())
+                        } else {
+                            rec.text.clone()
+                        },
+                        ms,
+                    );
+
+                    let char_count = rec.text.chars().count();
+                    let text = if !ocr_confident && char_count >= max_chars {
+                        rec.text.chars().take(max_chars).collect()
+                    } else {
+                        rec.text.clone()
+                    };
+
+                    if !ocr_confident {
+                        all_confident = false;
+                    }
+
+                    results.push(LocalOcrResult {
+                        text,
+                        confidence: rec.confidence,
+                        truncated: rec.truncated,
+                        ocr_ms: ms,
+                        source_box: crop.source_box.clone(),
+                    });
+
+                    // Notify caller with accumulated results so far.
+                    on_progress(&results);
                 }
                 Err(e) => {
                     eprintln!("[local-ocr] recognize failed: {e}");
