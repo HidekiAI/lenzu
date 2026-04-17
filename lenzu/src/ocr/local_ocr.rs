@@ -127,7 +127,7 @@ impl LocalOcrEngine {
         eprintln!("[local-ocr] {} boxes detected", crops.len());
 
         // Only attempt local OCR on boxes that passed the detection confidence gate.
-        let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
+        let (mut confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
         if confident_crops.is_empty() {
@@ -147,6 +147,16 @@ impl LocalOcrEngine {
             );
             return (None, vec![]);
         }
+
+        // Sort right-to-left, top-to-bottom (Japanese manga reading order):
+        // primary = descending X midpoint, secondary = ascending Y midpoint.
+        confident_crops.sort_by(|a, b| {
+            let ax = (a.source_box.x1 + a.source_box.x2) / 2;
+            let bx = (b.source_box.x1 + b.source_box.x2) / 2;
+            let ay = (a.source_box.y1 + a.source_box.y2) / 2;
+            let by = (b.source_box.y1 + b.source_box.y2) / 2;
+            bx.cmp(&ax).then(ay.cmp(&by))
+        });
 
         let mut results = Vec::with_capacity(confident_crops.len());
         let mut all_confident = true;
@@ -233,7 +243,7 @@ impl LocalOcrEngine {
 
         eprintln!("[local-ocr] {} boxes detected", crops.len());
 
-        let (confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
+        let (mut confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
         if confident_crops.is_empty() {
@@ -253,6 +263,16 @@ impl LocalOcrEngine {
             );
             return (None, vec![]);
         }
+
+        // Sort right-to-left, top-to-bottom (Japanese manga reading order):
+        // primary = descending X midpoint, secondary = ascending Y midpoint.
+        confident_crops.sort_by(|a, b| {
+            let ax = (a.source_box.x1 + a.source_box.x2) / 2;
+            let bx = (b.source_box.x1 + b.source_box.x2) / 2;
+            let ay = (a.source_box.y1 + a.source_box.y2) / 2;
+            let by = (b.source_box.y1 + b.source_box.y2) / 2;
+            bx.cmp(&ax).then(ay.cmp(&by))
+        });
 
         let mut results = Vec::with_capacity(confident_crops.len());
         let mut all_confident = true;
