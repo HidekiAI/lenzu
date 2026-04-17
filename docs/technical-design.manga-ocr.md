@@ -62,8 +62,13 @@ From `generation_config.json`:
   "length_penalty": 2.0 }
 ```
 
-The prototype uses greedy decode (argmax) rather than beam search.
-Beam search (k=4) is left for the production crate.
+The production crate uses beam search (k=4) with length penalty 2.0.
+Greedy decode was used in the prototype; beam search was added in v0.1.1.
+
+**Early bailout (v0.1.3)**: After 16 generated tokens, the decoder checks
+the best active beam's geometric mean per-token probability. If below 30%,
+decoding aborts immediately — avoids 16–23 s hallucination delays on
+garbage/ambiguous crops. The `truncated` flag is set on the result.
 
 ---
 
@@ -188,18 +193,18 @@ lenzu/src/ocr/
 
 ---
 
-## 6. Crate extraction plan
+## 6. Crate extraction (DONE)
 
-The `MangaOcr` struct in `prototypes/manga-ocr-test/src/main.rs` is intentionally
-kept at the public API boundary.  Steps to publish as `manga-ocr-rs`:
+`manga-ocr-rs` is published on crates.io. Current version: **0.1.3**.
 
-1. **`lib.rs`** — move `MangaOcr`, `preprocess()`, all constants
-2. **Error type** — replace `anyhow::Error` with `thiserror`-based `MangaOcrError`
-3. **Trait** — `pub trait TextRecognizer { fn recognize(&self, img: &DynamicImage) -> Result<String, MangaOcrError>; }`
-4. **Feature gate** — `[features] default = [] / onnx = ["ort/ndarray", "ndarray", "tokenizers"]`
-5. **Beam search** — optional quality improvement; greedy is the v0.1 default
-6. **Test** — one integration test with a bundled 10×10 fixture image
-7. **Publish** — add to crates.io; lenzu adds `manga-ocr-rs = { version = "0.1", features = ["onnx"] }`
+| Version | Key changes |
+|---------|-------------|
+| 0.1.0 | Initial: beam search (k=4), `MangaOcr::new()`, `recognize()` |
+| 0.1.1 | Surface confidence scores (`Recognition.confidence`), `truncated` flag, token count |
+| 0.1.2 | Configurable `max_decode_steps` (default 50), rescaled test fixtures |
+| 0.1.3 | Early decoder bailout: abort at 16+ tokens when confidence < 30% |
+
+lenzu depends on `manga-ocr-rs = "0.1.3"` in `Cargo.toml`.
 
 ---
 
@@ -207,16 +212,15 @@ kept at the public API boundary.  Steps to publish as `manga-ocr-rs`:
 
 | Item | Confidence Impact | Notes |
 |------|-------------------|-------|
-| Greedy decode | Slightly lower raw_confidence vs beam search | Beam search (k=4) improves accuracy ~5–10% for ambiguous text |
 | No KV cache | None | Decoder is non-merged; each step is O(n²) — acceptable for short text |
 | FP32 only | None | No FP16 export available upstream; would save ~70 MB if produced |
 | CPU only | None | `ort` feature `cuda` would enable GPU inference; adds ~20 MB ORT binary |
 | Furigana | None | Appears in output as regular characters; caller filters if unwanted |
 | Vertical text | None | Handled by the model natively (trained on manga); no rotation needed |
-| Hallucination on merged regions | OCR confidence drops below 71% gate; `truncated` flag fires | Beam search decoder runs away without EOS when input contains multiple text columns or mixed art — reliably caught by low confidence score |
-| Ambiguous/noisy input | Low OCR confidence triggers LLM fallback | Results with < 71% OCR confidence are not trusted; pipeline falls through to Ollama → OpenRouter chain |
-| No furigana/translation | N/A — manga-ocr-rs outputs raw text only | Addressed by text enrichment: when `enrichment_enabled`, raw text is sent to local Ollama for furigana/romaji/translation. Graceful degradation if Ollama is unavailable. |
-| Input dimensions matter | Oversized inputs degrade accuracy | See §7.1 below |
+| Hallucination on merged regions | OCR confidence drops below 71% gate; `truncated` flag fires; early bailout at 16 tokens/30% aborts in ~1.8 s instead of ~23 s | Beam search decoder runs away without EOS when input contains multiple text columns or mixed art — reliably caught by low confidence score and early bailout |
+| Ambiguous/noisy input | Low OCR confidence triggers LLM fallback | Results with < 71% OCR confidence are not trusted; pipeline falls through to Ollama → OpenRouter chain. Low-confidence text is truncated to `low_conf_max_chars` (default 64) to limit garbage. |
+| No furigana/translation | N/A — manga-ocr-rs outputs raw text only | Addressed by MeCab furigana (instant, ~5 ms) applied in the incremental preview loop. Optional LLM enrichment adds translation when `enrichment_enabled` and not `furigana_only`. |
+| Input dimensions matter | Oversized inputs degrade accuracy | See §7.1 below. Pre-scaling (Lanczos3, `OCR_MAX_EDGE=448`) mitigates this for crops > 448px. |
 
 ### 7.1 Input dimension sensitivity (2026-04-15 findings)
 
