@@ -22,9 +22,15 @@
 
 ```
 lenzu (GTK3 client)
-  │  Shift+Click → X11 capture → base64 PNG
-  │  → OpenRouter API → Vec<TranslationResult>
-  │  → format_for_overlay(results, render_mode)
+  │
+  │  Shift+Click → X11 capture → DBNet detect → refine_boxes → local OCR
+  │    ├─ incremental: each box → manga-ocr-rs → MeCab furigana → HUD preview
+  │    ├─ if all confident → done (no LLM)
+  │    └─ if low confidence → LLM fallback chain → final HUD update
+  │
+  │  Ctrl+Shift+Click → fullscreen capture → DBNet detect → closest box to cursor
+  │    → crop → local OCR or LLM chain → HUD
+  │
   └──UDP JSON──► lenzu_server (Electron)
                   transparent BrowserWindow (src/main.js)
                   UDP listener → ipc to renderer
@@ -78,12 +84,26 @@ The base prompt is hardcoded in `config.rs::TRANSLATE_PROMPT` and is language-ag
 lenzu/                          ← Cargo workspace root
 ├── Cargo.toml
 ├── lenzu/                      ← lenzu_client binary ("lenzu")
-│   ├── src/{main,capture,client,config,utils}.rs
+│   ├── src/
+│   │   ├── main.rs             ← GTK event loop, capture, shift/ctrl+shift click handlers
+│   │   ├── client.rs           ← OcrClient, LLM fallback chain, response parsing
+│   │   ├── config.rs           ← AppConfig, lenzu_config.json deserialization
+│   │   ├── utils.rs            ← image encoding, debug image saving (lens/prewire/fullscreen)
+│   │   ├── furigana.rs         ← MeCab morphological analysis, furigana/romaji annotation
+│   │   └── ocr/
+│   │       ├── mod.rs
+│   │       ├── local_ocr.rs    ← LocalOcrEngine, refine_boxes(), confidence gate, pipelines
+│   │       ├── text_detection.rs  ← re-exports jp_detect (TextDetector, TextBoundingBox, etc.)
+│   │       └── text_cropper.rs ← TextCropper, proportional bbox padding, crop extraction
 │   ├── tests/integration_test.rs
 │   └── lenzu_config.json             ← runtime config (not committed)
-└── lenzu_server/               ← Electron overlay HUD
-    ├── package.json
-    └── src/                      ← main.js, preload.js, index.html, renderer.js, config.json
+├── lenzu_server/               ← Electron overlay HUD
+│   ├── package.json
+│   └── src/                      ← main.js, preload.js, index.html, renderer.js, config.json
+└── prototypes/                 ← standalone test binaries for model evaluation
+    ├── manga-ocr-test/
+    ├── dbnet-test/
+    └── dbnet-ocr-pipeline/
 ```
 
 ---
@@ -185,12 +205,13 @@ This section outlines the modern approach to Japanese text extraction in manga, 
 
 4. **Fallback Mechanisms**
    - Confidence scoring for detected regions (jp_detect: per-box detection confidence 0–100%; manga-ocr-rs: per-result OCR confidence 0–100%)
-   - Confidence gate: both scores must be >= 71% for local results to be accepted
+   - Confidence gate: both scores must be > 70% for local results to be accepted
+   - **Weak box drop**: boxes below the detection confidence gate are silently dropped — they no longer drag confident boxes into the LLM fallback. Only when zero boxes pass the gate does the pipeline fall through.
    - Progressive enhancement:
-     1. Try local detection (jp_detect DBNet) + local OCR (manga-ocr-rs) — if both >= 71% confidence:
-        - **Phase 1**: raw text sent to HUD immediately (~1.7 s from click)
+     1. Try local detection (jp_detect DBNet) + bbox refinement + local OCR (manga-ocr-rs) — if confident boxes exist with OCR >= 71%:
+        - **Phase 1 — incremental preview**: each box is OCR'd one at a time; after each, MeCab furigana is applied and the accumulated results are sent to the HUD as a preview. Text grows on screen as boxes complete (~0.8–1.5 s per box). This prevents the HUD from appearing hung during multi-box processing. Even low-confidence garbage text is shown as a "system is working" signal.
         - **Phase 2 — MeCab annotation** (instant, ~5 ms): morphological analysis produces furigana (`最初[さいしょ]`) and romaji. No LLM, no network — pure dictionary lookup with context-aware word boundaries. HUD updates in-place.
-        - **Phase 3 — LLM enrichment** (if `enrichment_enabled`): send raw text (NOT image) to local Ollama for english translation. Text-to-text call — no vision model needed. If Ollama is down or times out, MeCab-annotated text is returned as-is (graceful degradation).
+        - **Phase 3 — LLM enrichment** (if `enrichment_enabled` and not `furigana_only`): send raw text (NOT image) to local Ollama for english translation. Text-to-text call — no vision model needed. If Ollama is down or times out, MeCab-annotated text is returned as-is (graceful degradation).
         - Done — no image-based LLM call needed
      2. If low confidence → local LLM (Ollama) with image
      3. If local LLM fails → free remote tier
@@ -213,6 +234,66 @@ This section outlines the modern approach to Japanese text extraction in manga, 
 - **Manga-OCR**: A specialized Vision Transformer-based model specifically for manga. Considered the "gold standard" for accuracy, though it requires more resources (PyTorch/ONNX).
 - **Tesseract (Fallback)**: Open-source OCR engine with significant limitations in vertical Japanese text and layout analysis. It will be used ONLY as a lightweight recognition-only fallback for clean text regions.
 - **Windows Media OCR (Legacy)**: High accuracy for Japanese text, but Windows-only. Deprecated in favor of cross-platform ONNX-based engines.
+
+### Bounding Box Refinement Pipeline (2026-04-16)
+
+DBNet can produce problematic detections: overlapping boxes (speech bubble + text inside it as two detections), false positives on high-contrast panel edges/art, or stacked speech bubbles merged into a single tall box. The `refine_boxes()` function in `local_ocr.rs` addresses all three problems:
+
+```
+Raw DBNet boxes
+  │
+  ├─ Step 1: Cluster overlapping boxes (IoU > 15%) via union-find
+  │
+  ├─ Step 2a: For each cluster (≥2 boxes):
+  │    ├─ Compute union bbox of the cluster
+  │    ├─ Crop union region from the original image
+  │    ├─ Re-run DBNet on the crop → remap coordinates back
+  │    └─ If re-detect finds boxes → use those; else keep smallest original
+  │
+  ├─ Step 2b: For each singleton:
+  │    ├─ Check aspect ratio (longest/shortest edge)
+  │    ├─ If > 3.5 → suspicious (stacked bubbles merged)
+  │    │    ├─ Re-run DBNet on that region → may split into multiple
+  │    │    └─ If no split → keep as-is
+  │    └─ If ≤ 3.5 → pass through unchanged
+  │
+  └─ Step 3: Sort refined boxes right-to-left, top-to-bottom
+     (Japanese manga reading order: descending X midpoint, then ascending Y)
+```
+
+**Examples of problems solved:**
+- 4 raw boxes on a single text bubble ("敵探知"): 2 overlapping (bubble 99% + text 87%) + 2 false positives (35%, 50%). After refinement: 1 box on the text. Confidence gate drops the false positives, re-detection on the cluster yields the tight text box.
+- Two vertically stacked bubbles merged into one tall box (aspect 4:1): re-detection splits them into two separate boxes, each with its own text.
+
+### Early Decoder Bailout (manga-ocr-rs 0.1.3, 2026-04-16)
+
+The manga-ocr-rs beam search decoder can "run away" on ambiguous or garbage input, producing 40+ hallucinated tokens over 16–23 seconds before hitting `max_length`. This is waste — the output is garbage and the confidence will be low.
+
+**Solution**: After 16 tokens, check the best active beam's geometric mean per-token probability. If below 30%, abort immediately.
+
+```
+Constants:
+  EARLY_BAILOUT_MIN_TOKENS = 16
+  EARLY_BAILOUT_CONFIDENCE = 0.30
+
+Check (after each decoder step, once num_generated ≥ 16):
+  running_conf = exp(score / num_generated)
+  if running_conf < 0.30 → break
+```
+
+**Observed improvement**: box OCR time dropped from ~23 s (full hallucination) to ~1.8 s (bailed at 38 tokens, 28.2% confidence). The `truncated` flag is set, signaling the LLM fallback chain that local OCR was unreliable.
+
+### Pre-scaling Large Crops (2026-04-15)
+
+manga-ocr-rs squish-resizes all input to 224×224 using bilinear interpolation internally. When a large crop (e.g. 600×400) is resized directly, fine kanji strokes are lost. The `OCR_MAX_EDGE` constant (448 px, 2× the model input) gates a Lanczos3 pre-downscale in `recognize_crop()` — crops larger than 448px on their longest edge are proportionally shrunk with high-quality resampling before the model's internal resize. This preserves stroke detail that bilinear would blur.
+
+### Low-Confidence Text Truncation (2026-04-16)
+
+When OCR confidence is below the gate and the text is long (hallucination), the result is truncated to `low_conf_max_chars` (default: 64, configurable via `lenzu_config.json`). This prevents runaway garbage from flooding the HUD while still showing enough text to be useful as a "system is working" indicator.
+
+### Resilient LLM Response Parsing (2026-04-16)
+
+LLM responses returning JSON arrays are now deserialized element-by-element. If one element in the array is malformed (missing fields, wrong types), it is logged and skipped — the valid elements are kept. Previously, a single malformed entry discarded the entire array. This applies to both direct arrays and wrapper-key paths (`results`, `items`, `data`, etc.) in `client.rs::normalize_results()`.
 
 ### Pipeline Benefits
 
@@ -431,15 +512,40 @@ Performance benchmarks and accuracy assessments across OCR engines:
 | glm-ocr (Ollama) | ~10–20 s | N/A (LLM fallback) | Accurate text, poor segmentation | Lumps text into one block |
 | Gemini 2.0 Flash (remote) | ~3–5 s | N/A (LLM fallback) | Best overall | Requires API key; images leave device |
 
-The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. After local OCR succeeds, a 3-phase progressive rendering pipeline updates the HUD:
+The confidence-gated local pipeline (jp_detect + manga-ocr-rs) eliminates the need for image-based LLM calls when both detection and OCR confidence scores pass the 71% gate. After local OCR succeeds, a multi-phase progressive rendering pipeline updates the HUD:
 
-1. **Phase 1 — raw text** (instant): OCR result displayed immediately
+**Multi-bbox shift-click path (incremental rendering, 2026-04-16):**
+
+1. **Bbox refinement** (~50 ms): `refine_boxes()` clusters overlapping detections, re-runs DBNet on union regions, checks singleton aspect ratios, drops weak boxes.
+2. **Sort** — right-to-left, top-to-bottom (Japanese manga reading order).
+3. **Per-box loop**: for each box:
+   - **OCR** (~0.8–1.5 s): manga-ocr-rs with early bailout at 16 tokens if confidence < 30%.
+   - **MeCab furigana** (~5 ms): annotate OCR result with furigana/romaji.
+   - **HUD preview**: send accumulated results to HUD (text grows on screen). Even low-confidence garbage is shown as a "system is working" signal while the LLM fallback chain runs.
+4. **Phase 3 — LLM enrichment** (if `enrichment_enabled` and not `furigana_only`, ~15–30 s): text-only Ollama call for english translation. Skipped in `furigana_only` mode.
+
+**Single-box path (fullscreen Ctrl+Shift+Click):**
+
+1. **Phase 1 — raw text** (instant): OCR result displayed immediately.
 2. **Phase 2 — MeCab furigana + romaji** (~5 ms): morphological analysis annotates kanji with hiragana readings (`最初[さいしょ]`) and generates romaji via pure-Rust Hepburn conversion. No LLM, no network — deterministic dictionary lookup with context-aware word boundaries.
-3. **Phase 3 — LLM translation** (if `enrichment_enabled`, ~15–30 s): text-only Ollama call for english translation. If Ollama is down or times out, Phase 2 results are shown as-is.
+3. **Phase 3 — LLM enrichment** (if `enrichment_enabled` and not `furigana_only`, ~15–30 s): text-only Ollama call for english translation. If Ollama is down or times out, Phase 2 results are shown as-is.
 
 The lens stays modal until the final phase completes, preventing request stacking. Low-confidence results fall through to the image-based LLM chain automatically.
 
 **Observability**: All LLM backends (local and remote) now report mean token probability (via logprobs) and `finish_reason` in stderr logs. Paid remote backends additionally log per-request and session-cumulative token counts (`prompt_tokens`, `completion_tokens`). The HUD color changes from configured → orange → red as session paid token usage crosses configurable thresholds (`token_warning_threshold`, `token_critical_threshold`).
+
+**Local OCR logging** (2026-04-16): The local pipeline logs total boxes found, processes each with a `[box N]` prefix (1-indexed), shows full OCR text with character count, and explicitly logs truncation when applied (`truncated 142 → 64 chars`). Bbox refinement logs cluster merges, re-detection results, and aspect ratio checks.
+
+**Debug files** (`/dev/shm/lenzu/`):
+
+| File | Written by | Contents |
+|---|---|---|
+| `debug_lens.png` | `save_lens_debug()` | RGB lens capture with color-coded 2px bbox rectangles (6-color cycling palette). Written after DBNet detection + refinement. |
+| `debug_lens.json` | `save_lens_debug()` | JSON with box count, coordinates, dimensions, and confidence for each bbox. |
+| `debug_prewire.png` | `save_prewire_debug()` | Greyscale image of the exact crop sent to the LLM — reflects the actual OCR payload. Separate path from lens debug to prevent overwriting. |
+| `fullscreen-debug.png` | `save_fullscreen_debug()` | Fullscreen capture with color-coded bbox rectangles (Ctrl+Shift+Click path). |
+| `fullscreen-debug.json` | `save_fullscreen_debug()` | JSON with box count and coordinates for fullscreen scan. |
+| `api_debug.txt` | `client.rs` | Raw LLM API request/response payloads for debugging. |
 
 ## 13. windows-rs Integration
 
@@ -485,3 +591,17 @@ All MeCab logic lives in `lenzu/src/furigana.rs` — Linux-only (`#[cfg(target_o
 - `kata_to_romaji()` — pure-Rust Hepburn table, no external dependency
 - `has_kanji()` — CJK range check
 - `annotate()` — public API, annotates `TranslationResult` array in-place
+
+### MeCab Overwrite Mode (2026-04-13)
+
+When `--mecab_overwrite` is active (default: true), every LLM-produced furigana result is compared against MeCab's output. If they differ, MeCab's version replaces the LLM's. This catches LLM hallucinations in furigana annotations (e.g. LLM returning `ふところ[もく]まとって` vs MeCab's correct `懐[ふところ]`). Timing and MATCH/MISMATCH status are logged for each comparison.
+
+### Companion Crates
+
+All three companion crates are published on crates.io and used as dependencies:
+
+| Crate | Version | Role |
+|---|---|---|
+| `jp_detect` | 0.2.3 | DBNet scene text detection (4.7 MB ONNX model). Orientation-aware merging (tategaki never merges with yokogaki), graduated padding scale table, confidence scores, contour polygons. |
+| `manga-ocr-rs` | 0.1.3 | ViT-based manga OCR (140 MB ONNX models). Beam search (k=4), confidence scoring, early bailout on hallucination (16 tokens / 30% threshold), configurable max decode steps. |
+| `mecab-furigana-rs` | 0.1.0 | MeCab morphological analysis. Furigana annotation (`漢字[かんじ]`), romaji (Hepburn), word segmentation with POS tags. Cross-platform (Linux/macOS), `MECAB_DICT_DIR` env var support. |
