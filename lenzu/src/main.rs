@@ -999,9 +999,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut detected_boxes: Vec<ocr::text_detection::TextBoundingBox> = Vec::new();
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
-                                        let boxes = det.detect(&gray_image);
-                                        // Save lens debug image with bounding boxes
-                                        // regardless of whether boxes were found.
+                                        let raw_boxes = det.detect(&gray_image);
+                                        // Refine: merge overlapping clusters and
+                                        // re-detect within each union region to
+                                        // split stacked bubbles / remove bubble-wrap dupes.
+                                        let boxes = ocr::local_ocr::refine_boxes(
+                                            &raw_boxes, &dyn_image, det.as_ref(),
+                                        );
+                                        // Save lens debug image with refined bounding boxes.
                                         utils::save_lens_debug(&dyn_image, &boxes);
 
                                         if !boxes.is_empty() {

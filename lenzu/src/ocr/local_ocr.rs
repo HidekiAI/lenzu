@@ -22,6 +22,195 @@ pub const CONFIDENCE_GATE: f32 = 0.70;
 /// Overridden at runtime via `AppConfig::low_conf_max_chars`.
 const DEFAULT_LOW_CONF_MAX_CHARS: usize = 64;
 
+/// IoU threshold for clustering overlapping bounding boxes before refinement.
+const OVERLAP_CLUSTER_IOU: f32 = 0.15;
+
+/// Refine detected bounding boxes by merging overlapping clusters and
+/// re-detecting within each union region.
+///
+/// 1. Find clusters of boxes that overlap (IoU > `OVERLAP_CLUSTER_IOU`).
+/// 2. For each cluster with ≥2 boxes, compute the union bbox, crop that
+///    region from the image, and re-run the detector on the crop.
+/// 3. If re-detection yields results, use those (remapped to original coords).
+///    Otherwise keep the smallest original box from the cluster.
+/// 4. Singleton (non-overlapping) boxes pass through unchanged.
+///
+/// This handles both:
+/// - Bubble + text detected as separate overlapping boxes → re-detect finds just the text
+/// - Stacked bubbles merged into one tall box → re-detect splits them
+pub fn refine_boxes(
+    boxes: &[TextBoundingBox],
+    image: &DynamicImage,
+    detector: &dyn super::text_detection::TextDetector,
+) -> Vec<TextBoundingBox> {
+    if boxes.len() <= 1 {
+        return boxes.to_vec();
+    }
+
+    // ── Step 1: cluster overlapping boxes ────────────────────────────────────
+    let n = boxes.len();
+    let mut cluster_id = vec![0usize; n];
+    for i in 0..n {
+        cluster_id[i] = i; // each box starts in its own cluster
+    }
+
+    // Union-find helpers (path compression only, no rank).
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while parent[r] != r {
+            r = parent[r];
+        }
+        let mut c = i;
+        while parent[c] != r {
+            let next = parent[c];
+            parent[c] = r;
+            c = next;
+        }
+        r
+    }
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            parent[rb] = ra;
+        }
+    }
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let a = &boxes[i];
+            let b = &boxes[j];
+
+            let ix1 = a.x1.max(b.x1);
+            let iy1 = a.y1.max(b.y1);
+            let ix2 = a.x2.min(b.x2);
+            let iy2 = a.y2.min(b.y2);
+
+            if ix1 >= ix2 || iy1 >= iy2 {
+                continue;
+            }
+
+            let inter = (ix2 - ix1) as f32 * (iy2 - iy1) as f32;
+            let area_a = (a.x2 - a.x1) as f32 * (a.y2 - a.y1) as f32;
+            let area_b = (b.x2 - b.x1) as f32 * (b.y2 - b.y1) as f32;
+            let u = area_a + area_b - inter;
+            if u > 0.0 && inter / u > OVERLAP_CLUSTER_IOU {
+                union(&mut cluster_id, i, j);
+            }
+        }
+    }
+
+    // Group boxes by cluster root.
+    let mut clusters: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for i in 0..n {
+        clusters.entry(find(&mut cluster_id, i)).or_default().push(i);
+    }
+
+    // ── Step 2: refine each cluster ──────────────────────────────────────────
+
+    // Aspect ratio beyond which a singleton looks like merged stacked bubbles.
+    // Tategaki (vertical) text is naturally tall, but >3.5:1 is suspicious;
+    // yokogaki (horizontal) merge would be very wide, >4:1.
+    const SUSPECT_ASPECT: f32 = 3.5;
+
+    // Re-detect within a region and remap coordinates back to original image.
+    // Returns `Some(boxes)` if re-detection found anything, `None` otherwise.
+    let redetect_region = |x1: u32, y1: u32, w: u32, h: u32| -> Option<Vec<TextBoundingBox>> {
+        let sub = image.crop_imm(x1, y1, w, h);
+        let sub_gray = sub.grayscale();
+        let sub_boxes = detector.detect(&sub_gray);
+        if sub_boxes.is_empty() {
+            return None;
+        }
+        Some(sub_boxes.into_iter().map(|b| TextBoundingBox {
+            x1: b.x1 + x1,
+            y1: b.y1 + y1,
+            x2: b.x2 + x1,
+            y2: b.y2 + y1,
+            confidence: b.confidence,
+            contours: b.contours,
+        }).collect())
+    };
+
+    let mut refined: Vec<TextBoundingBox> = Vec::new();
+
+    for (_root, members) in &clusters {
+        if members.len() == 1 {
+            let b = &boxes[members[0]];
+            let w = b.x2.saturating_sub(b.x1).max(1);
+            let h = b.y2.saturating_sub(b.y1).max(1);
+            let aspect = w.max(h) as f32 / w.min(h) as f32;
+
+            if aspect > SUSPECT_ASPECT {
+                // Suspiciously elongated — might be stacked bubbles merged
+                // into one. Re-detect to see if it splits.
+                eprintln!(
+                    "[local-ocr] refine: singleton ({},{})→({},{}) {}×{} aspect {:.1} > {:.1} — re-detecting",
+                    b.x1, b.y1, b.x2, b.y2, w, h, aspect, SUSPECT_ASPECT,
+                );
+                if let Some(sub_boxes) = redetect_region(b.x1, b.y1, w, h) {
+                    if sub_boxes.len() > 1 {
+                        eprintln!(
+                            "[local-ocr] refine: split into {} boxes",
+                            sub_boxes.len(),
+                        );
+                        refined.extend(sub_boxes);
+                    } else {
+                        // Re-detect found 1 box — use it (may be tighter).
+                        eprintln!("[local-ocr] refine: re-detect returned 1 box (kept)");
+                        refined.extend(sub_boxes);
+                    }
+                } else {
+                    eprintln!("[local-ocr] refine: re-detect found nothing, keeping original");
+                    refined.push(b.clone());
+                }
+            } else {
+                // Normal singleton — pass through.
+                refined.push(b.clone());
+            }
+            continue;
+        }
+
+        // Compute union bbox of the cluster.
+        let ux1 = members.iter().map(|&i| boxes[i].x1).min().unwrap();
+        let uy1 = members.iter().map(|&i| boxes[i].y1).min().unwrap();
+        let ux2 = members.iter().map(|&i| boxes[i].x2).max().unwrap();
+        let uy2 = members.iter().map(|&i| boxes[i].y2).max().unwrap();
+        let uw = ux2 - ux1;
+        let uh = uy2 - uy1;
+
+        eprintln!(
+            "[local-ocr] refine: cluster of {} boxes → union ({},{})→({},{}) {}×{}",
+            members.len(), ux1, uy1, ux2, uy2, uw, uh,
+        );
+
+        if let Some(sub_boxes) = redetect_region(ux1, uy1, uw, uh) {
+            eprintln!(
+                "[local-ocr] refine: re-detect found {} boxes in union crop (was {})",
+                sub_boxes.len(), members.len(),
+            );
+            refined.extend(sub_boxes);
+        } else {
+            // Re-detect found nothing — keep the smallest original box
+            // (tightest text fit) from the cluster.
+            let best = members.iter()
+                .min_by_key(|&&i| {
+                    let b = &boxes[i];
+                    (b.x2 - b.x1) as u64 * (b.y2 - b.y1) as u64
+                })
+                .unwrap();
+            eprintln!(
+                "[local-ocr] refine: re-detect found nothing, keeping smallest box ({},{})→({},{})",
+                boxes[*best].x1, boxes[*best].y1, boxes[*best].x2, boxes[*best].y2,
+            );
+            refined.push(boxes[*best].clone());
+        }
+    }
+
+    refined
+}
+
 /// manga-ocr-rs squish-resizes input to 224×224.  Crops whose longest edge
 /// exceeds this limit are pre-downscaled with Lanczos3 (better for large
 /// reductions) so the final squish is gentler and preserves fine strokes.
@@ -124,27 +313,24 @@ impl LocalOcrEngine {
             return (None, vec![]);
         }
 
-        eprintln!("[local-ocr] {} boxes detected", crops.len());
+        eprintln!("[local-ocr] {} boxes to process", crops.len());
 
         // Only attempt local OCR on boxes that passed the detection confidence gate.
+        // Weak boxes are dropped — they don't drag confident boxes to the LLM chain.
         let (mut confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
-        if confident_crops.is_empty() {
+        if !weak_crops.is_empty() {
             eprintln!(
-                "[local-ocr] all {} boxes below detection confidence gate ({:.0}%)",
+                "[local-ocr] dropping {} of {} boxes below detection confidence gate ({:.0}%)",
+                weak_crops.len(),
                 crops.len(),
                 CONFIDENCE_GATE * 100.0,
             );
-            return (None, vec![]);
         }
 
-        if !weak_crops.is_empty() {
-            eprintln!(
-                "[local-ocr] {} of {} boxes below detection confidence gate — falling through to LLM",
-                weak_crops.len(),
-                crops.len(),
-            );
+        if confident_crops.is_empty() {
+            eprintln!("[local-ocr] no boxes above confidence gate — falling through to LLM");
             return (None, vec![]);
         }
 
@@ -241,26 +427,23 @@ impl LocalOcrEngine {
             return (None, vec![]);
         }
 
-        eprintln!("[local-ocr] {} boxes detected", crops.len());
+        eprintln!("[local-ocr] {} boxes to process", crops.len());
 
+        // Weak boxes are dropped — they don't drag confident boxes to the LLM chain.
         let (mut confident_crops, weak_crops): (Vec<&CroppedRegion>, Vec<&CroppedRegion>) =
             crops.iter().partition(|c| c.source_box.confidence > CONFIDENCE_GATE);
 
-        if confident_crops.is_empty() {
+        if !weak_crops.is_empty() {
             eprintln!(
-                "[local-ocr] all {} boxes below detection confidence gate ({:.0}%)",
+                "[local-ocr] dropping {} of {} boxes below detection confidence gate ({:.0}%)",
+                weak_crops.len(),
                 crops.len(),
                 CONFIDENCE_GATE * 100.0,
             );
-            return (None, vec![]);
         }
 
-        if !weak_crops.is_empty() {
-            eprintln!(
-                "[local-ocr] {} of {} boxes below detection confidence gate — falling through to LLM",
-                weak_crops.len(),
-                crops.len(),
-            );
+        if confident_crops.is_empty() {
+            eprintln!("[local-ocr] no boxes above confidence gate — falling through to LLM");
             return (None, vec![]);
         }
 
