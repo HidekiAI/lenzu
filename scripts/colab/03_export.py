@@ -19,20 +19,28 @@ MODEL_ID = "sbintuitions/sarashina2.2-0.5b-instruct-v0.1"
 MODEL_NAME = "mini_500m"
 TASK = "text-generation-with-past"
 
+# fp16 only works on CUDA; fall back to fp32/CPU if GPU is unavailable
+import torch
+if torch.cuda.is_available():
+    DEVICE, DTYPE = "cuda", "fp16"
+else:
+    DEVICE, DTYPE = "cpu", "fp32"
+    print("WARNING: no CUDA -- falling back to CPU/fp32 (slower, larger file)")
+
 out_dir = f"./{MODEL_NAME}_onnx"
 zip_file = f"{MODEL_NAME}_export.zip"
 
 if os.path.exists(f"{DRIVE_PATH}/{zip_file}"):
     print(f"Skipping {MODEL_NAME}, already in Drive.")
 else:
-    print(f"Forging {MODEL_NAME} with task {TASK}...")
+    print(f"Forging {MODEL_NAME} with task {TASK} on {DEVICE}/{DTYPE}...")
     cmd = (
         f'optimum-cli export onnx'
         f' --model "{MODEL_ID}"'
         f' --task "{TASK}"'
         f' --trust-remote-code'
-        f' --device cuda'
-        f' --dtype fp16'
+        f' --device {DEVICE}'
+        f' --dtype {DTYPE}'
         f' "{out_dir}"'
     )
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
