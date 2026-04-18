@@ -27,8 +27,13 @@ print(f"MODEL_ID: {MODEL_ID}")
 # visual-feature injection because some submodules stay in their saved dtype.
 MODEL_DTYPE = torch.bfloat16
 print(f"\n=== Loading {MODEL_ID} (dtype={MODEL_DTYPE}) ===")
+# attn_implementation="eager" avoids the new masking_utils.mod_index HOP
+# that torch.jit.trace can't export ("unordered_map::at" crash).
 model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID, trust_remote_code=True, torch_dtype=MODEL_DTYPE
+    MODEL_ID,
+    trust_remote_code=True,
+    torch_dtype=MODEL_DTYPE,
+    attn_implementation="eager",
 ).eval().cuda()
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
