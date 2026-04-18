@@ -23,9 +23,12 @@ print(f"HF_HOME: {os.environ.get('HF_HOME', '(default)')}")
 print(f"MODEL_ID: {MODEL_ID}")
 
 # --- Load (uses Drive cache if preflight ran) ---
-print(f"\n=== Loading {MODEL_ID} ===")
+# Use the checkpoint's native dtype (bfloat16) -- forcing fp16 breaks the
+# visual-feature injection because some submodules stay in their saved dtype.
+MODEL_DTYPE = torch.bfloat16
+print(f"\n=== Loading {MODEL_ID} (dtype={MODEL_DTYPE}) ===")
 model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID, trust_remote_code=True, torch_dtype=torch.float16
+    MODEL_ID, trust_remote_code=True, torch_dtype=MODEL_DTYPE
 ).eval().cuda()
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
 
@@ -61,7 +64,7 @@ inputs = processor(
 
 for k in list(inputs.keys()):
     if torch.is_tensor(inputs[k]) and inputs[k].is_floating_point():
-        inputs[k] = inputs[k].to(torch.float16)
+        inputs[k] = inputs[k].to(MODEL_DTYPE)
 
 print("\n=== processor output ===")
 for k, v in inputs.items():
