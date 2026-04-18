@@ -146,6 +146,7 @@ try:
         opset_version=17,
         dynamic_axes=dynamic_axes,
         do_constant_folding=False,
+        dynamo=False,  # legacy TorchScript tracer -- handles *args + dynamic_axes
     )
     size_mb = sum(
         os.path.getsize(os.path.join(OUT_DIR, f))
