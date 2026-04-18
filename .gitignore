@@ -20,7 +20,6 @@ obj/
 .fake/
 # i.e. foobar.vcproj.user and foobar.vcxproj.user
 *.v*proj.user
-*.zip
 *.bak
 
 tags
@@ -49,6 +48,14 @@ build*/
 
 gha-creds-*.json
 .ollama_mode
+
+# Models (Heavy binaries)
+/models/*.onnx
+/models/**/*.onnx
+/models/**/*.json
+
+# Exclude the downloaded ZIPs
+*.zip
 
 # LLM crufts
 CLAUDE.md
