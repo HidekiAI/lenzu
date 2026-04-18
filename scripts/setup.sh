@@ -13,6 +13,7 @@
 #   --skip-ollama      skip Docker/Ollama setup (use if you prefer OpenRouter only)
 #   --skip-manga-ocr   skip manga-ocr-2025 model download
 #   --skip-paddleocr   skip PaddleOCR-VL-For-Manga GGUF download
+#   --skip-sarashina   skip Sarashina 2.2 ONNX model download (~30 GB)
 #   --gpu              force GPU mode (error if no CUDA GPU found)
 #   --no-gpu           force CPU-only mode even when a GPU is present
 #
@@ -27,6 +28,7 @@ MODE_FILE="$REPO_ROOT/.ollama_mode"
 SKIP_OLLAMA=false
 SKIP_MANGA_OCR=false
 SKIP_PADDLEOCR=false
+SKIP_SARASHINA=false
 FORCE_GPU=false
 FORCE_CPU=false
 while [[ $# -gt 0 ]]; do
@@ -34,6 +36,7 @@ while [[ $# -gt 0 ]]; do
         --skip-ollama)     SKIP_OLLAMA=true ;;
         --skip-manga-ocr)  SKIP_MANGA_OCR=true ;;
         --skip-paddleocr)  SKIP_PADDLEOCR=true ;;
+        --skip-sarashina)  SKIP_SARASHINA=true ;;
         --gpu)             FORCE_GPU=true ;;
         --no-gpu)          FORCE_CPU=true ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
@@ -182,6 +185,57 @@ else
             echo "PaddleOCR-VL-For-Manga GGUF models ready."
         else
             echo "  Some files failed. Re-run setup.sh to retry."
+        fi
+    fi
+fi
+
+# ── Sarashina 2.2 ONNX models (~30 GB) ──────────────────────────────────────
+# sbintuitions/sarashina2.2-ocr exported to ONNX via notebooks/sarashina_export.ipynb.
+# Pre-built artifacts hosted on Hugging Face.  Downloaded once; re-run skips existing files.
+echo ""
+if [[ "$SKIP_SARASHINA" == "true" ]]; then
+    echo "Skipping Sarashina 2.2 ONNX download (--skip-sarashina)."
+else
+    SARASHINA_DIR="$REPO_ROOT/models/sarashina2.2"
+    # TODO: replace with your actual Hugging Face repo URL once uploaded
+    SARASHINA_BASE="https://huggingface.co/HidekiAI/sarashina2.2-ocr-onnx/resolve/main"
+    SARASHINA_FILES=(
+        "encoder_model.onnx"
+        "decoder_model.onnx"
+        "decoder_with_past_model.onnx"
+        "config.json"
+        "tokenizer.json"
+    )
+
+    all_present=true
+    for f in "${SARASHINA_FILES[@]}"; do
+        [[ -f "$SARASHINA_DIR/$f" ]] || { all_present=false; break; }
+    done
+
+    if [[ "$all_present" == "true" ]]; then
+        echo "Sarashina 2.2 ONNX models already present — skipping."
+    else
+        echo "Downloading Sarashina 2.2 ONNX models (~30 GB)..."
+        echo "  WARNING: This is a large download. Use --skip-sarashina to skip."
+        mkdir -p "$SARASHINA_DIR"
+        download_ok=true
+        for f in "${SARASHINA_FILES[@]}"; do
+            if [[ -f "$SARASHINA_DIR/$f" ]]; then
+                echo "  $f — already present, skipping."
+                continue
+            fi
+            echo "  Downloading $f..."
+            if ! curl -fL --progress-bar -o "$SARASHINA_DIR/$f" "$SARASHINA_BASE/$f"; then
+                echo "  WARNING: failed to download $f"
+                rm -f "$SARASHINA_DIR/$f"   # remove partial file
+                download_ok=false
+            fi
+        done
+        if [[ "$download_ok" == "true" ]]; then
+            echo "Sarashina 2.2 ONNX models ready."
+        else
+            echo "  Some files failed. Re-run setup.sh to retry, or download manually:"
+            echo "    curl -fL -o models/sarashina2.2/<file> $SARASHINA_BASE/<file>"
         fi
     fi
 fi
