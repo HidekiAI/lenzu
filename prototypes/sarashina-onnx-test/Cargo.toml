@@ -1,0 +1,12 @@
+[package]
+name = "sarashina-onnx-test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sarashina-onnx-test"
+path = "src/main.rs"
+
+[dependencies]
+ort    = "2"
+anyhow = "1.0"
