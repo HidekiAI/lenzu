@@ -1,40 +1,53 @@
 ---
 license: apache-2.0
-base_model: sbintuitions/sarashina2.2-ocr
+base_model: sbintuitions/sarashina2.2-0.5b-instruct-v0.1
 model_creator: sbintuitions
 model_type: sarashina2
 ---
 
 # Model Assets Directory
 
-This folder contains the ONNX runtime sessions for the Lenzu. Due to the size of the binary files, they are excluded from Git. You can either download pre-built artifacts or generate them yourself.
+This folder holds the runtime assets for Lenzu. Binary weights are excluded from Git; you can download pre-built artifacts or generate them yourself.
+
+## ONNX vs Python Runtime
+
+Lenzu uses two runtimes depending on the model:
+
+| Model | Runtime | Why |
+| --- | --- | --- |
+| `sarashina2.2-0.5b-instruct-v0.1` | ONNX (via `ort`) | Standard `LlamaForCausalLM`; exports cleanly. |
+| `sarashina2.2-ocr` | HuggingFace `transformers` (Python) | Custom `sarashina2_vision` architecture; SB Intuitions designed it for their Python pipeline. |
+| `sarashina2.2-vision-3b` | HuggingFace `transformers` (Python) | Same. |
+
+The vision models use Qwen2-VL-style patterns (packed patches, MRoPE, custom `autograd.Function` ops) that the ONNX tracer cannot traverse. Rather than hack around SB Intuitions' intended design, Lenzu invokes them through their official runtime.
 
 ## Expected Layout
 
 ```text
 models/
-├── sarashina2.2/
-│   ├── encoder_model.onnx
-│   ├── decoder_model.onnx
-│   ├── decoder_with_past_model.onnx
+├── sarashina2.2-mini/           # 0.5b instruct, ONNX
+│   ├── model.onnx
+│   ├── model.onnx_data          # if present
 │   ├── config.json
 │   └── tokenizer.json
 └── dbnet.onnx
 ```
 
-**Important:** Ensure the `.onnx` and `.onnx_data` files (if present) remain in the same folder.
+The vision models (`sarashina2.2-ocr`, `sarashina2.2-vision-3b`) are not stored here; they are pulled into the HuggingFace cache on first use by the Python runtime.
+
+**Important:** Keep each ONNX file and its sibling `.onnx_data` file (if present) in the same folder.
 
 ---
 
 ## Option 1: Setup Script (Recommended)
 
-The repo setup script will download the pre-built ONNX artifacts automatically if they are not already present:
+The repo setup script downloads the pre-built ONNX artifact if it is not already present:
 
 ```bash
 ./scripts/setup.sh
 ```
 
-To skip the ~30 GB Sarashina download (e.g. on a metered connection):
+To skip the Sarashina download (e.g. on a metered connection):
 
 ```bash
 ./scripts/setup.sh --skip-sarashina
@@ -42,32 +55,28 @@ To skip the ~30 GB Sarashina download (e.g. on a metered connection):
 
 ## Option 2: Manual Download from Hugging Face
 
-Download the pre-optimized ONNX files from the HidekiAI Hugging Face repository.
+Download the pre-exported ONNX file from the HidekiAI Hugging Face repository.
 
-### Step-by-Step:
-
-1. **Visit the Repository:** Go to https://huggingface.co/HidekiAI/sarashina2.2-ocr-onnx
-2. **Select the Version:** Navigate to the **Files and versions** tab.
-3. **Download the ZIP:** Find the relevant bundle (e.g., `sarashina2.2-ocr-fp16.zip`) and click the download icon.
-4. **Placement:** Extract the contents of the ZIP into this `models/` directory so the layout matches the tree above.
+1. Visit https://huggingface.co/HidekiAI/sarashina2.2-mini-onnx
+2. Go to the **Files and versions** tab.
+3. Download the bundled zip.
+4. Extract into this `models/` directory so the layout matches the tree above.
 
 ## Option 3: Manual Generation (DIY)
 
-If you wish to forge your own ONNX files from the original weights using a GPU, follow these steps.
+Forge the ONNX file from the original weights on a GPU.
 
-### Step-by-Step Colab Setup:
-
-1. **Open the Notebook:** Open [`notebooks/sarashina_export.ipynb`](../notebooks/sarashina_export.ipynb) in Google Colab (T4 or A100 GPU recommended).
-   - Or create a new notebook at [colab.new](https://colab.new) and copy the cells manually.
-2. **Set Hardware Accelerator:** Go to `Runtime > Change runtime type` and select **T4 GPU** (or better).
-3. **Run All Cells:** The notebook will:
+1. Open [`notebooks/sarashina_export.ipynb`](../notebooks/sarashina_export.ipynb) in Google Colab (T4 or better).
+2. Set `Runtime > Change runtime type` to **T4 GPU**.
+3. Run all cells. The notebook will:
    - Install `optimum` and `transformers`
-   - Download the original Sarashina 2.2 weights from [sbintuitions/sarashina2.2-ocr](https://huggingface.co/sbintuitions/sarashina2.2-ocr)
+   - Download the original weights from [sbintuitions/sarashina2.2-0.5b-instruct-v0.1](https://huggingface.co/sbintuitions/sarashina2.2-0.5b-instruct-v0.1)
    - Export to ONNX with fp16
-   - Zip and save the artifacts to your Google Drive
-4. **Retrieve Assets:** Once complete, download the ZIP from your Google Drive and extract it into this `models/` directory.
+   - Zip and save the artifact to your Google Drive
+   - Pre-cache the vision models to Drive for later Python-runtime use
+4. Download the ZIP from your Google Drive and extract into this `models/` directory.
 
-> **Note:** The notebook will ask for Google Drive permission to save the final ZIP directly to your Drive.
+> **Note:** The notebook asks for Google Drive permission to save artifacts.
 
 ---
 
@@ -75,6 +84,9 @@ If you wish to forge your own ONNX files from the original weights using a GPU, 
 
 This project uses model weights developed by **SB Intuitions** (https://www.sbintuitions.co.jp/).
 
-- **Base Models:** [sarashina2.2-ocr](https://huggingface.co/sbintuitions/sarashina2.2-ocr) / [sarashina2.2-vision-3b](https://huggingface.co/sbintuitions/sarashina2.2-vision-3b)
+- **Base Models:**
+  - [sarashina2.2-0.5b-instruct-v0.1](https://huggingface.co/sbintuitions/sarashina2.2-0.5b-instruct-v0.1)
+  - [sarashina2.2-ocr](https://huggingface.co/sbintuitions/sarashina2.2-ocr)
+  - [sarashina2.2-vision-3b](https://huggingface.co/sbintuitions/sarashina2.2-vision-3b)
 - **License:** Apache License 2.0
-- **Export Credits:** Conversion to ONNX and quantization was performed by [HidekiAI](https://huggingface.co/HidekiAI).
+- **Export Credits:** Conversion of the 0.5b text model to ONNX was performed by [HidekiAI](https://huggingface.co/HidekiAI). The vision models are used unchanged.
