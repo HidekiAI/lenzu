@@ -44,12 +44,14 @@ for model in models_to_forge:
 
     try:
         if model["custom"]:
-            # Custom architecture: optimum CLI can't resolve the model type,
-            # so we load explicitly via the Python API
-            from transformers import AutoModelForVision2Seq, AutoProcessor
+            # Sarashina2-vision registers only AutoModelForCausalLM in its auto_map.
+            # optimum has no ONNX config for model_type "sarashina2_vision", so
+            # main_export will likely fail at config lookup -- fall back to raw
+            # torch.onnx.export if so.
+            from transformers import AutoModelForCausalLM, AutoProcessor
             from optimum.exporters.onnx import main_export
 
-            pt_model = AutoModelForVision2Seq.from_pretrained(
+            pt_model = AutoModelForCausalLM.from_pretrained(
                 model["id"], trust_remote_code=True, torch_dtype="auto"
             )
             processor = AutoProcessor.from_pretrained(
@@ -58,7 +60,7 @@ for model in models_to_forge:
             main_export(
                 model_name_or_path=model["id"],
                 output=out_dir,
-                task="image-to-text-with-past",
+                task="image-text-to-text",
                 model=pt_model,
                 trust_remote_code=True,
                 device="cuda",
