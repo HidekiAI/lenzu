@@ -70,6 +70,35 @@ for k, v in inputs.items():
     else:
         print(f"  {k}: {type(v).__name__} = {v}")
 
+# Qwen2-VL-style MRoPE needs 3D position_ids [3, batch, seq_len].
+# Default auto-generated position_ids are 2D -- find and call get_rope_index.
+rope_fn = None
+for obj in (model, getattr(model, "model", None), getattr(model, "llm", None)):
+    if obj is not None and hasattr(obj, "get_rope_index"):
+        rope_fn = obj.get_rope_index
+        print(f"\n=== found get_rope_index on {type(obj).__name__} ===")
+        break
+
+if rope_fn is not None:
+    position_ids, rope_deltas = rope_fn(
+        inputs["input_ids"],
+        inputs.get("image_grid_thw"),
+        None,
+        inputs.get("attention_mask"),
+    )
+else:
+    seq_len = inputs["input_ids"].shape[1]
+    position_ids = (
+        torch.arange(seq_len, device=inputs["input_ids"].device)
+        .view(1, 1, seq_len)
+        .expand(3, inputs["input_ids"].shape[0], seq_len)
+        .contiguous()
+    )
+    print("\n=== fallback: naive 3D position_ids (no image-aware rope) ===")
+
+inputs["position_ids"] = position_ids
+print(f"  position_ids: shape={tuple(position_ids.shape)}, dtype={position_ids.dtype}")
+
 # --- Phase C: sanity-check a real forward before exporting ---
 # `lm_kwargs` is marked <required> in the signature; pass an empty dict.
 print("\n=== test forward ===")
