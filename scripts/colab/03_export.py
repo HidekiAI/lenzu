@@ -19,7 +19,7 @@ models_to_forge = [
         "custom": True
     },
     {
-        "id": "sbintuitions/sarashina2.2-0.5B-instruct-v0.1",
+        "id": "sbintuitions/sarashina2.2-0.5b-instruct-v0.1",
         "name": "mini_500m",
         "task": "text-generation-with-past",
         "custom": False
