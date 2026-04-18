@@ -36,15 +36,29 @@ for name, param in sig.parameters.items():
     default = "<required>" if param.default is inspect.Parameter.empty else repr(param.default)
     print(f"  {name}: default={default}")
 
-# --- Phase B: build realistic inputs via processor ---
+# --- Phase B: build realistic inputs via chat template ---
+# Sarashina2-vision is Qwen2-VL-style: pixel_values is flat-packed patches
+# and the text prompt MUST contain image placeholder tokens that the chat
+# template inserts.
 dummy_img = Image.new("RGB", (448, 448), color=(200, 200, 200))
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "image"},
+            {"type": "text", "text": "Read the text in this image."},
+        ],
+    }
+]
+prompt = processor.apply_chat_template(
+    messages, add_generation_prompt=True, tokenize=False
+)
+print(f"\n=== chat-templated prompt ===\n{prompt!r}")
+
 inputs = processor(
-    images=dummy_img,
-    text="Read the text in this image.",
-    return_tensors="pt",
+    images=[dummy_img], text=[prompt], return_tensors="pt"
 ).to("cuda")
 
-# Cast float inputs to match model dtype
 for k in list(inputs.keys()):
     if torch.is_tensor(inputs[k]) and inputs[k].is_floating_point():
         inputs[k] = inputs[k].to(torch.float16)
@@ -57,9 +71,10 @@ for k, v in inputs.items():
         print(f"  {k}: {type(v).__name__} = {v}")
 
 # --- Phase C: sanity-check a real forward before exporting ---
+# `lm_kwargs` is marked <required> in the signature; pass an empty dict.
 print("\n=== test forward ===")
 with torch.no_grad():
-    out = model(**inputs)
+    out = model(**inputs, lm_kwargs={})
 print(f"  logits shape: {out.logits.shape}, dtype: {out.logits.dtype}")
 
 # --- Phase D: wrap in a positional-args module for ONNX tracing ---
@@ -74,7 +89,7 @@ class ExportWrapper(torch.nn.Module):
 
     def forward(self, *tensors):
         kwargs = dict(zip(self.keys, tensors))
-        return self.m(**kwargs).logits
+        return self.m(**kwargs, lm_kwargs={}).logits
 
 wrapper = ExportWrapper(model, kw_keys).eval()
 
