@@ -10,9 +10,9 @@ The key dif:ference from browser extensions like Yomitan/Rikaichan: this operate
 
 **`--furigana_only` mode demo** — MeCab furigana only (no LLM enrichment, no translation), ~5 ms per capture after OCR:
 
-<video src="assets/Lenzu-demo-2026-04-19_17.01.52.mp4" controls width="720"></video>
+![--furigana_only preview](docs/Lenzu-demo-furigana-only.gif)
 
-*(If the video doesn't render inline, [download/view it here](assets/Lenzu-demo-2026-04-19_17.01.52.mp4).)*
+*Preview: first 15 s at reduced framerate/resolution. For the full 3 min 24 s demo with audio, [download the MP4](assets/Lenzu-demo-2026-04-19_17.01.52.mp4).*
 
 ![Japanese OCR result](assets/Screenshot-JP.png)
 
