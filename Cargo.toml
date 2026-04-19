@@ -17,4 +17,5 @@ members = [
   "prototypes/manga-ocr-test",
   "prototypes/dbnet-ocr-pipeline",
   "prototypes/text-enrichment-test",
+  "prototypes/sarashina-onnx-test",
 ]
