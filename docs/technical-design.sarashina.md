@@ -6,6 +6,33 @@
 
 ---
 
+## Decision log
+
+### 2026-04-19 — `sarashina2.2-vision-3b` on CPU: rejected
+
+Prototyped the vision tier (§5) as a Python sidecar. Ran the standard 4-image
+battery (`Unit-test-tategaki.png`, `Unit-test-yokogaki.png`,
+`Unit-test-sample-texts.png`, `ubunchu01_02.png`) with
+`transformers==4.49.0` + `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)`
+on CPU (no usable GPU on the host — Quadro M4000 is sm_5.2, unsupported by
+modern PyTorch kernels).
+
+Result: **SIGTERM'd at 2 h 34 min** with zero jobs having produced visible
+output. All four `generate()` calls were invoked, implying ≥ ~38 min per job
+even in the optimistic reading. Sustained 10–12 cores of CPU and 8.6–9.6 GiB
+RSS the entire time; system load avg 12–13, 16.7 GiB of swap in use. Miss
+vs. Lenzu's <15 s fallback budget: ~150×.
+
+**Do not revisit** `sarashina2.2-vision-3b` (or `sarashina2.2-ocr`, same
+custom arch) as a local OCR tier on CPU hardware. Next candidate gated on
+pure-Rust viability: **yomitoku** (see `prototypes/sarashina-vision-py/README.md`
+for the run details and the bar to clear before starting).
+
+The text-model tier (§4, `sarashina-mini-rs`) is unaffected and remains the
+green-light path. The sidecar plan in §5 is parked.
+
+---
+
 ## 1. Motivation
 
 Current enrichment/translation options (Ollama Gemma, OpenRouter) are general-purpose and trained primarily on English. For Japanese-heavy workloads a Japanese-native model should produce better furigana, reading disambiguation, and translation quality.
