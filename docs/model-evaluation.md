@@ -32,6 +32,7 @@ when confidence is too low.
 | qwen2-vl:2b | 0% — doesn't exist | N/A | Wrong model name |
 | qwen2.5vl:3b | 0% — always times out | N/A — never completes | CPU-bound on 4 GB VRAM |
 | florence2:large | 0% — no ollama package | N/A | Python-only, excluded |
+| sarashina2.2-vision-3b | 0% — CPU latency ~150× over budget | N/A — never completed | Too heavy for Lenzu's CPU-only host |
 
 ### moondream / moondream2
 - **Ollama name**: `moondream`
@@ -65,6 +66,24 @@ when confidence is too low.
 - **Result**: Does not exist in ollama's registry (`pull model manifest: file does not exist`).
 - **Verdict**: Florence-2 (Microsoft) is only available via HuggingFace/Python. No ollama
   package exists. Excluded permanently due to no-Python constraint.
+
+### sarashina2.2-vision-3b (tested 2026-04-19)
+- **HuggingFace**: `sbintuitions/sarashina2.2-vision-3b` (~3 B, ~7.1 GiB weights on disk)
+- **Runtime**: Python sidecar prototype (`prototypes/sarashina-vision-py/`), `transformers==4.49.0`,
+  `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)`, CPU `torch.float32`.
+  GPU path unavailable — host's Quadro M4000 is sm_5.2, unsupported by modern PyTorch kernels.
+- **Test**: standard 4-image battery (tategaki / yokogaki / sample-texts / ubunchu01_02), same
+  prompt for each: `画像の日本語テキストを読んで、英語に翻訳してください。`, `max_new_tokens=256`.
+- **Result**: **SIGTERM'd at 2 h 34 min** with zero jobs producing visible output (stdout was
+  block-buffered and lost on kill — `generate()` was invoked 4 times, so per-job wall time is
+  lower-bounded at ~38 min). Sustained 10–12 cores CPU and 8.6–9.6 GiB RSS throughout; system
+  load avg 12–13, 16.7 GiB swap in use.
+- **Verdict**: Unusable. ~150× over Lenzu's 15 s local-fallback budget, and eats enough RAM +
+  CPU that the primary manga-ocr-rs tier can't run in parallel. The same custom architecture
+  is used by `sarashina2.2-ocr`, so that variant is ruled out by extension. **Do not re-prototype
+  sarashina vision on CPU hardware.** Full run notes: `prototypes/sarashina-vision-py/README.md`.
+  The text-only tier (`sarashina-mini-rs`, ONNX via `ort`) is unaffected and remains the
+  green-light path.
 
 ---
 
@@ -124,6 +143,28 @@ when confidence is too low.
   Ctrl+Shift+Click override is active. Images leave the device on this path.
 
 ---
+
+## Considered but gated
+
+### yomitoku (2026-04-19)
+
+- **Repo**: https://github.com/kotaro-kinoshita/yomitoku
+- **Status**: **Not prototyped.** Gated on a pure-Rust implementation path.
+- **Why gated**: yomitoku is a Python library — PyTorch + onnxruntime pipeline with
+  detector, recognizer, layout analysis, table detection, and reading-order logic,
+  all orchestrated in Python. Prior user feedback already flagged it as a memory
+  and CPU hog for full-page JP OCR use. Even if the underlying ONNX model weights
+  could be extracted and served from Rust via `ort`, the pre/post-processing and
+  reading-order pipeline would have to be reimplemented — that's multi-prototype
+  work, not a quick port.
+- **Gate to open this**: concrete evidence the Rust port is cheap, e.g., upstream
+  publishes ONNX bundles, or someone has already shipped a Rust implementation
+  of the pipeline. Absent that evidence, assume no cheap port exists and leave
+  yomitoku off the candidate list.
+- **Do not revisit without meeting the gate** — this was reviewed against Lenzu's
+  <15 s local-fallback budget and the no-Python preference, and found wanting on
+  both. The point of this entry is to save future-me (or an LLM picking up cold)
+  from re-raising yomitoku as a fresh suggestion.
 
 ## To evaluate: alternative OCR models
 
