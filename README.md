@@ -12,7 +12,7 @@ The key dif:ference from browser extensions like Yomitan/Rikaichan: this operate
 
 ![--furigana_only preview](docs/Lenzu-demo-furigana-only.gif)
 
-*Preview: first 15 s at reduced framerate/resolution. For the full 3 min 24 s demo with audio, [download the MP4](assets/Lenzu-demo-2026-04-19_17.01.52.mp4).*
+*Preview: 15 s excerpt (T=30–45 s) at reduced framerate/resolution. For the full 3 min 24 s demo with audio, [download the MP4](assets/Lenzu-demo-2026-04-19_17.01.52.mp4).*
 
 ![Japanese OCR result](assets/Screenshot-JP.png)
 
