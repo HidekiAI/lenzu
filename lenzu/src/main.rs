@@ -776,12 +776,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Check debounce + loading flag, then release the borrow immediately.
+            // 1s debounce only — the is_loading gate was dropped now that
+            // cancel_inflight above supersedes any in-progress OCR. The
+            // debounce still prevents accidental double-clicks from firing
+            // two captures in rapid succession (which is a different concern
+            // from "user deliberately clicked again because they're tired
+            // of waiting" — that's handled by cancel_inflight).
             // IMPORTANT: do NOT hold borrow_mut() across gtk::main_iteration() —
-            // the animation timer also calls borrow_mut() and will panic (BorrowMutError).
+            // the animation timer also calls borrow_mut() and will panic.
             let should_capture = {
                 let s = state_main.borrow();
-                s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading
+                s.last_capture.elapsed() > Duration::from_secs(1)
             };
 
             if should_capture {
