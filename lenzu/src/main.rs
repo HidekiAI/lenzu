@@ -818,14 +818,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 tokio_handle_thread.block_on(async {
                                 // Greyscale once; DBNet only needs luminance and this avoids
                                 // the crate doing its own (possibly inconsistent) conversion.
-                                let gray_image = dyn_image.grayscale();
+                                // CPU work inside an async task — block_in_place yields the
+                                // tokio worker slot so other tasks can progress. Safe here
+                                // because the outer runtime is rt-multi-thread.
+                                let gray_image = tokio::task::block_in_place(|| dyn_image.grayscale());
 
                                 // ── Feature 2: Ctrl+Shift+Click ──────────────────────────────
                                 // Full desktop was captured; run DBNet and pick the text region
                                 // nearest the cursor, then send that tight crop to remote OCR.
                                 if force_remote {
                                     if let Some(ref det) = text_detector {
-                                        let mut boxes = det.detect(&gray_image);
+                                        let mut boxes = tokio::task::block_in_place(|| det.detect(&gray_image));
                                         utils::save_fullscreen_debug(&dyn_image, &boxes);
 
                                         if !boxes.is_empty() {
@@ -854,9 +857,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 ) {
                                                     let ox = boxes[idx].x1;
                                                     let oy = boxes[idx].y1;
-                                                    let sub = dyn_image.crop_imm(ox, oy, chosen_w, chosen_h);
-                                                    let sub_gray = sub.grayscale();
-                                                    let sub_boxes = det_nd.detect(&sub_gray);
+                                                    let sub_boxes = tokio::task::block_in_place(|| {
+                                                        let sub = dyn_image.crop_imm(ox, oy, chosen_w, chosen_h);
+                                                        let sub_gray = sub.grayscale();
+                                                        det_nd.detect(&sub_gray)
+                                                    });
                                                     // Remap from crop-space → original image space so
                                                     // cursor coords stay valid for closest_box_to_point.
                                                     let remapped: Vec<ocr::text_detection::TextBoundingBox> =
@@ -895,14 +900,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let Some(ref mocr) = local_ocr {
                                                 let chosen = &boxes[idx];
                                                 if chosen.confidence >= 0.71 {
-                                                    let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
-                                                        std::sync::Arc::clone(mocr),
-                                                    );
-                                                    let (local_result, _) = engine.try_local_pipeline(
-                                                        &dyn_image, &[chosen.clone()],
-                                                        s_conf.text_detection_crop_padding, 256,
-                                                        Some(s_conf.low_conf_max_chars),
-                                                    );
+                                                    let (local_result, _) = tokio::task::block_in_place(|| {
+                                                        let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
+                                                            std::sync::Arc::clone(mocr),
+                                                        );
+                                                        engine.try_local_pipeline(
+                                                            &dyn_image, &[chosen.clone()],
+                                                            s_conf.text_detection_crop_padding, 256,
+                                                            Some(s_conf.low_conf_max_chars),
+                                                        )
+                                                    });
                                                     if let Some(results) = local_result {
                                                         let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
                                                             client::TranslationResult {
@@ -1022,13 +1029,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let mut detected_boxes: Vec<ocr::text_detection::TextBoundingBox> = Vec::new();
                                 if !force_remote {
                                     if let Some(ref det) = text_detector {
-                                        let raw_boxes = det.detect(&gray_image);
-                                        // Refine: merge overlapping clusters and
-                                        // re-detect within each union region to
-                                        // split stacked bubbles / remove bubble-wrap dupes.
-                                        let boxes = ocr::local_ocr::refine_boxes(
-                                            &raw_boxes, &dyn_image, det.as_ref(),
-                                        );
+                                        let boxes = tokio::task::block_in_place(|| {
+                                            let raw_boxes = det.detect(&gray_image);
+                                            // Refine: merge overlapping clusters and
+                                            // re-detect within each union region to
+                                            // split stacked bubbles / remove bubble-wrap dupes.
+                                            ocr::local_ocr::refine_boxes(
+                                                &raw_boxes, &dyn_image, det.as_ref(),
+                                            )
+                                        });
                                         // Save lens debug image with refined bounding boxes.
                                         utils::save_lens_debug(&dyn_image, &boxes);
 
@@ -1040,15 +1049,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             // manga-ocr-rs returns OCR confidence >= 71% for each,
                                             // return immediately — no LLM needed.
                                             if let Some(ref mocr) = local_ocr {
-                                                let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
-                                                    std::sync::Arc::clone(mocr),
-                                                );
                                                 // Incremental: send each box's result to
                                                 // HUD as it completes so text accumulates
                                                 // on screen instead of flashing.
                                                 let tx_progress = tx_clone.clone();
                                                 let furigana_only_flag = s_conf.furigana_only;
-                                                let (local_result, _partials) = engine.try_local_pipeline_incremental(
+                                                let (local_result, _partials) = tokio::task::block_in_place(|| {
+                                                    let engine = ocr::local_ocr::LocalOcrEngine::from_arc(
+                                                        std::sync::Arc::clone(mocr),
+                                                    );
+                                                    engine.try_local_pipeline_incremental(
                                                     &dyn_image,
                                                     &boxes,
                                                     s_conf.text_detection_crop_padding,
@@ -1081,7 +1091,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             preview: true,
                                                         })));
                                                     },
-                                                );
+                                                )
+                                                });
                                                 if let Some(results) = local_result {
                                                     let mut t_results: Vec<client::TranslationResult> = results.iter().map(|r| {
                                                         client::TranslationResult {
