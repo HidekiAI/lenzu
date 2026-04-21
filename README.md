@@ -6,6 +6,13 @@ Desktop OCR lens — a transparent floating window that follows the mouse cursor
 
 The key dif:ference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
 
+> **For readers:** Lenzu is a desktop manga reader companion for Linux.
+> Point it at any on-screen image — manga page, scanlation viewer, PDF,
+> game window — shift+click, and get Japanese OCR with furigana readings
+> in a floating overlay. Useful for learning Japanese, reading raw manga,
+> and any image-based text that browser extensions like Yomitan or
+> Rikaichan can't see (because it's not selectable text).
+
 ![beta demo](docs/lenzu-beta-demo.gif)
 
 **`--furigana_only` mode demo** — MeCab furigana only (no LLM enrichment, no translation), ~5 ms per capture after OCR:
