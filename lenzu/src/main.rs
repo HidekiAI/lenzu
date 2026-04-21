@@ -804,12 +804,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         window_main.show();
                         let tx_clone = tx.clone();
+                        let tokio_handle_thread = state_main.borrow().tokio_handle.clone();
                         std::thread::spawn(move || {
                             // Catch any unexpected panic so is_loading is always reset.
                             // AssertUnwindSafe: the Arc<dyn TextDetector> contains Mutex
                             // interior mutability; we don't rely on its state being
                             // consistent after a panic — each click creates a fresh dual client.
+                            //
+                            // The OCR pipeline calls async client fns; run them on the shared
+                            // tokio runtime via `block_on`. `std::thread::spawn` threads are
+                            // OS threads (not tokio workers), so this is safe.
                             let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                tokio_handle_thread.block_on(async {
                                 // Greyscale once; DBNet only needs luminance and this avoids
                                 // the crate doing its own (possibly inconsistent) conversion.
                                 let gray_image = dyn_image.grayscale();
@@ -939,7 +945,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 &mut t_results, &primary_endpoint, enrich_model,
                                                                 &enrichment_prompt, enrichment_timeout_secs,
                                                                 s_conf.primary_num_ctx,
-                                                            );
+                                                            ).await;
                                                         }
 
                                                         // Final send (via closure return → line 1140)
@@ -994,6 +1000,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 );
                                                 return dual
                                                     .call_api_force_fallback(&crop.image)
+                                                    .await
                                                     .map_err(|e| e.to_string());
                                             }
                                         }
@@ -1112,7 +1119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             &mut t_results, &primary_endpoint, enrich_model,
                                                             &enrichment_prompt, enrichment_timeout_secs,
                                                             s_conf.primary_num_ctx,
-                                                        );
+                                                        ).await;
                                                     }
 
                                                     // Final send (via closure return)
@@ -1157,7 +1164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 let mut all_results = Vec::new();
                                                 let mut last_meta = None;
                                                 for crop in crops {
-                                                    match dual_region.call_api(&crop.image) {
+                                                    match dual_region.call_api(&crop.image).await {
                                                         Ok((mut results, meta)) => {
                                                             // top_xy/bot_xy come from the DBNet
                                                             // box (lens coords), not from the LLM.
@@ -1231,10 +1238,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 };
                                 let fallback_img = union_crop.as_ref().unwrap_or(&dyn_image);
                                 if force_remote {
-                                    dual.call_api_force_fallback(fallback_img)
+                                    dual.call_api_force_fallback(fallback_img).await
                                 } else {
-                                    dual.call_api(fallback_img)
+                                    dual.call_api(fallback_img).await
                                 }.map_err(|e| e.to_string())
+                                }) // close async move block
                             }))
                             .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
 

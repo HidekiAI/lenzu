@@ -1,6 +1,6 @@
 use chrono::Local;
 use image::DynamicImage;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
@@ -184,24 +184,24 @@ impl OcrClient {
         payload
     }
 
-    pub fn call_api(
+    pub async fn call_api(
         &self,
         b64: &str,
     ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
         let payload = self.generate_payload(b64);
-        self.send_and_parse(payload)
+        self.send_and_parse(payload).await
     }
 
     /// Text-only call: sends raw text (not an image) to the LLM.
     /// Used for enrichment (furigana/romaji/translation) after local OCR succeeds.
     /// Returns (results, Option<confidence>) where confidence is the mean token
     /// probability from logprobs (0.0–1.0).  None when logprobs are unavailable.
-    pub fn call_api_text_only(
+    pub async fn call_api_text_only(
         &self,
         user_text: &str,
     ) -> Result<(Vec<TranslationResult>, Option<f64>), Box<dyn std::error::Error>> {
         let payload = self.generate_text_payload(user_text);
-        self.send_and_parse_with_confidence(payload)
+        self.send_and_parse_with_confidence(payload).await
     }
 
     fn generate_text_payload(&self, user_text: &str) -> Value {
@@ -222,7 +222,7 @@ impl OcrClient {
     }
 
     /// Like `send_and_parse` but also returns the mean token probability from logprobs.
-    fn send_and_parse_with_confidence(
+    async fn send_and_parse_with_confidence(
         &self,
         payload: Value,
     ) -> Result<(Vec<TranslationResult>, Option<f64>), Box<dyn std::error::Error>> {
@@ -233,7 +233,7 @@ impl OcrClient {
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        let res = req.json(&payload).send().map_err(|e| -> Box<dyn std::error::Error> {
+        let res = req.json(&payload).send().await.map_err(|e| -> Box<dyn std::error::Error> {
             use std::error::Error;
             let root = e.source().map(|s| format!(" — {s}")).unwrap_or_default();
             format!("{e}{root}").into()
@@ -241,12 +241,12 @@ impl OcrClient {
 
         let status = res.status();
         if !status.is_success() {
-            let error_body = res.text().unwrap_or_default();
+            let error_body = res.text().await.unwrap_or_default();
             let snippet: String = error_body.chars().take(800).collect();
             return Err(format!("API HTTP {} — {}", status, snippet).into());
         }
 
-        let sse = Self::read_sse_content(res)?;
+        let sse = Self::read_sse_content(res).await?;
 
         let conf_str = sse.confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
         let fr_str = sse.finish_reason.as_deref().unwrap_or("n/a");
@@ -272,7 +272,7 @@ impl OcrClient {
 
     /// POST a payload to the LLM endpoint, read the SSE stream, and parse the
     /// accumulated JSON content into `Vec<TranslationResult>`.
-    fn send_and_parse(
+    async fn send_and_parse(
         &self,
         payload: Value,
     ) -> Result<Vec<TranslationResult>, Box<dyn std::error::Error>> {
@@ -285,7 +285,7 @@ impl OcrClient {
         if !self.api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", self.api_key));
         }
-        let res = req.json(&payload).send().map_err(|e| -> Box<dyn std::error::Error> {
+        let res = req.json(&payload).send().await.map_err(|e| -> Box<dyn std::error::Error> {
             // Surface the root cause so callers see "operation timed out" or
             // "connection refused" rather than just "error sending request".
             use std::error::Error;
@@ -297,7 +297,7 @@ impl OcrClient {
 
         // Error responses (4xx/5xx) are plain JSON, not SSE — read them whole.
         if !status.is_success() {
-            let error_body = res.text().unwrap_or_default();
+            let error_body = res.text().await.unwrap_or_default();
             if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(API_DEBUG_PATH) {
                 let _ = writeln!(f, "[{}] ERROR {}: {}", Local::now().format("%H:%M:%S"), status, error_body.trim());
             }
@@ -308,7 +308,7 @@ impl OcrClient {
         // Successful responses are SSE streams (stream:true keeps the TCP connection
         // alive while ollama generates, preventing its 30-second write-timeout from
         // firing mid-inference).  Accumulate all delta.content tokens into one string.
-        let sse = Self::read_sse_content(res)?;
+        let sse = Self::read_sse_content(res).await?;
 
         // Log LLM confidence and finish_reason (all backends: local + remote)
         let conf_str = sse.confidence.map(|c| format!("{:.0}%", c * 100.0)).unwrap_or_else(|| "n/a".into());
@@ -347,17 +347,20 @@ impl OcrClient {
     }
 
     /// Read an SSE stream and return parsed content, confidence, finish_reason, and token usage.
-    fn read_sse_content(res: reqwest::blocking::Response) -> Result<SseResult, Box<dyn std::error::Error>> {
-        use std::io::BufRead;
-        let reader = std::io::BufReader::new(res);
+    ///
+    /// Reads the full response body via `text().await`; the underlying TCP connection
+    /// is still held open across ollama's partial-chunk writes (so no server-side
+    /// write timeout fires), but the line-parsing happens once the body is complete.
+    /// Aborting the outer future closes the socket and drops this reader.
+    async fn read_sse_content(res: reqwest::Response) -> Result<SseResult, Box<dyn std::error::Error>> {
+        let body = res.text().await?;
         let mut content = String::new();
         let mut logprob_sum: f64 = 0.0;
         let mut logprob_count: u32 = 0;
         let mut finish_reason: Option<String> = None;
         let mut prompt_tokens: Option<u64> = None;
         let mut completion_tokens: Option<u64> = None;
-        for line in reader.lines() {
-            let line = line?;
+        for line in body.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed == "data: [DONE]" {
                 continue;
@@ -666,11 +669,11 @@ impl DualOcrClient {
     /// Normal path: primary gets grayscale full-res; each fallback (local then remote) is
     /// tried in order until one succeeds.  Local fallbacks use the same ollama endpoint as
     /// the primary.  Remote fallback gets grayscale + downscale.
-    pub fn call_api(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
+    pub async fn call_api(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
         save_prewire_debug(image);
         let primary_b64 = encode_for_fallback(image, self.primary_max_dimension);
-        let primary_result = self.primary.call_api(&primary_b64);
+        let primary_result = self.primary.call_api(&primary_b64).await;
 
         let needs_fb = match &primary_result {
             Ok(results) => Self::needs_fallback(results),
@@ -696,7 +699,7 @@ impl DualOcrClient {
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(API_DEBUG_PATH) {
                 let _ = std::io::Write::write_fmt(&mut f, format_args!("[local-fallback-{}]\n", i + 1));
             }
-            let result = local.call_api(&primary_b64);
+            let result = local.call_api(&primary_b64).await;
             let ok = match &result {
                 Ok(r) => !Self::needs_fallback(r),
                 Err(e) => {
@@ -719,7 +722,7 @@ impl DualOcrClient {
                 let _ = std::io::Write::write_fmt(&mut f, format_args!("[free-remote-fallback]\n"));
             }
             let meta_label = self.free_remote_fallback.label();
-            let result = self.free_remote_fallback.call_api(&fallback_b64);
+            let result = self.free_remote_fallback.call_api(&fallback_b64).await;
             let ok = match &result {
                 Ok(r) => !Self::needs_fallback(r),
                 Err(e) => { eprintln!("[OCR] free remote failed ({e})"); false }
@@ -736,7 +739,7 @@ impl DualOcrClient {
                         let _ = std::io::Write::write_fmt(&mut f, format_args!("[paid-remote-fallback]\n"));
                     }
                     let meta_label = fb.label();
-                    fb.call_api(&fallback_b64_paid).map(|r| {
+                    fb.call_api(&fallback_b64_paid).await.map(|r| {
                         (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false })
                     })
                 }
@@ -750,14 +753,14 @@ impl DualOcrClient {
 
     /// Force-remote path: grayscale + downscale (Ctrl+Shift+Click).
     /// Tries free remote first, then paid remote (if API key is set).
-    pub fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
+    pub async fn call_api_force_fallback(&self, image: &DynamicImage) -> Result<(Vec<TranslationResult>, OcrMeta), Box<dyn std::error::Error>> {
         let t0 = std::time::Instant::now();
         save_prewire_debug(image);
         let b64 = encode_for_fallback(image, self.fallback_max_dimension);
 
         // Try free remote first (always available)
         let meta_label = self.free_remote_fallback.label();
-        let result = self.free_remote_fallback.call_api(&b64);
+        let result = self.free_remote_fallback.call_api(&b64).await;
         let ok = match &result {
             Ok(r) => !Self::needs_fallback(r),
             Err(e) => { eprintln!("[OCR] force-fallback free remote failed ({e})"); false }
@@ -770,7 +773,7 @@ impl DualOcrClient {
         match &self.remote_fallback {
             Some(fb) => {
                 let meta_label = fb.label();
-                fb.call_api(&b64).map(|r| {
+                fb.call_api(&b64).await.map(|r| {
                     (r, OcrMeta { backend: meta_label, elapsed_ms: t0.elapsed().as_millis(), preview: false })
                 })
             }
@@ -795,7 +798,7 @@ impl DualOcrClient {
 /// On failure (Ollama down, timeout, bad JSON, low confidence), leaves results
 /// unchanged — the caller still gets the raw OCR text.  Returns `true` if
 /// enrichment succeeded for at least one result.
-pub fn enrich_local_results(
+pub async fn enrich_local_results(
     results: &mut Vec<TranslationResult>,
     endpoint: &str,
     model: &str,
@@ -826,7 +829,7 @@ pub fn enrich_local_results(
             continue;
         }
         let t0 = std::time::Instant::now();
-        match client.call_api_text_only(&result.original) {
+        match client.call_api_text_only(&result.original).await {
             Ok((enriched_vec, confidence)) => {
                 let elapsed = t0.elapsed();
                 let conf_pct = confidence.map(|c| c * 100.0);
@@ -1192,10 +1195,10 @@ mod tests {
         assert!(dual("sk-real-key").remote_fallback.is_some(), "non-empty api_key must create a remote fallback client");
     }
 
-    #[test]
-    fn test_force_fallback_errors_when_no_key() {
+    #[tokio::test]
+    async fn test_force_fallback_errors_when_no_key() {
         let img = image::DynamicImage::new_rgb8(1, 1);
-        let err = dual("").call_api_force_fallback(&img).unwrap_err();
+        let err = dual("").call_api_force_fallback(&img).await.unwrap_err();
         assert!(err.to_string().contains("OPENROUTER_API_KEY"), "error must mention the missing key");
     }
 

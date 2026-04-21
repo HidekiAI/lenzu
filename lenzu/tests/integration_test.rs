@@ -95,9 +95,9 @@ fn find_result_by_text<'a>(
     results.iter().find(|r| r.original.contains(expected_text))
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires running ollama with gemma4:e2b — run with --ignored"]
-fn test_live_ollama_sample_image() {
+async fn test_live_ollama_sample_image() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let img_path = manifest_dir.join("../assets/Unit-test-sample-texts.png");
     let json_path = manifest_dir.join("../assets/Unit-test-sample-texts.json");
@@ -123,6 +123,7 @@ fn test_live_ollama_sample_image() {
     let ocr = client::OcrClient::new(String::new(), ollama_endpoint, model, prompt);
     let results = ocr
         .call_api(&b64)
+        .await
         .expect("ollama call_api failed — is ollama running with gemma4:e2b loaded?");
 
     assert!(

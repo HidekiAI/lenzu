@@ -219,7 +219,7 @@ fn cancel_ollama_runner() {
 
 // ── per-backend test ──────────────────────────────────────────────────────────
 
-fn run_backend_test(
+async fn run_backend_test(
     label: &str,
     client: &OcrClient,
     b64: &str,
@@ -236,7 +236,7 @@ fn run_backend_test(
     println!();
 
     let t0 = Instant::now();
-    let api_result = client.call_api(b64);
+    let api_result = client.call_api(b64).await;
     let elapsed_ms = t0.elapsed().as_millis();
     println!("    elapsed : {elapsed_ms} ms  ({:.1}s)", elapsed_ms as f64 / 1000.0);
     println!();
@@ -332,7 +332,8 @@ fn run_backend_test(
 
 // ── main ──────────────────────────────────────────────────────────────────────
 
-fn main() -> std::process::ExitCode {
+#[tokio::main]
+async fn main() -> std::process::ExitCode {
     let cfg = parse_args();
 
     // Load and validate assets
@@ -414,7 +415,7 @@ fn main() -> std::process::ExitCode {
                         cfg.num_ctx,
                         false,  // local ollama: no json_object constraint
                     );
-                    let r = run_backend_test(&label, &client, &b64, &expected, cfg.timeout_secs);
+                    let r = run_backend_test(&label, &client, &b64, &expected, cfg.timeout_secs).await;
                     total_pass += r.0;
                     total_fail += r.1;
                 }
@@ -446,7 +447,7 @@ fn main() -> std::process::ExitCode {
                 None,   // num_ctx is ollama-specific; remote backend ignores it
                 true,   // remote OpenRouter/Gemini: enable json_object format
             );
-            let r = run_backend_test("remote-openrouter", &client, &remote_b64, &expected, cfg.timeout_secs);
+            let r = run_backend_test("remote-openrouter", &client, &remote_b64, &expected, cfg.timeout_secs).await;
             total_pass += r.0;
             total_fail += r.1;
         }
