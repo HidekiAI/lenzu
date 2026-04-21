@@ -130,6 +130,11 @@ struct AppState {
     /// Current HUD vertical position: `true` = top, `false` = bottom.
     /// Auto-toggled when the cursor moves within 30 % of the opposite screen edge.
     hud_at_top: bool,
+    /// Cloned handle to the tokio runtime owned by `main`. Used by the OCR
+    /// worker to spawn async tasks (post-migration). Clone freely — handles
+    /// are cheap and the runtime is dropped when `main` returns.
+    #[allow(dead_code)] // unused until step 4 of cancel-inflight migration
+    tokio_handle: tokio::runtime::Handle,
 }
 
 /// Path to `lenzu_server` directory.
@@ -277,6 +282,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure /dev/shm/lenzu/ exists for all runtime output files.
     let _ = std::fs::create_dir_all("/dev/shm/lenzu");
 
+    // Multi-threaded tokio runtime owned for the lifetime of the process.
+    // The OCR worker spawns async tasks onto it so a new shift+* input can
+    // cancel an in-flight HTTP request. GTK/glib still runs on the main
+    // thread with its own executor — the two cooperate via `async-channel`.
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    let tokio_handle = tokio_runtime.handle().clone();
+
     // OPENROUTER_API_KEY is optional — ollama (local) is the primary backend.
     // When the key is absent, the fallback path is disabled; Ctrl+Shift+Click remote
     // override will show an error in the HUD instead of making a remote call.
@@ -376,6 +391,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         text_detector,
         local_ocr,
         hud_at_top: false,
+        tokio_handle: tokio_handle.clone(),
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
