@@ -495,7 +495,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glib::Propagation::Proceed // allow window close → GTK loop ends naturally
     });
 
-    let (tx, rx) = async_channel::bounded::<Result<(Vec<client::TranslationResult>, client::OcrMeta), String>>(3);
+    // (gen_id, result) — gen_id lets the receiver drop stale frames from
+    // a cancelled generation that were already in the buffer before abort()
+    // fired. abort() stops future sends, but the channel may hold sends that
+    // ran just before the cancel; the gen stamp is how we filter those out.
+    let (tx, rx) = async_channel::bounded::<(u64, Result<(Vec<client::TranslationResult>, client::OcrMeta), String>)>(3);
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
@@ -592,8 +596,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_rx = state.clone();
     let window_rx = window.clone();
     glib::MainContext::default().spawn_local(async move {
-        while let Ok(api_result) = rx.recv().await {
+        while let Ok((msg_gen, api_result)) = rx.recv().await {
         let mut s = state_rx.borrow_mut();
+        // Drop results from a cancelled / superseded generation so stale
+        // frames never paint the HUD. abort() kills future sends; this
+        // handles the window where sends already sat in the channel buffer
+        // before abort() fired.
+        if msg_gen != s.current_generation {
+            continue;
+        }
         match api_result {
             Ok((results, meta)) => {
                 // Preview results show text immediately but keep the lens modal
@@ -858,7 +869,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         window_main.show();
                         let tx_clone = tx.clone();
-                        let tokio_handle_thread = state_main.borrow().tokio_handle.clone();
+                        let (tokio_handle_thread, gen_id) = {
+                            let s = state_main.borrow();
+                            (s.tokio_handle.clone(), s.current_generation)
+                        };
                         // Spawn on the shared tokio runtime and stash the JoinHandle in
                         // AppState so a later shift-modified interaction can call abort()
                         // on it — which closes the in-flight reqwest TCP socket so the
@@ -976,21 +990,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                         eprintln!("[OCR] fullscreen local-first succeeded — skipping LLM chain");
                                                         // Phase 1: raw text preview
-                                                        let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
+                                                        let _ = tx_clone.send((gen_id, Ok((t_results.clone(), client::OcrMeta {
                                                             backend: "local:manga-ocr".to_string(),
                                                             elapsed_ms: total_ocr_ms,
                                                             preview: true,
-                                                        }))).await;
+                                                        })))).await;
 
                                                         // Phase 2: furigana (+ romaji unless furigana_only) — MeCab, ~5ms
                                                         let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
                                                         let do_enrich = enrichment_enabled && !s_conf.furigana_only;
                                                         if furigana_ok && do_enrich {
-                                                            let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
+                                                            let _ = tx_clone.send((gen_id, Ok((t_results.clone(), client::OcrMeta {
                                                                 backend: "local:manga-ocr+furigana".to_string(),
                                                                 elapsed_ms: total_ocr_ms,
                                                                 preview: true,
-                                                            }))).await;
+                                                            })))).await;
                                                         }
 
                                                         // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
@@ -1134,11 +1148,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         }).collect();
                                                         furigana::annotate(&mut t_results, furigana_only_flag);
                                                         let total_ms: u128 = accumulated.iter().map(|r| r.ocr_ms).sum();
-                                                        let _ = tx_progress.send_blocking(Ok((t_results, client::OcrMeta {
+                                                        let _ = tx_progress.send_blocking((gen_id, Ok((t_results, client::OcrMeta {
                                                             backend: format!("local:manga-ocr+furigana ({}/{})", accumulated.len(), accumulated.len()),
                                                             elapsed_ms: total_ms,
                                                             preview: true,
-                                                        })));
+                                                        }))));
                                                     },
                                                 )
                                                 });
@@ -1164,11 +1178,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
                                                     let do_enrich = enrichment_enabled && !s_conf.furigana_only;
                                                     if furigana_ok && do_enrich {
-                                                        let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
+                                                        let _ = tx_clone.send((gen_id, Ok((t_results.clone(), client::OcrMeta {
                                                             backend: "local:manga-ocr+furigana".to_string(),
                                                             elapsed_ms: total_ocr_ms,
                                                             preview: true,
-                                                        }))).await;
+                                                        })))).await;
                                                     }
 
                                                     // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
@@ -1311,7 +1325,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 furigana::compare_and_maybe_overwrite(results, s_conf.mecab_overwrite);
                             }
 
-                            let _ = tx_clone.send(result).await;
+                            let _ = tx_clone.send((gen_id, result)).await;
                         });
                         state_main.borrow_mut().in_flight = Some(handle);
                     }
