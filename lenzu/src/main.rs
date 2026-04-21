@@ -131,10 +131,32 @@ struct AppState {
     /// Auto-toggled when the cursor moves within 30 % of the opposite screen edge.
     hud_at_top: bool,
     /// Cloned handle to the tokio runtime owned by `main`. Used by the OCR
-    /// worker to spawn async tasks (post-migration). Clone freely — handles
-    /// are cheap and the runtime is dropped when `main` returns.
-    #[allow(dead_code)] // unused until step 4 of cancel-inflight migration
+    /// worker to spawn async tasks. Clone freely — handles are cheap and
+    /// the runtime is dropped when `main` returns.
     tokio_handle: tokio::runtime::Handle,
+    /// JoinHandle of the in-flight OCR task, if any. Taking and calling
+    /// abort() on this closes the underlying reqwest TCP socket, so the
+    /// remote backend stops billing/computing.
+    in_flight: Option<tokio::task::JoinHandle<()>>,
+    /// Monotonically increasing generation id. Bumped every time a new
+    /// capture starts (or the in-flight task is cancelled). The worker
+    /// stamps every preview/result with the gen it was spawned under;
+    /// the receiver drops mismatches so no stale frame paints the HUD.
+    /// Step 6 wires the stamp + filter; step 5 only maintains the counter.
+    current_generation: u64,
+}
+
+impl AppState {
+    /// Cancel any in-flight OCR task and advance the generation counter.
+    /// Called from every shift-modified interaction: shift+click,
+    /// ctrl+shift+click, shift+tab, shift+h, and shift+esc.
+    fn cancel_inflight(&mut self, reason: &'static str) {
+        if let Some(h) = self.in_flight.take() {
+            eprintln!("[OCR] cancel: {reason}");
+            h.abort();
+        }
+        self.current_generation = self.current_generation.wrapping_add(1);
+    }
 }
 
 /// Path to `lenzu_server` directory.
@@ -262,6 +284,9 @@ Shift＋Tab
 
 Shift＋H
   → このヘルプを表示
+
+Shift＋ESC
+  → 実行中のOCRをキャンセル
 
 ESC
   → 終了";
@@ -392,6 +417,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         local_ocr,
         hud_at_top: false,
         tokio_handle: tokio_handle.clone(),
+        in_flight: None,
+        current_generation: 0,
     }));
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -413,8 +440,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let kv = event.keyval();
         let mods = event.state();
 
-        // ESC → quit
+        // Shift+ESC → cancel in-flight OCR without quitting. Plain ESC still quits.
         if kv == gdk::keys::constants::Escape {
+            if mods.contains(gdk::ModifierType::SHIFT_MASK) {
+                let mut s = state_key.borrow_mut();
+                s.cancel_inflight("user-cancel");
+                s.is_loading = false;
+                s.status = ready_status(&s.config.translate_src, &s.config.translate_dest);
+                window_key.queue_draw();
+                return glib::Propagation::Proceed;
+            }
             kill_server(&mut state_key.borrow_mut().server_process, &cfg_key);
             gtk::main_quit();
             return glib::Propagation::Proceed;
@@ -424,6 +459,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if (kv == gdk::keys::constants::h || kv == gdk::keys::constants::H)
             && mods.contains(gdk::ModifierType::SHIFT_MASK)
         {
+            {
+                let mut s = state_key.borrow_mut();
+                s.cancel_inflight("help-dialog");
+                s.is_loading = false;
+            }
             show_help_dialog(&window_key);
             return glib::Propagation::Proceed;
         }
@@ -434,6 +474,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 && mods.contains(gdk::ModifierType::SHIFT_MASK))
         {
             let mut s = state_key.borrow_mut();
+            s.cancel_inflight("direction-toggle");
+            s.is_loading = false;
             // Language is Copy — read both then assign back to avoid split-borrow error
             let (new_src, new_dest) = (s.config.translate_dest, s.config.translate_src);
             s.config.translate_src = new_src;
@@ -711,6 +753,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if is_shift_click {
+            // A new shift-modified click supersedes any in-flight OCR — abort
+            // the old request's TCP socket so the remote backend stops billing,
+            // and clear is_loading so the new capture isn't blocked by the old
+            // task's un-run completion handler.
+            {
+                let mut s = state_main.borrow_mut();
+                if s.in_flight.is_some() {
+                    s.cancel_inflight("new-capture");
+                    s.is_loading = false;
+                }
+            }
+
             // Check debounce + loading flag, then release the borrow immediately.
             // IMPORTANT: do NOT hold borrow_mut() across gtk::main_iteration() —
             // the animation timer also calls borrow_mut() and will panic (BorrowMutError).
@@ -805,15 +859,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         window_main.show();
                         let tx_clone = tx.clone();
                         let tokio_handle_thread = state_main.borrow().tokio_handle.clone();
-                        // Spawn on the shared tokio runtime so step 5 can hold a JoinHandle
-                        // and call abort() on it — which closes the in-flight reqwest TCP
-                        // socket. std::thread::spawn handles can't do that.
-                        //
-                        // NOTE: a panic inside this task is observable via the JoinHandle's
-                        // JoinError::is_panic() — step 5 hooks that up when it owns the handle.
-                        // For now a panic drops the spinner-clear message, but the next
-                        // click will clear it.
-                        tokio_handle_thread.spawn(async move {
+                        // Spawn on the shared tokio runtime and stash the JoinHandle in
+                        // AppState so a later shift-modified interaction can call abort()
+                        // on it — which closes the in-flight reqwest TCP socket so the
+                        // remote backend stops billing/computing.
+                        let handle = tokio_handle_thread.spawn(async move {
                             let mut result: Result<(Vec<client::TranslationResult>, client::OcrMeta), String> = async {
                                 // Greyscale once; DBNet only needs luminance and this avoids
                                 // the crate doing its own (possibly inconsistent) conversion.
@@ -1263,6 +1313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             let _ = tx_clone.send(result).await;
                         });
+                        state_main.borrow_mut().in_flight = Some(handle);
                     }
                     Err(_) => {
                         let mut s = state_main.borrow_mut();
