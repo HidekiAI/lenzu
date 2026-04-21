@@ -805,17 +805,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         window_main.show();
                         let tx_clone = tx.clone();
                         let tokio_handle_thread = state_main.borrow().tokio_handle.clone();
-                        std::thread::spawn(move || {
-                            // Catch any unexpected panic so is_loading is always reset.
-                            // AssertUnwindSafe: the Arc<dyn TextDetector> contains Mutex
-                            // interior mutability; we don't rely on its state being
-                            // consistent after a panic — each click creates a fresh dual client.
-                            //
-                            // The OCR pipeline calls async client fns; run them on the shared
-                            // tokio runtime via `block_on`. `std::thread::spawn` threads are
-                            // OS threads (not tokio workers), so this is safe.
-                            let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                tokio_handle_thread.block_on(async {
+                        // Spawn on the shared tokio runtime so step 5 can hold a JoinHandle
+                        // and call abort() on it — which closes the in-flight reqwest TCP
+                        // socket. std::thread::spawn handles can't do that.
+                        //
+                        // NOTE: a panic inside this task is observable via the JoinHandle's
+                        // JoinError::is_panic() — step 5 hooks that up when it owns the handle.
+                        // For now a panic drops the spinner-clear message, but the next
+                        // click will clear it.
+                        tokio_handle_thread.spawn(async move {
+                            let mut result: Result<(Vec<client::TranslationResult>, client::OcrMeta), String> = async {
                                 // Greyscale once; DBNet only needs luminance and this avoids
                                 // the crate doing its own (possibly inconsistent) conversion.
                                 // CPU work inside an async task — block_in_place yields the
@@ -927,21 +926,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         let total_ocr_ms: u128 = results.iter().map(|r| r.ocr_ms).sum();
                                                         eprintln!("[OCR] fullscreen local-first succeeded — skipping LLM chain");
                                                         // Phase 1: raw text preview
-                                                        let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                        let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
                                                             backend: "local:manga-ocr".to_string(),
                                                             elapsed_ms: total_ocr_ms,
                                                             preview: true,
-                                                        })));
+                                                        }))).await;
 
                                                         // Phase 2: furigana (+ romaji unless furigana_only) — MeCab, ~5ms
                                                         let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
                                                         let do_enrich = enrichment_enabled && !s_conf.furigana_only;
                                                         if furigana_ok && do_enrich {
-                                                            let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                            let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
                                                                 backend: "local:manga-ocr+furigana".to_string(),
                                                                 elapsed_ms: total_ocr_ms,
                                                                 preview: true,
-                                                            })));
+                                                            }))).await;
                                                         }
 
                                                         // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
@@ -1115,11 +1114,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     let furigana_ok = furigana::annotate(&mut t_results, s_conf.furigana_only);
                                                     let do_enrich = enrichment_enabled && !s_conf.furigana_only;
                                                     if furigana_ok && do_enrich {
-                                                        let _ = tx_clone.send_blocking(Ok((t_results.clone(), client::OcrMeta {
+                                                        let _ = tx_clone.send(Ok((t_results.clone(), client::OcrMeta {
                                                             backend: "local:manga-ocr+furigana".to_string(),
                                                             elapsed_ms: total_ocr_ms,
                                                             preview: true,
-                                                        })));
+                                                        }))).await;
                                                     }
 
                                                     // Phase 3: LLM enrichment (translation) — skipped in furigana_only mode
@@ -1253,9 +1252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     dual.call_api(fallback_img).await
                                 }.map_err(|e| e.to_string())
-                                }) // close async move block
-                            }))
-                            .unwrap_or_else(|_| Err("OCR thread panicked".to_string()));
+                            }.await;
 
                             // MeCab check: always compare LLM furigana against MeCab's
                             // dictionary-based readings (logs timing + MATCH/MISMATCH).
@@ -1264,7 +1261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 furigana::compare_and_maybe_overwrite(results, s_conf.mecab_overwrite);
                             }
 
-                            let _ = tx_clone.send_blocking(result);
+                            let _ = tx_clone.send(result).await;
                         });
                     }
                     Err(_) => {
