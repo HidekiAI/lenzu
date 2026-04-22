@@ -78,6 +78,20 @@ The base prompt is hardcoded in `config.rs::TRANSLATE_PROMPT` and is language-ag
 | `all` | All text fields joined with ` | ` |
 | `debug` | All fields + bounding boxes + debug_info |
 
+### LLM transport: SSE streaming
+
+Requests to the LLM backend (ollama, llama.cpp, OpenRouter) go out as `POST /v1/chat/completions` with `stream: true`, and the response is read as a Server-Sent Events stream (`data: {...}\n\n` frames, terminated by `data: [DONE]`). Implementation lives in `client.rs::send_and_parse` and `client.rs::read_sse_content`.
+
+**Why SSE, not a single JSON POST.** Local ollama has a 30-second server-side write timeout on idle sockets. Slow models (Gemma 3 12B, Qwen 2.5 VL on CPU) routinely take 45–120 s to produce their first token on a cold load, so a non-streaming POST would get its connection dropped mid-inference and return a generic I/O error. `stream: true` keeps the TCP connection busy — ollama emits token-by-token `delta.content` chunks as soon as it has anything to send, and the write-timeout clock resets on every chunk. This is the sole reason streaming is on; Lenzu does not render tokens incrementally (the HUD only updates once the full JSON payload is parsed).
+
+**How the stream is consumed.** The full body is read via `Response::text().await` — we don't iterate `bytes_stream()` because we don't care about partial results. What matters is that the socket stays held open end-to-end: ollama keeps writing, reqwest keeps reading, no timeout fires. Once the body completes, the reader splits on `data:` lines, strips the `[DONE]` sentinel, and accumulates every `choices[0].delta.content` fragment into one string. The final chunk carries `usage` (prompt/completion token counts) and is used for paid-backend session accounting.
+
+**Error path is not SSE.** 4xx/5xx responses from ollama, llama.cpp, and OpenRouter are returned as plain JSON, not streams — `send_and_parse` branches on `status.is_success()` and reads errors via `text()` before attempting SSE parsing. A surprising `Content-Type` on a successful response would currently be treated as SSE; in practice all three backends honor the stream contract on 2xx.
+
+**Backend compatibility.** All three supported backends speak OpenAI-compatible streaming: ollama (native), llama.cpp's `llama-server`, and OpenRouter. No backend-specific framing — the same `send_and_parse` handles everything. See `docs/planning-ollama-to-llamacpp.md` for the cross-backend feature matrix.
+
+**Cancellation.** Because the SSE read is an `async` future, dropping it (via `JoinHandle::abort()` in the cancel-inflight path) closes the socket, which causes the remote backend to stop billing/computing. See `docs/technical-design.cancel-inflight.md` for the broader cancellation design; the SSE-specific concern was that `Response::text().await` holds the socket across partial writes, which is exactly what we want.
+
 ### Workspace layout
 
 ```
