@@ -145,11 +145,11 @@ This means each commit is reviewable and revertable.
 
 ## Decisions (2026-04-21)
 
-1. **Cancel trigger scope: any shift-modified user command.** Not just Shift+Click and Ctrl+Shift+Click. Shift+Tab (toggle direction), Shift+H (help dialog), and a new Shift+ESC (explicit cancel) also cancel in-flight OCR. All share the same `in_flight` slot. Rationale: a shift-modified action is always deliberate user input; treat it uniformly as "user has moved on, drop pending work."
+1. **Cancel trigger scope: any shift-modified user command + plain ESC.** Shift+Click, Ctrl+Shift+Click, Shift+Tab (toggle direction), and Shift+H (help dialog) all cancel in-flight OCR. **Plain ESC is a dedicated cancel key** (no-op if nothing is in flight). All share the same `in_flight` slot. Rationale: a shift-modified action is deliberate intent to move on, and a bare ESC is the universal "cancel current thing" key — users should not have to wait or reach for a modifier to stop a long request.
 
 2. **Cancelled request logging: `[cancelled]` line in debug log, no history entry.** Confirmed.
 
-3. **Plain ESC stays on quit.** Non-shift inputs do not cancel. New Shift+ESC binding is added for explicit cancel-without-quit. Plain ESC continues to call `kill_server` + `gtk::main_quit()` (main.rs:401) unchanged.
+3. **Quit moves to Shift+ESC.** Plain ESC was historically the quit key; it's now the cancel key. Quit is now **Shift+ESC** so a user can cancel a slow OCR without accidentally closing the app.
 
 4. **Runtime ownership: owned by `main`, `Handle` cloned into AppState.** No static state, no `OnceLock`. Clone the handle wherever it's needed; `tokio::runtime::Handle` is explicitly cheap to clone and clone-safe. Runtime is dropped on app exit, flushing in-flight work via `Runtime::shutdown_timeout(Duration::from_secs(2))`.
 
@@ -172,10 +172,10 @@ impl AppState {
 
 Call sites:
 - `Shift+Click` / `Ctrl+Shift+Click` — `cancel_inflight("new-capture")` then spawn.
-- `Shift+Tab` (toggle direction, main.rs:416) — `cancel_inflight("direction-toggle")`.
-- `Shift+H` (help dialog, main.rs:408) — `cancel_inflight("help-dialog")`.
-- `Shift+ESC` (new) — `cancel_inflight("user-cancel")`, no quit.
-- Plain `ESC` — unchanged; quit path already kills the runtime via shutdown.
+- `Shift+Tab` (toggle direction) — `cancel_inflight("direction-toggle")`.
+- `Shift+H` (help dialog) — `cancel_inflight("help-dialog")`.
+- Plain `ESC` — `cancel_inflight("user-cancel")`, no-op if nothing in flight. No quit.
+- `Shift+ESC` — quit path; kills runtime via shutdown and calls `gtk::main_quit()`.
 
 ## Estimated effort
 

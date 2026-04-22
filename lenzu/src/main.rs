@@ -285,10 +285,10 @@ Shift＋Tab
 Shift＋H
   → このヘルプを表示
 
-Shift＋ESC
+ESC
   → 実行中のOCRをキャンセル
 
-ESC
+Shift＋ESC
   → 終了";
 
     let dialog = gtk::MessageDialog::new(
@@ -440,18 +440,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let kv = event.keyval();
         let mods = event.state();
 
-        // Shift+ESC → cancel in-flight OCR without quitting. Plain ESC still quits.
+        // Plain ESC → cancel in-flight OCR (no-op if nothing is in flight).
+        // Shift+ESC → quit the app.
         if kv == gdk::keys::constants::Escape {
             if mods.contains(gdk::ModifierType::SHIFT_MASK) {
-                let mut s = state_key.borrow_mut();
-                s.cancel_inflight("user-cancel");
-                s.is_loading = false;
-                s.status = ready_status(&s.config.translate_src, &s.config.translate_dest);
-                window_key.queue_draw();
+                kill_server(&mut state_key.borrow_mut().server_process, &cfg_key);
+                gtk::main_quit();
                 return glib::Propagation::Proceed;
             }
-            kill_server(&mut state_key.borrow_mut().server_process, &cfg_key);
-            gtk::main_quit();
+            let mut s = state_key.borrow_mut();
+            s.cancel_inflight("user-cancel");
+            s.is_loading = false;
+            s.status = ready_status(&s.config.translate_src, &s.config.translate_dest);
+            window_key.queue_draw();
             return glib::Propagation::Proceed;
         }
 
