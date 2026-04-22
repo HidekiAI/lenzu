@@ -90,7 +90,18 @@ Requests to the LLM backend (ollama, llama.cpp, OpenRouter) go out as `POST /v1/
 
 **Backend compatibility.** All three supported backends speak OpenAI-compatible streaming: ollama (native), llama.cpp's `llama-server`, and OpenRouter. No backend-specific framing — the same `send_and_parse` handles everything. See `docs/planning-ollama-to-llamacpp.md` for the cross-backend feature matrix.
 
+**Why hand-rolled, not `eventsource-client` / `reqwest-eventsource`.** OpenAI-compatible LLM streams are SSE-*shaped* but not spec-compliant SSE: no `id:` or `event:` fields (only `data:`), terminated by a non-standard `data: [DONE]` sentinel, and one-shot rather than long-lived. The value-add of a real SSE library — auto-reconnect with `Last-Event-ID`, retry intervals, event-type routing — is zero here: if a completion dies mid-stream, resuming would produce a different token sequence, so the only sane recovery is to restart from scratch. Pulling in a dependency to save ~10 lines of `strip_prefix("data: ") + serde_json::from_str` isn't worth the surface area. The hand-rolled loop in `read_sse_content` is the right fit for this shape of traffic.
+
 **Cancellation.** Because the SSE read is an `async` future, dropping it (via `JoinHandle::abort()` in the cancel-inflight path) closes the socket, which causes the remote backend to stop billing/computing. See `docs/technical-design.cancel-inflight.md` for the broader cancellation design; the SSE-specific concern was that `Response::text().await` holds the socket across partial writes, which is exactly what we want.
+
+**Not used for lenzu ↔ lenzu_server IPC (denial).** SSE is explicitly rejected as the transport between the GTK client and the Electron HUD. Four reasons:
+
+1. *Direction mismatch.* SSE is server→client push. The producer of HUD events is `lenzu` (the GTK client), so adopting SSE would force `lenzu` to embed an HTTP server (`hyper`/`axum`, port binding, connection lifecycle) just to replace a 4-line UDP socket send.
+2. *UDP loopback already matches the semantics.* The HUD is fire-and-forget display: a lost frame is superseded by the next capture within ~1 s. No retry, ordering, or delivery guarantees are needed. Loopback UDP does not lose packets in practice below the 64 KB datagram limit, and translation payloads are small.
+3. *No reconnection value.* SSE's killer feature is auto-reconnect with `Last-Event-ID`. For a local HUD, if the server dies the client respawns it — there is no "resume the stream from event N" story. The feature buys nothing on localhost.
+4. *Debuggability is a wash.* UDP is `nc -u -l 7331`; SSE would be `curl -N`. Both trivial.
+
+If UDP ever becomes insufficient (large payloads, bursty loss under kernel-buffer pressure), the escalation path is a **Unix domain socket with newline-delimited JSON** — same simple framing, ordered + reliable, still no HTTP stack. SSE would remain a worse choice than either of those.
 
 ### Workspace layout
 
