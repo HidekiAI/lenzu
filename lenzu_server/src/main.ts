@@ -5,20 +5,10 @@ import { execSync } from 'child_process';
 import { loadConfig, DEFAULT_CONFIG, type HudConfig } from './config';
 import { computePosition, type WindowPosition } from './window-position';
 
-// Electron 36–41 has a regression on Linux X11: transparent CSS areas render
-// as opaque white instead of showing the desktop through.  Last confirmed-good
-// version is 35.x.  Warn loudly if someone accidentally upgrades.
-// To re-test a newer version: remove this guard, test, and update the limit.
-const _electronMajor = Number(process.versions.electron.split('.')[0]);
-if (_electronMajor >= 36) {
-  console.error(
-    `[HUD] FATAL: Electron ${process.versions.electron} is known-broken for ` +
-    `transparent ARGB windows on Linux X11 (Electron 36–41 regression: ` +
-    `transparent areas render as opaque white). ` +
-    `Pin to electron@35.x in package.json until upstream fixes this.`
-  );
-  app.exit(1);
-}
+// Electron 36–41 had a Linux X11 regression where transparent:true rendered
+// as opaque white.  Re-tested on 41.3.0 (2026-04-25) and confirmed fixed.
+// Keeping a soft probe here so a future regression is loud at startup.
+console.info(`[HUD] Electron ${process.versions.electron} starting.`);
 
 // Required for ARGB transparent windows on X11.  Without this flag Chromium
 // requests a 24-bit visual and transparent: true has no effect.

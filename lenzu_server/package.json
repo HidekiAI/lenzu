@@ -21,18 +21,18 @@
   ],
   "author": "Hideki A. Ikeda",
   "license": "MIT",
-  "//": "electron is hard-pinned to 35.x — Electron 36-41 has a regression on Linux X11 where transparent:true renders as opaque white. See src/main.ts version guard. Do NOT upgrade until confirmed fixed upstream.",
+  "//": "Electron 41.3.0 confirmed working for transparent:true on Linux X11 (re-tested 2026-04-25 against integrated client and standalone HUD demo). The 36-41 transparency regression that previously held us on 35.x has been resolved upstream.",
   "pnpm": {
     "onlyBuiltDependencies": ["electron", "esbuild"],
     "overrides": {
-      "electron": "35.7.5",
+      "electron": "41.3.0",
       "tar": "^7.5.11",
       "@tootallnate/once": "^3.0.1"
     }
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
-    "electron": "35.7.5",
+    "electron": "41.3.0",
     "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
     "vitest": "^3.0.0"
