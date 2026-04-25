@@ -66,7 +66,9 @@ app.whenReady().then(() => {
     ? Number(buf.readBigUInt64LE(0))
     : buf.readUInt32LE(0);
   try {
-    const helper = path.join(__dirname, 'hud-set-override-redirect');
+    const helper = app.isPackaged
+      ? path.join(process.resourcesPath, 'hud-set-override-redirect')
+      : path.join(__dirname, 'hud-set-override-redirect');
     execSync(`"${helper}" ${winIdNum}`);
   } catch (e) {
     console.warn(`[HUD] override_redirect helper failed (non-fatal):`, (e as Error).message);

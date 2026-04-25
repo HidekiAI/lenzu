@@ -2,6 +2,11 @@
 name = "lenzu"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Transparent OCR lens overlay for Linux desktop with Japanese-language support"
+homepage = "https://github.com/hidekiai/lenzu"
+repository = "https://github.com/hidekiai/lenzu"
+authors = ["Hideki A. Ikeda"]
 
 [[bin]]
 name = "lenzu"
@@ -10,6 +15,29 @@ path = "src/main.rs"
 [[bin]]
 name = "ocr-test"
 path = "src/bin/ocr_test.rs"
+
+[package.metadata.deb]
+name = "lenzu"
+maintainer = "Hideki A. Ikeda <hideki.ikeda@exactasystems.com>"
+copyright = "2023, Hideki A. Ikeda <hideki.ikeda@exactasystems.com>"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Lenzu is a transparent, screen-region OCR lens for Linux desktop.
+It captures a user-defined screen region, runs OCR (local or remote
+backend), and displays results in a heads-up overlay (lenzu-hud).
+The HUD package (lenzu-hud) must be installed alongside this one."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/lenzu", "usr/bin/", "755"],
+    ["../packaging/lenzu/lenzu.desktop", "usr/share/applications/", "644"],
+    ["../README.md", "usr/share/doc/lenzu/README.md", "644"],
+    ["../LICENSE", "usr/share/doc/lenzu/copyright", "644"],
+    ["NOTICES.md", "usr/share/doc/lenzu/NOTICES.md", "644"],
+    ["NOTICES.crates.md", "usr/share/doc/lenzu/NOTICES.crates.md", "644"],
+]
+depends = "$auto, mecab-ipadic-utf8, fonts-noto-cjk, fonts-ipafont-gothic, lenzu-hud"
+recommends = "lenzu-models-dbnet"
 
 [features]
 default = []

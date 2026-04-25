@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+cat <<EOF
+
+lenzu-models-dbnet installed at:
+  /usr/share/lenzu/models/stabrise-text_detection_dbnet_ml_v02_model.onnx
+
+To enable DBNet pre-detection, set in your ~/.config/lenzu/lenzu_config.json:
+
+  "text_detection_model": "/usr/share/lenzu/models/stabrise-text_detection_dbnet_ml_v02_model.onnx"
+
+This model is licensed AGPL-3.0. See:
+  /usr/share/doc/lenzu-models-dbnet/copyright
+
+EOF
+
+exit 0

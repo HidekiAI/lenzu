@@ -1,0 +1,17 @@
+Package: lenzu-models-dbnet
+Version: 0.2.0
+Section: utils
+Priority: optional
+Architecture: all
+Depends: lenzu
+Maintainer: Hideki A. Ikeda <hideki.ikeda@exactasystems.com>
+Homepage: https://huggingface.co/StabRise/text_detection_dbnet_ml_v0.2
+Description: DBNet text-detection ONNX model for Lenzu (AGPL-3.0)
+ Pre-trained DBNet text-detection model from
+ StabRise/text_detection_dbnet_ml_v0.2 on Hugging Face, exported to ONNX.
+ Used by lenzu for pre-OCR text region detection.
+ .
+ This package is licensed under AGPL-3.0 (NOT MIT). It is shipped
+ separately so the main 'lenzu' MIT package remains free of copyleft
+ obligations. Installing this package is optional: lenzu falls back to
+ full-image OCR when the model is not present.

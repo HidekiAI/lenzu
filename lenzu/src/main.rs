@@ -159,49 +159,50 @@ impl AppState {
     }
 }
 
-/// Path to `lenzu_server` directory.
+/// Path to `lenzu_server` directory (dev tree only).
 /// Resolved at runtime from the binary location (target/debug/lenzu →
-/// ../../lenzu_server) so both workspaces work without recompiling.
-/// Falls back to the compile-time CARGO_MANIFEST_DIR path if not found.
-fn lenzu_server_dir() -> std::path::PathBuf {
-    let runtime = std::env::current_exe()
+/// ../../lenzu_server). Returns None when the binary is installed system-wide
+/// (e.g. /usr/bin/lenzu) — in that case the packaged `lenzu-hud` binary on
+/// PATH is used instead.
+fn lenzu_server_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
         .ok()
         .and_then(|p| {
             // binary: <repo>/target/debug/lenzu  →  parent×2 = <repo>/target  →  parent×3 = <repo>
             p.parent()?.parent()?.parent().map(|r| r.join("lenzu_server"))
         })
-        .filter(|p| p.is_dir());
-
-    runtime.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../lenzu_server"))
+        .filter(|p| p.is_dir())
+        .or_else(|| {
+            let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lenzu_server");
+            manifest.is_dir().then_some(manifest)
+        })
 }
 
-/// Spawn the Electron HUD (`lenzu_server`). UDP port is passed via `LENZU_OVERLAY_UDP_PORT`
-/// so it stays in sync with `overlay_udp_port` in `lenzu_config.json`.
+/// Spawn the Electron HUD. UDP port is passed via `LENZU_OVERLAY_UDP_PORT` so it
+/// stays in sync with `overlay_udp_port` in `lenzu_config.json`.
+///
+/// Lookup order:
+///   1. `lenzu-hud` on PATH — packaged install (electron-builder .deb).
+///   2. Dev-tree fallback: `<repo>/lenzu_server/node_modules/.bin/electron dist/main.js`.
+///
+/// The HUD child is placed in its own process group so we can kill the entire
+/// Electron tree on exit (Electron forks a renderer + zygote).
 fn spawn_server(port: u16) -> Option<std::process::Child> {
-    let dir = lenzu_server_dir();
-    if !dir.is_dir() {
-        eprintln!(
-            "lenzu: lenzu_server not found at {} (expected Electron overlay package)",
-            dir.display()
-        );
-        return None;
-    }
-    // Launch Electron directly (not via npm/pnpm) so the child PID is the
-    // actual Electron process — required for process-group kill on exit.
-    // GTK_CSD=0 suppresses client-side decorations on the overlay window.
-    std::process::Command::new("node_modules/.bin/electron")
-        .args(["dist/main.js"])
-        .current_dir(&dir)
-        .env("LENZU_OVERLAY_UDP_PORT", port.to_string())
+    let mut cmd = if let Some(dir) = lenzu_server_dir() {
+        // Dev tree: launch Electron directly so the child PID is the Electron process.
+        let mut c = std::process::Command::new("node_modules/.bin/electron");
+        c.args(["dist/main.js"]).current_dir(&dir);
+        c
+    } else {
+        // Packaged: lenzu-hud is electron-builder's launcher binary on PATH.
+        std::process::Command::new("lenzu-hud")
+    };
+
+    cmd.env("LENZU_OVERLAY_UDP_PORT", port.to_string())
         .env("GTK_CSD", "0")
-        .process_group(0)  // put Electron in its own process group
+        .process_group(0)
         .spawn()
-        .map_err(|e| {
-            eprintln!(
-                "lenzu: could not spawn Electron overlay (node_modules/.bin/electron in {}): {e}",
-                dir.display()
-            )
-        })
+        .map_err(|e| eprintln!("lenzu: could not spawn HUD (lenzu-hud or dev tree): {e}"))
         .ok()
 }
 
@@ -266,7 +267,71 @@ fn send_hud_position(pos: &str, port: u16) {
     }
 }
 
+/// Resolve the path to one of the NOTICES files.  Tries dev tree first
+/// (`<repo>/lenzu/<filename>`), then the packaged location
+/// (`/usr/share/doc/lenzu/<filename>`).
+fn notices_path(filename: &str) -> Option<std::path::PathBuf> {
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join(filename);
+    if dev.is_file() {
+        return Some(dev);
+    }
+    let packaged = Path::new("/usr/share/doc/lenzu").join(filename);
+    packaged.is_file().then_some(packaged)
+}
+
+/// Scrollable dialog showing third-party license attributions.
+/// Loads the curated `NOTICES.md` and (if present) the auto-generated
+/// `NOTICES.crates.md` from `cargo-about`, concatenating with a separator.
+/// Falls back to a short "see /usr/share/doc/lenzu/" message if both are missing.
+fn show_about_dialog(parent: &gtk::Window) {
+    let read = |name: &str| -> Option<String> {
+        notices_path(name).and_then(|p| std::fs::read_to_string(p).ok())
+    };
+    let body = match (read("NOTICES.md"), read("NOTICES.crates.md")) {
+        (Some(curated), Some(crates)) => format!("{curated}\n\n---\n\n{crates}"),
+        (Some(curated), None) => curated,
+        (None, Some(crates)) => crates,
+        (None, None) => "Third-party notices not found.  See:\n\
+             /usr/share/doc/lenzu/NOTICES.md\n\
+             https://github.com/hidekiai/lenzu"
+            .to_string(),
+    };
+
+    let dialog = gtk::Dialog::with_buttons(
+        Some("Lenzu — About / Third-Party Notices"),
+        Some(parent),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        &[("Close", gtk::ResponseType::Close)],
+    );
+    dialog.set_default_size(640, 480);
+
+    let scrolled = gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
+    scrolled.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    scrolled.set_vexpand(true);
+    scrolled.set_hexpand(true);
+
+    let text_view = gtk::TextView::new();
+    text_view.set_editable(false);
+    text_view.set_cursor_visible(false);
+    text_view.set_wrap_mode(gtk::WrapMode::Word);
+    text_view.set_left_margin(12);
+    text_view.set_right_margin(12);
+    text_view.set_top_margin(8);
+    text_view.set_bottom_margin(8);
+    text_view.buffer().expect("text view buffer").set_text(&body);
+
+    scrolled.add(&text_view);
+    dialog.content_area().pack_start(&scrolled, true, true, 0);
+    dialog.show_all();
+    dialog.run();
+    dialog.close();
+}
+
 /// Modal dialog listing all keyboard shortcuts, displayed in Japanese.
+/// Buttons: "About" (opens the third-party notices dialog) and "Close"
+/// (Esc-style exit).  Clicking About dismisses Help and shows Notices —
+/// re-opening Help is one Shift+H away.  Linear flow avoids GTK's nested-
+/// event-loop hazards from re-running the same dialog within a loop.
 fn show_help_dialog(parent: &gtk::Window) {
     let help = "\
 ショートカット一覧
@@ -291,16 +356,22 @@ ESC
 Shift＋ESC
   → 終了";
 
+    let about_response = gtk::ResponseType::Other(1);
     let dialog = gtk::MessageDialog::new(
         Some(parent),
         gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
         gtk::MessageType::Info,
-        gtk::ButtonsType::Close,
+        gtk::ButtonsType::None,
         help,
     );
     dialog.set_title("Lenzu ヘルプ");
-    dialog.run();
-    dialog.hide();
+    dialog.add_button("About", about_response);
+    dialog.add_button("Close", gtk::ResponseType::Close);
+    let response = dialog.run();
+    dialog.close();
+    if response == about_response {
+        show_about_dialog(parent);
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

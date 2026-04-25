@@ -1,12 +1,13 @@
 {
-  "name": "electron-translucent-desktop-overlay",
+  "name": "lenzu-hud",
   "version": "1.0.0",
   "description": "A transparent HUD-like overlay for Linux desktop displaying UDP text as closed-caption/subtitle",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "scripts": {
     "build": "node build.mjs",
     "start": "GTK_CSD=0 node_modules/.bin/electron dist/main.js",
-    "test:send": "node test_sender.js"
+    "test:send": "node test_sender.js",
+    "deb": "npm run build && electron-builder --linux deb"
   },
   "keywords": [
     "electron",
@@ -30,7 +31,48 @@
   "devDependencies": {
     "@types/node": "^25.5.2",
     "electron": "35.7.5",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
     "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.exactasystems.lenzu.hud",
+    "productName": "lenzu-hud",
+    "executableName": "lenzu-hud",
+    "files": [
+      "dist/**/*",
+      "hud_config.json",
+      "package.json",
+      "!dist/hud-set-override-redirect"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/hud-set-override-redirect",
+        "to": "hud-set-override-redirect"
+      }
+    ],
+    "directories": {
+      "output": "dist-deb"
+    },
+    "linux": {
+      "target": ["deb"],
+      "category": "Utility",
+      "synopsis": "Transparent desktop HUD for Lenzu OCR overlay"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "libx11-6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libdrm2",
+        "libgbm1",
+        "libxcb-dri3-0"
+      ]
+    }
   }
 }
