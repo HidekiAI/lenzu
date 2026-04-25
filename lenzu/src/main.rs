@@ -437,6 +437,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.furigana_only, cfg.mecab_overwrite, cfg.enrichment_enabled, cfg.overlay_enabled,
     );
 
+    // The configured path is relative by default ("assets/...") which only works
+    // when launched from the repo root.  Inside an AppImage / .deb install /
+    // sidecar tarball, search standard data dirs by basename so the binary
+    // finds the model wherever the user installed it.  Updates cfg in place
+    // so downstream uses (BUG-4 retry, state clones) see the resolved path.
+    fn resolve_model_path(configured: &str) -> Option<String> {
+        let p = std::path::Path::new(configured);
+        if p.exists() {
+            return Some(configured.to_string());
+        }
+        let basename = p.file_name()?.to_str()?;
+        let xdg_data = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.local/share")));
+        let candidates: Vec<String> = [
+            xdg_data.map(|d| format!("{d}/lenzu/models/{basename}")),
+            Some(format!("/usr/share/lenzu/models/{basename}")),
+            Some(format!("/usr/local/share/lenzu/models/{basename}")),
+        ].into_iter().flatten().collect();
+        candidates.into_iter().find(|c| std::path::Path::new(c).exists())
+    }
+    if let Some(orig) = cfg.text_detection_model.clone() {
+        match resolve_model_path(&orig) {
+            Some(resolved) if resolved != orig => {
+                eprintln!("[OCR] text detection model resolved: {orig} → {resolved}");
+                cfg.text_detection_model = Some(resolved);
+            }
+            Some(_) => {} // CWD-relative path exists as-is (dev workflow)
+            None => {
+                eprintln!(
+                    "[OCR] text detection model '{orig}' not found in CWD or standard data \
+                     dirs (~/.local/share/lenzu/models/, /usr/share/lenzu/models/) — \
+                     install lenzu-models-dbnet .deb or untar the sidecar tarball"
+                );
+            }
+        }
+    }
+
     // Build the text detector once at startup; shared across capture threads via Arc.
     let text_detector: Option<std::sync::Arc<dyn ocr::text_detection::TextDetector + Send + Sync>> =
         match ocr::text_detection::build_text_detector(
