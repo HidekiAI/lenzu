@@ -22,7 +22,7 @@ $(NOTICES): lenzu/Cargo.toml lenzu/about.toml lenzu/about.hbs Cargo.lock
 
 deb-client: notices
 	@command -v cargo-deb >/dev/null || cargo install cargo-deb
-	cargo deb -p lenzu --output $(DEB_OUT)
+	cargo deb --all-features -p lenzu --output $(DEB_OUT)
 
 deb-hud:
 	cd lenzu_server && npm run deb

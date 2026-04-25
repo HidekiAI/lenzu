@@ -84,12 +84,15 @@ build_appimage() {
 
     mkdir -p "$OUT_APPIMAGE"
 
-    # 1) Rust client.  build-lenzu-appimage.sh internally invokes
-    #    electron-builder --linux dir to produce the unpacked HUD tree, then
-    #    embeds it under AppDir/usr/lib/lenzu-hud/ and drops a wrapper at
-    #    AppDir/usr/bin/lenzu-hud (which lenzu's spawn_server() finds via
-    #    PATH).  Result: one self-contained lenzu*.AppImage.
-    cargo build --release -p lenzu
+    # 1) Rust client.  --all-features turns on `onnx` (DBNet text detection)
+    #    so the bundled DBNet sidecar tarball is actually usable; without it
+    #    every shift-click falls through to the LLM, defeating --furigana_only.
+    #    build-lenzu-appimage.sh then invokes electron-builder --linux dir to
+    #    produce the unpacked HUD tree, embeds it under AppDir/usr/lib/lenzu-hud/
+    #    and drops a wrapper at AppDir/usr/bin/lenzu-hud (which lenzu's
+    #    spawn_server() finds via PATH).  Result: one self-contained
+    #    lenzu*.AppImage.
+    cargo build --release --all-features -p lenzu
     "$REPO_ROOT/scripts/build-lenzu-appimage.sh" "$OUT_APPIMAGE"
 
     # 2) AGPL DBNet model as a sidecar tarball (license-isolated; can't ride

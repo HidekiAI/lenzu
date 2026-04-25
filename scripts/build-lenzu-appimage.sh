@@ -36,7 +36,8 @@
 #   scripts/build-lenzu-appimage.sh <output_dir>
 #
 # Prerequisites:
-#   - cargo build --release -p lenzu  (target/release/lenzu present)
+#   - cargo build --release --all-features -p lenzu  (target/release/lenzu present)
+#     (--all-features enables `onnx` so the bundled DBNet sidecar works)
 #   - lenzu_server has been pnpm-installed (node_modules/electron present)
 set -euo pipefail
 
