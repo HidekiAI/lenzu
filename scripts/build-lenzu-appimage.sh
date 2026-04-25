@@ -147,4 +147,4 @@ done
 shopt -u nullglob
 
 echo "[appimage] done — single bundle in $OUT_DIR/"
-ls -1 "$OUT_DIR"/lenzu*.AppImage 2>/dev/null
+ls -1 "$OUT_DIR"/lenzu*.AppImage "$OUT_DIR"/lenzu*.appimage 2>/dev/null || true

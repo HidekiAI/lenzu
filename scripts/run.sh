@@ -212,19 +212,6 @@ echo "==> Inference mode: ${OLLAMA_MODE}  (change with: scripts/setup.sh [--gpu]
 
 # ── Build & run ───────────────────────────────────────────────────────────────
 
-echo "==> Building lenzu_server (Electron HUD)..."
-cd "$REPO_ROOT/lenzu_server"
-pnpm install --silent
-pnpm run build
-
-echo "==> Building lenzu client..."
-cd "$REPO_ROOT"
-cargo build -p lenzu --features onnx --release
-
-echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
-# Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
-# trap from firing and leaving the ollama container running after lenzu exits.
-
 # Pass through CLI flags (e.g. --furigana_only, --nomecab_overwrite) to the binary.
 LENZU_ARGS=()
 for arg in "$@"; do
@@ -234,4 +221,40 @@ for arg in "$@"; do
     esac
 done
 
-"$CLIENT_BINARY" "${LENZU_ARGS[@]+"${LENZU_ARGS[@]}"}"
+# AppImage-aware: if a packaged lenzu*.appimage is found, use it and skip
+# the cargo + pnpm build step entirely.  Search order:
+#   1. Next to this script (the unpacked bundle layout)
+#   2. target/appimage/ (dev workflow after running scripts/make-installers.sh)
+#   3. Repo root (one-off drop)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+shopt -s nullglob
+APPIMAGE_CANDIDATES=(
+    "$SCRIPT_DIR"/lenzu-*.appimage
+    "$SCRIPT_DIR"/lenzu-*.AppImage
+    "$REPO_ROOT"/target/appimage/lenzu-*.appimage
+    "$REPO_ROOT"/target/appimage/lenzu-*.AppImage
+    "$REPO_ROOT"/lenzu-*.appimage
+    "$REPO_ROOT"/lenzu-*.AppImage
+)
+shopt -u nullglob
+
+if [[ ${#APPIMAGE_CANDIDATES[@]} -gt 0 ]]; then
+    APPIMAGE="${APPIMAGE_CANDIDATES[0]}"
+    echo "==> Found AppImage at $APPIMAGE — running it instead of cargo build."
+    chmod +x "$APPIMAGE"
+    "$APPIMAGE" "${LENZU_ARGS[@]+"${LENZU_ARGS[@]}"}"
+else
+    echo "==> Building lenzu_server (Electron HUD)..."
+    cd "$REPO_ROOT/lenzu_server"
+    pnpm install --silent
+    pnpm run build
+
+    echo "==> Building lenzu client..."
+    cd "$REPO_ROOT"
+    cargo build -p lenzu --features onnx --release
+
+    echo "==> Starting lenzu (spawns Electron overlay when overlay_enabled is true)..."
+    # Do NOT use 'exec' here — it would replace this shell, preventing the EXIT
+    # trap from firing and leaving the ollama container running after lenzu exits.
+    "$CLIENT_BINARY" "${LENZU_ARGS[@]+"${LENZU_ARGS[@]}"}"
+fi

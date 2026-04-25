@@ -107,6 +107,73 @@ build_appimage() {
     log "AppImage: packaging manga-ocr models as sidecar tarball"
     "$REPO_ROOT/scripts/build-manga-ocr-tarball.sh" "$OUT_APPIMAGE"
 
+    # 4) One-file bundle: AppImage + both sidecars + installer + README.
+    #    Outer tar is uncompressed since contents are already compressed
+    #    (AppImage = SquashFS, sidecars = .tar.xz).  Users grab one file
+    #    and run the installer — no juggling individual downloads.
+    log "AppImage: rolling everything into a single bundle tar"
+    # nullglob: a non-matching glob expands to nothing rather than the literal
+    # pattern.  Without it, the upper/lower-case ls falls afoul of pipefail
+    # (one of the two args has no match → ls exits 2 → pipefail propagates).
+    local appimage_file=""
+    shopt -s nullglob
+    local _appimg_candidates=("$OUT_APPIMAGE"/lenzu*.AppImage "$OUT_APPIMAGE"/lenzu*.appimage)
+    shopt -u nullglob
+    [[ ${#_appimg_candidates[@]} -gt 0 ]] || fail "no .AppImage found in $OUT_APPIMAGE — bundle step skipped" 3
+    appimage_file="${_appimg_candidates[0]}"
+    local bundle_ver
+    bundle_ver="$(grep -m1 '^version' "$REPO_ROOT/lenzu/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
+    local bundle_stage="$REPO_ROOT/target/appimage-bundle-stage"
+    rm -rf "$bundle_stage"
+    mkdir -p "$bundle_stage"
+    cp "$appimage_file" "$bundle_stage/"
+    cp "$OUT_APPIMAGE"/lenzu-models-dbnet-*.tar.xz "$bundle_stage/"
+    cp "$OUT_APPIMAGE"/lenzu-models-manga-ocr-*.tar.xz "$bundle_stage/"
+    cp "$REPO_ROOT/scripts/lenzu-appimage-installer.sh" "$bundle_stage/"
+    # run.sh handles the ollama/Docker lifecycle preflight and exec's the
+    # AppImage that sits next to it.  No cargo/pnpm needed at runtime.
+    cp "$REPO_ROOT/scripts/run.sh" "$bundle_stage/run.sh"
+    chmod +x "$bundle_stage/run.sh"
+    cat >"$bundle_stage/README.txt" <<EOF
+Lenzu single-bundle for x86_64 Linux.
+
+Quick start:
+  1.  tar -xf lenzu-bundle-${bundle_ver}.tar
+  2.  cd lenzu-bundle-${bundle_ver}/
+  3.  LENZU_RELEASE_BASE=file://\$(pwd) ./lenzu-appimage-installer.sh
+      (untars both model sidecars to ~/.local/share/lenzu/)
+  4.  ./run.sh                       (recommended — checks ollama / Docker
+                                      and falls through to OpenRouter if
+                                      OPENROUTER_API_KEY is set)
+      ./run.sh --furigana_only       (offline path: DBNet + manga-ocr,
+                                      no LLM enrichment)
+
+  Or run the AppImage directly (skips the ollama preflight):
+      ./$(basename "$appimage_file")
+      ./$(basename "$appimage_file") --furigana_only
+
+System dependency:
+  sudo apt install mecab mecab-ipadic-utf8
+
+Contents:
+  $(basename "$appimage_file")              -- main binary (Rust + Electron HUD)
+  lenzu-models-dbnet-*.tar.xz               -- AGPL-3.0 DBNet text-detection
+  lenzu-models-manga-ocr-*.tar.xz           -- Apache-2.0 manga-ocr (~340 MB)
+  lenzu-appimage-installer.sh               -- runs the model untars
+  run.sh                                    -- ollama preflight + run AppImage
+EOF
+
+    # Rename the stage dir to a friendlier name so `tar -xf` produces a
+    # cleanly-named directory on the user's machine.  Outer tar is
+    # uncompressed: the AppImage is SquashFS-compressed and the sidecars
+    # are .tar.xz, so an outer .tar.gz/.bz2/.xz would just waste CPU.
+    local bundle="$OUT_APPIMAGE/lenzu-bundle-${bundle_ver}.tar"
+    local friendly="$REPO_ROOT/target/lenzu-bundle-${bundle_ver}"
+    rm -rf "$friendly"
+    mv "$bundle_stage" "$friendly"
+    tar -C "$(dirname "$friendly")" -cf "$bundle" "$(basename "$friendly")"
+    rm -rf "$friendly"
+
     log "AppImage artifacts in $OUT_APPIMAGE:"
     ls -1 "$OUT_APPIMAGE"/ 2>/dev/null
 }
