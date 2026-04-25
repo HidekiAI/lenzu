@@ -100,6 +100,13 @@ build_appimage() {
     log "AppImage: packaging DBNet model as sidecar tarball"
     "$REPO_ROOT/scripts/build-dbnet-tarball.sh" "$OUT_APPIMAGE"
 
+    # 3) manga-ocr models as a sidecar tarball (~340 MB xz-compressed; too
+    #    big to bundle inside the AppImage, and the binary's embedded
+    #    `default_model_dir()` points at the build machine's cache, so a
+    #    sidecar at the standard XDG path is the cleanest end-user story).
+    log "AppImage: packaging manga-ocr models as sidecar tarball"
+    "$REPO_ROOT/scripts/build-manga-ocr-tarball.sh" "$OUT_APPIMAGE"
+
     log "AppImage artifacts in $OUT_APPIMAGE:"
     ls -1 "$OUT_APPIMAGE"/ 2>/dev/null
 }

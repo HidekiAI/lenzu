@@ -240,9 +240,31 @@ pub struct LocalOcrEngine {
 
 impl LocalOcrEngine {
     /// Load models from the default directory.
+    ///
+    /// `manga_ocr_rs::default_model_dir()` returns a path baked in at the
+    /// crate's build time (the build machine's `~/.cache/manga-ocr-rs/`),
+    /// which doesn't exist on a recipient's machine.  Prefer XDG / system
+    /// data dirs first; only fall back to the baked path for dev workflows
+    /// where the cache lives on the same machine that compiled the binary.
     pub fn new() -> anyhow::Result<Self> {
-        let model_dir = manga_ocr_rs::default_model_dir();
-        Self::from_path(model_dir)
+        let xdg_data = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.local/share")));
+        let candidates: Vec<std::path::PathBuf> = [
+            xdg_data.map(|d| std::path::PathBuf::from(format!("{d}/lenzu/manga-ocr"))),
+            Some(std::path::PathBuf::from("/usr/share/lenzu/manga-ocr")),
+            Some(std::path::PathBuf::from("/usr/local/share/lenzu/manga-ocr")),
+        ].into_iter().flatten().collect();
+        for c in &candidates {
+            if c.join("encoder_model.onnx").exists() && c.join("decoder_model.onnx").exists() {
+                eprintln!("[OCR] manga-ocr models resolved: {}", c.display());
+                return Self::from_path(c);
+            }
+        }
+        let baked = manga_ocr_rs::default_model_dir();
+        if baked.join("encoder_model.onnx").exists() {
+            eprintln!("[OCR] manga-ocr models from build-time cache: {} (dev workflow)", baked.display());
+        }
+        Self::from_path(baked)
     }
 
     /// Load models from a specific directory.
