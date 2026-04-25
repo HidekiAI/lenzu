@@ -324,7 +324,13 @@ fn show_about_dialog(parent: &gtk::Window) {
     dialog.content_area().pack_start(&scrolled, true, true, 0);
     dialog.show_all();
     dialog.run();
+    // close() emits the close signal so any handlers can react; hide()
+    // performs the actual dismissal (close() alone has no default action).
+    // unsafe destroy() destabilizes the parent (Electron respawns, JS
+    // errors, broken Close) so we don't use it.  Per-invocation allocation
+    // is bounded by DESTROY_WITH_PARENT.
     dialog.close();
+    dialog.hide();
 }
 
 /// Modal dialog listing all keyboard shortcuts, displayed in Japanese.
@@ -368,7 +374,12 @@ Shift＋ESC
     dialog.add_button("About", about_response);
     dialog.add_button("Close", gtk::ResponseType::Close);
     let response = dialog.run();
+    // close() emits the close signal so handlers can react; hide() performs
+    // the actual dismissal.  close() alone leaves the dialog visible behind
+    // any subsequently-opened modal.  Per-invocation leak is bounded by
+    // DESTROY_WITH_PARENT (cleaned up at app exit).
     dialog.close();
+    dialog.hide();
     if response == about_response {
         show_about_dialog(parent);
     }
