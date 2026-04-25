@@ -40,6 +40,7 @@ tags
 !assets/Screenshot-JP.png
 !assets/Screenshot-EN.png
 !packaging/lenzu/lenzu.png
+!assets/icon.png
 !docs/*.png
 !prototypes/dbnet-ocr-pipeline/docs/*.png
 !prototypes/dbnet-ocr-pipeline/docs/**/*.png
