@@ -1,4 +1,4 @@
-# lenzu 「レンズ」 (LINUX ONLY)
+# <img src="assets/icon.png" alt="" width="96" align="left">&nbsp;lenzu 「レンズ」 (LINUX ONLY)
 
 **Linux only** (X11, GTK3). No Windows or macOS support.
 
