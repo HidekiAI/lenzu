@@ -57,7 +57,7 @@
       "output": "dist-deb"
     },
     "linux": {
-      "target": ["deb"],
+      "target": ["deb", "AppImage"],
       "category": "Utility",
       "synopsis": "Transparent desktop HUD for Lenzu OCR overlay"
     },

@@ -31,6 +31,7 @@ priority = "optional"
 assets = [
     ["target/release/lenzu", "usr/bin/", "755"],
     ["../packaging/lenzu/lenzu.desktop", "usr/share/applications/", "644"],
+    ["../packaging/lenzu/lenzu.png", "usr/share/icons/hicolor/256x256/apps/lenzu.png", "644"],
     ["../README.md", "usr/share/doc/lenzu/README.md", "644"],
     ["../LICENSE", "usr/share/doc/lenzu/copyright", "644"],
     ["NOTICES.md", "usr/share/doc/lenzu/NOTICES.md", "644"],

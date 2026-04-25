@@ -4,6 +4,7 @@ Name=Lenzu
 GenericName=OCR Lens Overlay
 Comment=Transparent screen-region OCR and translation lens
 Exec=lenzu
+Icon=lenzu
 Terminal=false
 Categories=Utility;Graphics;Accessibility;
 Keywords=OCR;translate;japanese;manga;lens;
