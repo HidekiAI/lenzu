@@ -1,0 +1,141 @@
+name: release
+
+# Build the Lenzu single-bundle AppImage and publish it as a GitHub Release.
+#
+# Triggers:
+#   - push of a tag matching v*  (the canonical release path)
+#   - manual workflow_dispatch    (for dry-runs that build but skip publish)
+#
+# What it produces (attached to the release):
+#   lenzu-bundle-X.Y.Z.tar               -- one-file mega-bundle
+#   lenzu-X.Y.Z-x86_64.appimage          -- standalone AppImage
+#   lenzu-models-dbnet-0.2.0.tar.xz      -- AGPL DBNet sidecar
+#   lenzu-models-manga-ocr-0.1.0.tar.xz  -- Apache-2.0 manga-ocr sidecar
+#
+# scripts/lenzu-appimage-installer.sh hardcodes the URL pattern
+#   https://github.com/HidekiAI/lenzu/releases/download/<tag>/<asset>
+# so end users running the installer just work once the tag is pushed.
+#
+# Storage policy: only the two most recent releases are retained.  Older
+# releases are deleted at the end of every successful run (their git tags
+# are kept — only the binary assets are reclaimed).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish a release (otherwise just upload as Actions artifact)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # needed to create releases and delete old ones
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgtk-3-dev \
+            libmecab-dev mecab mecab-ipadic-utf8 \
+            libssl-dev \
+            libfuse2 \
+            curl xz-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # manga-ocr-rs's build.rs downloads ~440MB to $HOME/.cache/manga-ocr-rs
+      # the first time.  Cache it so subsequent runs are fast.
+      - name: Cache manga-ocr models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/manga-ocr-rs
+          key: manga-ocr-cache-v1
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('lenzu_server/pnpm-lock.yaml') }}
+
+      - name: Install lenzu_server JS deps
+        working-directory: lenzu_server
+        run: pnpm install --frozen-lockfile
+
+      - name: Build bundle
+        run: scripts/make-installers.sh --ci
+
+      - name: Show artifacts
+        run: ls -lh target/appimage/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lenzu-bundle
+          path: |
+            target/appimage/lenzu-bundle-*.tar
+            target/appimage/lenzu-*-x86_64.appimage
+            target/appimage/lenzu-models-*.tar.xz
+          retention-days: 14
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Use the pushed tag, or for manual dispatch derive a -dev tag from the commit.
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == "$GITHUB_REF" ]]; then
+            TAG="dev-$(git rev-parse --short HEAD)"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Automated build — see CHANGELOG / commit log for details." \
+            --prerelease \
+            target/appimage/lenzu-bundle-*.tar \
+            target/appimage/lenzu-*-x86_64.appimage \
+            target/appimage/lenzu-models-*.tar.xz
+
+      # Storage policy: keep only the 2 most recent releases.  Tags are kept
+      # (cheap git refs); only the release object + binary assets are deleted.
+      - name: Prune old releases (keep latest 2)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -t TO_DELETE < <(gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[2:] | .[].tagName')
+          for tag in "${TO_DELETE[@]}"; do
+            echo "Deleting old release: $tag (keeping git tag)"
+            gh release delete "$tag" --yes || true
+          done
