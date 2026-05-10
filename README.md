@@ -1,124 +1,55 @@
-# <img src="assets/icon.png" alt="" width="96" align="left">&nbsp;lenzu 「レンズ」 (LINUX ONLY)
+# lenzu-prototypes (formerly `HidekiAI/lenzu`)
 
-**Install:** grab `lenzu-bundle-X.Y.Z.tar` from the [latest release](https://github.com/HidekiAI/lenzu/releases/latest) — quick-start (extract, model installer, `./run.sh`) is on the release page.
+> [!IMPORTANT]
+> **Lenzu (the product) has moved to [CodeMonkeyNinja/lenzu](https://github.com/CodeMonkeyNinja/lenzu).**
+>
+> This repo is now an **archive** of the prototype crates that informed
+> Lenzu's design. The shippable product — Rust GTK lens, Electron HUD,
+> AppImage/.deb packaging, release pipeline — lives at the new home above.
 
-**Linux only** (X11, GTK3). No Windows or macOS support.
+## What's here
 
-Desktop OCR lens — a transparent floating window that follows the mouse cursor, captures the region under it on demand, and sends it to a local or remote LLM for OCR and translation. Results appear in a separate transparent overlay HUD (`lenzu_server`).
+`prototypes/` contains experimental crates that explored various corners of
+the Lenzu problem space. Several fed insights into the production crate now
+at [CodeMonkeyNinja/lenzu](https://github.com/CodeMonkeyNinja/lenzu); many
+never went anywhere and remain only as historical record.
 
-The key dif:ference from browser extensions like Yomitan/Rikaichan: this operates on **images** (GPU-rendered video, game windows, PDFs, anything on screen), not UTF-8 text.
+Notable prototypes (each has its own `README.md` under `prototypes/<name>/`):
 
-> **For readers:** Lenzu is a desktop manga reader companion for Linux.
-> Point it at any on-screen image — manga page, scanlation viewer, PDF,
-> game window — shift+click, and get Japanese OCR with furigana readings
-> in a floating overlay. Useful for learning Japanese, reading raw manga,
-> and any image-based text that browser extensions like Yomitan or
-> Rikaichan can't see (because it's not selectable text).
+- `manga-ocr-test` — manga-ocr-rs integration harness (now shipped as the
+  [`manga-ocr-rs`](https://github.com/CodeMonkeyNinja/manga-ocr-rs) crate)
+- `dbnet-test`, `dbnet-ocr-pipeline` — DBNet text-detection experiments
+- `sarashina-onnx-test`, `sarashina-vision-py` — Sarashina LLM evaluation
+- `mecab-test` — MeCab morphological analysis (now shipping as the
+  [`mecab-furigana-rs`](https://crates.io/crates/mecab-furigana-rs) crate)
+- `winit-test`, `gtk_gdk_test`, `gtk4_dialogbox_test`, `x11-gtk3-lens-test`
+  — windowing/compositor experiments (X11 vs Wayland, GTK3 vs GTK4)
+- `jp_ocr_app` — early YOLO-based detector (superseded by DBNet)
+- `paddleocr-vl-manga`, `umi-ocr-eval` — third-party OCR evaluations
+- `text-enrichment-test`, `kakasi-cli-test` — text-processing experiments
 
-![beta demo](docs/lenzu-beta-demo.gif)
+## Shared infrastructure
 
-**`--furigana_only` mode demo** — MeCab furigana only (no LLM enrichment, no translation), ~5 ms per capture after OCR:
+A few directories outside `prototypes/` survive in this archive because
+the prototypes depend on them:
 
-![--furigana_only preview](docs/Lenzu-demo-furigana-only.gif)
+- `assets/` — test fixtures (`Unit-test-{yokogaki,tategaki,tegaki}.png`,
+  `ubunchu01_02.png`, etc.) and demo media
+- `models/` — Apache 2.0 LICENSE/NOTICE for Sarashina models pulled
+  on-demand by `setup.sh`
+- `scripts/` — `setup.sh` (model fetcher), `test-ocr.sh`, `colab/`
+- `docs/` — design docs (`technical-design.{manga-ocr,phase4-predetect,sarashina}.md`),
+  benchmark log (`scores.md`), and historical planning
 
-*Preview: 15 s excerpt (T=30–45 s) at reduced framerate/resolution. For the full 3 min 24 s demo with audio, [download the MP4](assets/Lenzu-demo-2026-04-19_17.01.52.mp4).*
+## License
 
-![Japanese OCR result](assets/Screenshot-JP.png)
+Rust prototype code: MIT (see [`LICENSE`](./LICENSE)).
 
-![English translation result](assets/Screenshot-EN.png)
+Individual prototypes may depend on third-party models or libraries
+with their own licenses — notably AGPL-3.0 for Ultralytics YOLO and
+StabRise DBNet ONNX models that several prototypes pulled at runtime.
+See each prototype's `README.md` for specifics.
 
-> **Architecture note**: The Windows/winit/GTK4 experiments are archived in `prototypes/`. The active implementation uses **GTK3** (`gtk-rs` 0.18) on Linux/X11. GTK4 was evaluated and abandoned due to integration complexity — GTK3 provides everything needed and is simpler to build against. See [Technical Design](./docs/technical-design.md) for current architecture.
+---
 
-## Architecture (Current)
-
-```
-lenzu (GTK3 client)               lenzu_server (Electron)
-  floating lens window     UDP     transparent overlay HUD
-  X11 root capture       ──────►  renders translated text
-  multi-tier OCR backend           ArrowUp/Down moves position
-  manages server lifecycle
-```
-
-1. **Capture**: `x11rb` captures the X11 root window directly — bypasses GPU-accelerated and hardware-rendered windows correctly.
-2. **OCR/Translation**: Confidence-gated local-first pipeline, then multi-tier LLM fallback:
-   - **Local OCR** (`jp_detect` + `manga-ocr-rs`) — if detection confidence >= 71% AND OCR confidence >= 71%, returns immediately. No LLM, no network. Both Shift+Click and Ctrl+Shift+Click paths try this first.
-   - **Local LLM primary** (e.g. `gemma4:e2b` via ollama, 3 s) — fully on-device, no API key needed
-   - **Local LLM fallbacks** (e.g. `glm-ocr`, `qwen2.5vl`, 3 s each) — smaller OCR-specialist models
-   - **Remote fallback** (OpenRouter/Gemini 2.0 Flash, 15 s) — cloud fallback when all local paths fail
-
-   All LLM backends use the same production code path (single source of truth in `client.rs`).  
-   Streaming (`"stream": true`) keeps each request's TCP connection alive, preventing ollama's  
-   server-side write timeout from firing during slow CPU/partial-GPU inference.
-
-3. **Overlay**: Formatted text sent via UDP loopback to `lenzu_server`, an Electron transparent window pinned to screen edge.
-
-### Privacy modes
-
-| Mode                           | Config                     | API key needed?           | Images leave device? |
-| ------------------------------ | -------------------------- | ------------------------- | -------------------- |
-| Fully local                    | `OPENROUTER_API_KEY` unset | No                        | No                   |
-| Local-first                    | default                    | No (local) / Yes (remote) | Only on fallback     |
-| Remote-only (Ctrl+Shift+Click) | any                        | Yes                       | Yes                  |
-
-### Inference speed on typical hardware
-
-| Backend | VRAM | Typical latency | Confidence scoring |
-| --- | --- | --- | --- |
-| jp_detect + manga-ocr-rs (local, no LLM) | ~150 MB models | ~0.8–2 s per high-confidence crop (CPU) | Det 0-100%, OCR 0-100%; >= 71% both = pass |
-| gemma4:e2b — full GPU (8 GB+) | ~7.4 GB | ~15–30 s | N/A (LLM fallback) |
-| gemma4:e2b — partial GPU | ~2 GB GPU + CPU | 60–120 s | N/A (LLM fallback) |
-| glm-ocr — full GPU (4 GB) | ~2.2 GB | ~5–15 s | N/A (LLM fallback) |
-| Gemini 2.0 Flash (remote) | — | ~3–5 s | N/A (LLM fallback) |
-
-The local OCR path (jp_detect + manga-ocr-rs) is tried first for all capture modes. When
-both confidence scores pass the 71% gate, no LLM or network call is needed. For 4 GB VRAM
-cards, this means most clean text regions are handled in under 2 seconds without touching Ollama.
-
-## Hardware and Privacy
-
-- **Local-first by default**: `ollama` runs on the same machine; no data leaves the device unless the local models fail and you have `OPENROUTER_API_KEY` set.
-- **Cloud OCR**: Automatically falls back to OpenRouter (Gemini 2.0 Flash) when local inference times out. Disable by leaving `OPENROUTER_API_KEY` unset.
-- **Local-first OCR**: `jp_detect` (DBNet) detects text regions with per-box confidence scores; `manga-ocr-rs` recognizes text with per-result confidence. When both scores pass the 71% gate, no LLM or network is needed.
-
-## Related Crates
-
-These companion crates were developed as part of this project and are available on crates.io:
-
-- [`jp_detect`](https://crates.io/crates/jp_detect) — real-time scene text detection using DBNet (ONNX). Locates text bounding boxes in manga panels and screenshots.
-- [`manga-ocr-rs`](https://crates.io/crates/manga-ocr-rs) — Japanese manga OCR via ViT encoder + BERT decoder (ONNX). Converts image crops to Japanese text.
-- [`mecab-furigana-rs`](https://crates.io/crates/mecab-furigana-rs) — MeCab-based furigana and romaji annotation. Dictionary-accurate readings at ~5 ms per call, with word segmentation and morpheme data.
-
-See [OCR Accuracy Scores](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for unified benchmark results across all engines and prototypes.
-
-## Libraries & Dependencies
-
-- [`gtk` 0.18](https://crates.io/crates/gtk) — GTK3 bindings (gtk-rs). **GTK3, not GTK4.**
-- [`x11rb`](https://crates.io/crates/x11rb) — X11 protocol (screen capture)
-- [`cairo-rs`](https://crates.io/crates/cairo-rs) — 2D drawing
-- [`pango`](https://crates.io/crates/pango) / [`pangocairo`](https://crates.io/crates/pangocairo) — text layout and CJK rendering
-- [`reqwest`](https://crates.io/crates/reqwest) — HTTP client (OpenRouter API)
-- [`isolang`](https://crates.io/crates/isolang) — ISO 639-3 language codes
-- Electron (`lenzu_server`) — transparent overlay window
-
-## Build & Run
-
-```bash
-# 1. Install system dependencies
-./scripts/setup.sh
-
-# 2. Set API key
-export OPENROUTER_API_KEY=sk-your-key-here
-
-# 3. Build and run (builds lenzu_server on first run)
-./scripts/run.sh
-```
-
-![Lenzu help screen (Shift+H)](docs/HELP.png)
-
-See [`lenzu/README.md`](lenzu/README.md) for full configuration reference and controls.
-
-## TODO
-
-- GPU acceleration for jp_detect + manga-ocr-rs (CUDA EP) — would reduce per-crop latency from seconds to milliseconds
-- Wayland support via xdg-desktop-portal
-- Multi-monitor capture at non-zero offsets
+*Active product home: [CodeMonkeyNinja/lenzu](https://github.com/CodeMonkeyNinja/lenzu)*

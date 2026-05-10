@@ -1,8 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-  "lenzu",
-  # lenzu_client/src-tauri: deprecated — Tauri/WebKit2GTK does not support alpha/transparency correctly on X11; replaced by lenzu_server (Electron)
   "prototypes/gtk4_dialogbox_test",
   "prototypes/gtk_gdk_test",
   "prototypes/kakasi-cli-test",
