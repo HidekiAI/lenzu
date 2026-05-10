@@ -19,21 +19,28 @@ use manga_ocr_test::MangaOcr;
 use std::path::Path;
 use std::time::Instant;
 
-const FIXTURE_YOKOGAKI: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/Unit-test-yokogaki.png");
-const FIXTURE_TATEGAKI: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/Unit-test-tategaki.png");
-const FIXTURE_TEGAKI: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/Unit-test-tegaki.png");
+const FIXTURE_YOKOGAKI: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/Unit-test-yokogaki.png"
+);
+const FIXTURE_TATEGAKI: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/Unit-test-tategaki.png"
+);
+const FIXTURE_TEGAKI: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/Unit-test-tegaki.png"
+);
 
-const FIXTURE_MANGA: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ubunchu01_02.png");
-const FIXTURE_MANGA_JSON: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ubunchu01_02.json");
+const FIXTURE_MANGA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ubunchu01_02.png");
+const FIXTURE_MANGA_JSON: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/ubunchu01_02.json"
+);
 
 const EXPECTED_YOKOGAKI: &str = "データを正確に読み取る";
-const EXPECTED_TATEGAKI:   &str = "『言語モデルのテスト』";
-const EXPECTED_TEGAKI:     &str = "手書きの文字サンプル";
+const EXPECTED_TATEGAKI: &str = "『言語モデルのテスト』";
+const EXPECTED_TEGAKI: &str = "手書きの文字サンプル";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -58,17 +65,26 @@ fn has_japanese(s: &str) -> bool {
 fn normalise_jp(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_whitespace())
-        .map(|c| match c { '！' => '!', '？' => '?', _ => c })
+        .map(|c| match c {
+            '！' => '!',
+            '？' => '?',
+            _ => c,
+        })
         .collect()
 }
 
 fn assert_ocr_exact(label: &str, ocr: &MangaOcr, path: &str, expected: &str) {
     let img = image::open(path).unwrap_or_else(|e| panic!("{label}: open {path}: {e}"));
     let t = Instant::now();
-    let text = ocr.recognize(&img).unwrap_or_else(|e| panic!("{label}: OCR failed: {e}"));
+    let text = ocr
+        .recognize(&img)
+        .unwrap_or_else(|e| panic!("{label}: OCR failed: {e}"));
     let ms = t.elapsed().as_millis();
     println!("{label} ({ms} ms): {text:?}  (expected: {expected:?})");
-    assert_eq!(text, expected, "{label}: OCR output does not match ground truth");
+    assert_eq!(
+        text, expected,
+        "{label}: OCR output does not match ground truth"
+    );
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -97,17 +113,20 @@ fn test_tategaki() {
         return;
     }
     let ocr = load_ocr();
-    let img = image::open(FIXTURE_TATEGAKI)
-        .unwrap_or_else(|e| panic!("tategaki: open: {e}"));
+    let img = image::open(FIXTURE_TATEGAKI).unwrap_or_else(|e| panic!("tategaki: open: {e}"));
     let t = Instant::now();
-    let text = ocr.recognize(&img)
+    let text = ocr
+        .recognize(&img)
         .unwrap_or_else(|e| panic!("tategaki: OCR failed: {e}"));
     let ms = t.elapsed().as_millis();
     println!("tategaki ({ms} ms): {text:?}  (expected: {EXPECTED_TATEGAKI:?})");
     // Accept 「」 variant — model reads correct text but may confuse bracket style.
     let accepted = text == EXPECTED_TATEGAKI
         || text == EXPECTED_TATEGAKI.replace('『', "「").replace('』', "」");
-    assert!(accepted, "tategaki: got {text:?}, expected {EXPECTED_TATEGAKI:?} (or 「」bracket variant)");
+    assert!(
+        accepted,
+        "tategaki: got {text:?}, expected {EXPECTED_TATEGAKI:?} (or 「」bracket variant)"
+    );
 }
 
 /// Tegaki (handwritten-style) text — `手書きの文字サンプル`.
@@ -129,8 +148,7 @@ fn test_yokogaki_is_japanese() {
         eprintln!("skip: models not found");
         return;
     }
-    let img = image::open(FIXTURE_YOKOGAKI)
-        .expect("open yokogaki fixture");
+    let img = image::open(FIXTURE_YOKOGAKI).expect("open yokogaki fixture");
     let ocr = load_ocr();
     let text = ocr.recognize(&img).expect("OCR failed");
     assert!(!text.is_empty(), "OCR returned empty string");
@@ -198,14 +216,20 @@ fn test_ubunchu_annotations() {
         let desc = ann["description"].as_str().unwrap_or("?");
 
         let t = Instant::now();
-        let result = ocr.recognize(&crop).unwrap_or_else(|e| format!("ERROR: {e}"));
+        let result = ocr
+            .recognize(&crop)
+            .unwrap_or_else(|e| format!("ERROR: {e}"));
         let ms = t.elapsed().as_millis();
 
         let expected = normalise_jp(expected_raw);
-        let actual   = normalise_jp(&result);
+        let actual = normalise_jp(&result);
 
         let ok = actual == expected;
-        if ok { passed += 1; } else { failed += 1; }
+        if ok {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
 
         println!(
             "[{}] ({ms} ms) {desc}\n  expected: {expected_raw:?}\n  got:      {:?}",
@@ -214,8 +238,14 @@ fn test_ubunchu_annotations() {
         );
     }
 
-    println!("\nubunchu annotations: {passed} passed, {failed} failed out of {}", annotations.len());
-    assert_eq!(failed, 0, "{failed} annotation(s) did not match ground truth");
+    println!(
+        "\nubunchu annotations: {passed} passed, {failed} failed out of {}",
+        annotations.len()
+    );
+    assert_eq!(
+        failed, 0,
+        "{failed} annotation(s) did not match ground truth"
+    );
 }
 
 // ── normalise_jp unit tests ──────────────────────────────────────────────────
@@ -238,7 +268,10 @@ fn test_normalise_jp_folds_fullwidth_punctuation() {
 #[test]
 fn test_normalise_jp_passthrough() {
     assert_eq!(normalise_jp("うぶんちゅ"), "うぶんちゅ");
-    assert_eq!(normalise_jp("データを正確に読み取る"), "データを正確に読み取る");
+    assert_eq!(
+        normalise_jp("データを正確に読み取る"),
+        "データを正確に読み取る"
+    );
 }
 
 #[test]
