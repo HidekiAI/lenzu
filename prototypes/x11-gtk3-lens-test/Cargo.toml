@@ -9,7 +9,7 @@ gtk = "0.18"
 gdk = "0.18"
 glib = "0.18"
 cairo-rs = "0.18"
-gdk-pixbuf = "0.18"
+gdk-pixbuf = "0.19"
 x11rb = "0.13"
 
 # AI and Math (CRITICAL: These versions must match)
