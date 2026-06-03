@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 ort        = { version = "2.0.0-rc.12", features = ["ndarray", "half"] }
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
-ndarray    = "0.17"
+ndarray    = "0.15"
 half       = { version = "2.4", features = ["num-traits"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
