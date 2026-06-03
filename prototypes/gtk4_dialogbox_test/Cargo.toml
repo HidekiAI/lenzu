@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 async-channel = "2.2.1"
 gtk4 = { version = "0.8.1", features = ["v4_14"] }
-tokio = { version = "1.37.0", features = [
+tokio = { version = "1.52.3", features = [
     #"test-util",
     #"time",
     #"fs",
