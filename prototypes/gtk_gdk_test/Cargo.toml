@@ -33,5 +33,5 @@ version = "0.8.1"
 features = ["win32", "windows"]
 
 [target.'cfg(linux)'.dependencies.gdk4-wayland]
-version = "0.8.1"
+version = "0.11.0"
 features = ["wayland-backend", "wayland-client"]
