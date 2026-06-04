@@ -2441,7 +2441,7 @@ dependencies = [
  "glib 0.18.5",
  "gtk",
  "image 0.25.10",
- "pango 0.18.3",
+ "pango 0.22.6",
  "pangocairo",
  "reqwest",
  "serde",
