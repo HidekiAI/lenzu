@@ -116,7 +116,6 @@ struct AppState {
     api_key: String,
     is_loading: bool,
     spinner_angle: f64,
-    flash_alpha: f64,
 }
 
 fn build_ui(application: &gtk4::Application) {
@@ -134,7 +133,6 @@ fn build_ui(application: &gtk4::Application) {
         api_key,
         is_loading: false,
         spinner_angle: 0.0,
-        flash_alpha: 0.0,
     }));
 
     let window = gtk4::ApplicationWindow::new(application);
@@ -177,12 +175,6 @@ fn build_ui(application: &gtk4::Application) {
         if let Some(ref pb) = s.pixels {
             cr.set_source_pixbuf(pb, 0.0, 0.0);
             cr.paint().ok();
-        }
-
-        if s.flash_alpha > 0.0 {
-            cr.set_source_rgba(1.0, 1.0, 1.0, s.flash_alpha);
-            cr.rectangle(0.0, 0.0, LENS_SIZE as f64, LENS_SIZE as f64);
-            cr.fill().ok();
         }
 
         cr.set_source_rgb(0.0, 1.0, 0.8);
@@ -263,14 +255,6 @@ fn build_ui(application: &gtk4::Application) {
             needs_redraw = true;
         }
 
-        if s.flash_alpha > 0.0 {
-            s.flash_alpha -= 0.1;
-            if s.flash_alpha < 0.0 {
-                s.flash_alpha = 0.0;
-            }
-            needs_redraw = true;
-        }
-
         if needs_redraw {
             window_anim.queue_draw();
         }
@@ -299,52 +283,57 @@ fn build_ui(application: &gtk4::Application) {
                         s.last_capture = Instant::now();
                         s.status = "CAPTURING...".to_string();
                         s.is_loading = true;
-                        s.flash_alpha = 1.0;
-                        window_poll.queue_draw();
                     }
 
                     window_poll.set_visible(false);
                     while glib::MainContext::default().iteration(false) {}
-                    std::thread::sleep(Duration::from_millis(400));
 
-                    if let Ok(raw) = capture_x11(
-                        win_x.max(0),
-                        win_y.max(0),
-                        LENS_SIZE as u32,
-                        LENS_SIZE as u32,
-                    ) {
-                        save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
-                        let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
+                    let state_cap = state_poll.clone();
+                    let window_cap = window_poll.clone();
+                    let tx_cap = tx.clone();
+                    glib::timeout_add_local(Duration::from_millis(400), move || {
+                        if let Ok(raw) = capture_x11(
+                            win_x.max(0),
+                            win_y.max(0),
+                            LENS_SIZE as u32,
+                            LENS_SIZE as u32,
+                        ) {
+                            save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
+                            let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
 
-                        let mut rgb = raw;
-                        for chunk in rgb.chunks_exact_mut(4) {
-                            chunk.swap(0, 2);
+                            let mut rgb = raw;
+                            for chunk in rgb.chunks_exact_mut(4) {
+                                chunk.swap(0, 2);
+                            }
+                            let api_key = {
+                                let mut s = state_cap.borrow_mut();
+                                s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
+                                    rgb,
+                                    gdk_pixbuf::Colorspace::Rgb,
+                                    true,
+                                    8,
+                                    LENS_SIZE,
+                                    LENS_SIZE,
+                                    LENS_SIZE * 4,
+                                ));
+                                s.api_key.clone()
+                            };
+                            window_cap.set_visible(true);
+                            window_cap.queue_draw();
+
+                            let tx_thread = tx_cap.clone();
+                            std::thread::spawn(move || {
+                                let result = call_api(&api_key, &b64).map_err(|e| e.to_string());
+                                let _ = tx_thread.send_blocking(result);
+                            });
+                        } else {
+                            let mut s = state_cap.borrow_mut();
+                            s.is_loading = false;
+                            s.status = "Capture Failed".to_string();
+                            window_cap.set_visible(true);
                         }
-                        let mut s = state_poll.borrow_mut();
-                        s.pixels = Some(gdk_pixbuf::Pixbuf::from_mut_slice(
-                            rgb,
-                            gdk_pixbuf::Colorspace::Rgb,
-                            true,
-                            8,
-                            LENS_SIZE,
-                            LENS_SIZE,
-                            LENS_SIZE * 4,
-                        ));
-                        window_poll.set_visible(true);
-                        window_poll.queue_draw();
-
-                        let api_key = s.api_key.clone();
-                        let tx_clone = tx.clone();
-                        std::thread::spawn(move || {
-                            let result = call_api(&api_key, &b64).map_err(|e| e.to_string());
-                            let _ = tx_clone.send_blocking(result);
-                        });
-                    } else {
-                        let mut s = state_poll.borrow_mut();
-                        s.is_loading = false;
-                        s.status = "Capture Failed".to_string();
-                        window_poll.set_visible(true);
-                    }
+                        glib::ControlFlow::Break
+                    });
                 }
             }
         }
