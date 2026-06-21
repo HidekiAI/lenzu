@@ -23,7 +23,7 @@ struct Detection {
 struct AppState {
     pixels: Option<gdk_pixbuf::Pixbuf>,
     info_text: String,
-    model: Session,
+    model: Option<Session>,
     last_capture: Instant,
     detection: Option<Detection>,
 }
@@ -46,17 +46,22 @@ const LABELS: &[&str] = &[
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     gtk::init().expect("Failed to initialize GTK.");
 
-    let model_path = fs::read_dir(".")?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| {
-            p.extension().and_then(|s| s.to_str()) == Some("onnx")
-                && fs::metadata(p).map(|m| m.len()).unwrap_or(0) > 1_000_000
+    let model = std::env::var("LENZU_ONNX_MODEL")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            fs::read_dir(".").ok().and_then(|entries| {
+                entries.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| {
+                    p.extension().and_then(|s| s.to_str()) == Some("onnx")
+                        && fs::metadata(p).map(|m| m.len()).unwrap_or(0) > 1_000_000
+                })
+            })
         })
-        .expect("No valid .onnx file found (>1MB)!");
-
-    println!("--- LENS STARTUP ---");
-    let model = Session::builder()?.commit_from_file(&model_path)?;
+        .and_then(|p| {
+            println!("--- LENS STARTUP ---");
+            Session::builder().ok()?.commit_from_file(&p).ok()
+        });
 
     let state = Rc::new(RefCell::new(AppState {
         pixels: None,
@@ -72,6 +77,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window.set_keep_above(true);
     window.set_app_paintable(true);
 
+    if let Some(screen) = gtk::prelude::WidgetExt::screen(&window) {
+        if let Some(visual) = screen.rgba_visual() {
+            window.set_visual(Some(&visual));
+        }
+    }
+
     let state_draw = state.clone();
     window.connect_draw(move |_, cr| {
         let s = match state_draw.try_borrow() {
@@ -79,8 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => return glib::Propagation::Proceed,
         };
         let size = LENS_SIZE as f64;
-        cr.set_source_rgb(0.0, 0.0, 0.0);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        cr.set_operator(cairo::Operator::Source);
         cr.paint().ok();
+        cr.set_operator(cairo::Operator::Over);
 
         if let Some(ref pb) = s.pixels {
             cr.set_source_pixbuf(pb, 0.0, 0.0);
@@ -145,7 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         save_debug_image(&raw);
 
-                        s.detection = run_inference(&mut s.model, &raw);
+                        s.detection = s.model.as_mut().and_then(|m| run_inference(m, &raw));
                         s.info_text = s
                             .detection
                             .as_ref()

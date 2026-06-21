@@ -75,7 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state_draw = state.clone();
     window.connect_draw(move |win, cr| {
-        let s = state_draw.borrow();
+        let s = match state_draw.try_borrow() {
+            Ok(s) => s,
+            Err(_) => return glib::Propagation::Proceed,
+        };
 
         cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
         cr.set_operator(cairo::Operator::Source);
@@ -209,26 +212,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if modifier.contains(gdk::ModifierType::SHIFT_MASK)
             && modifier.contains(gdk::ModifierType::BUTTON1_MASK)
         {
-            let mut s = state_main.borrow_mut();
-            if s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading {
+            let should_capture = state_main
+                .try_borrow()
+                .is_ok_and(|s| s.last_capture.elapsed() > Duration::from_secs(1) && !s.is_loading);
+            if !should_capture {
+                return glib::ControlFlow::Continue;
+            }
+            // Drop borrow before blocking sequence, set capture flags
+            {
+                let mut s = state_main.borrow_mut();
                 s.last_capture = Instant::now();
                 s.status = "CAPTURING...".to_string();
                 s.is_loading = true;
-                s.flash_alpha = 1.0; // TRIGGER FLASH
+                s.flash_alpha = 1.0;
                 window_main.queue_draw();
+            }
 
-                window_main.hide();
-                while gtk::events_pending() {
-                    gtk::main_iteration();
-                }
-                std::thread::sleep(Duration::from_millis(400));
+            window_main.hide();
+            while gtk::events_pending() {
+                gtk::main_iteration();
+            }
+            std::thread::sleep(Duration::from_millis(400));
 
-                if let Ok(raw) = capture_x11(
-                    win_x.max(0),
-                    win_y.max(0),
-                    LENS_SIZE as u32,
-                    LENS_SIZE as u32,
-                ) {
+            let capture_result = capture_x11(
+                win_x.max(0),
+                win_y.max(0),
+                LENS_SIZE as u32,
+                LENS_SIZE as u32,
+            );
+            let mut s = state_main.borrow_mut();
+            match capture_result {
+                Ok(raw) => {
                     save_debug_image(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
                     let b64 = encode_to_base64(&raw, LENS_SIZE as u32, LENS_SIZE as u32);
 
@@ -254,7 +268,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let result = call_api(&api_key, &b64).map_err(|e| e.to_string());
                         let _ = tx_clone.send(result);
                     });
-                } else {
+                }
+                Err(_) => {
                     s.is_loading = false;
                     s.status = "Capture Failed".to_string();
                     window_main.show();
