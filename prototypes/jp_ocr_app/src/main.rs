@@ -208,6 +208,7 @@ fn build_ui(application: &gtk4::Application) {
             cr.rotate(s.spinner_angle);
             cr.set_line_width(3.0);
             cr.set_source_rgb(0.0, 1.0, 0.8);
+            cr.new_sub_path();
             cr.arc(0.0, 0.0, 8.0, 0.0, 1.5 * std::f64::consts::PI);
             cr.stroke().ok();
             cr.restore().ok();
