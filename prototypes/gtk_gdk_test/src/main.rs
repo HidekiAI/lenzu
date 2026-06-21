@@ -2,12 +2,7 @@ mod dump_image;
 
 use std::sync::OnceLock;
 
-use crate::glib::clone;
-use gtk4::{
-    glib,
-    prelude::*,
-    Box, Button, Image, Orientation, Picture,
-};
+use gtk4::{glib, prelude::*, Box, Button, Image, Orientation, Picture};
 use tokio::runtime::Runtime;
 
 const APP_ID: &str = "tld.mydomain.lenzu.prototype.gtk_gdk_test";
@@ -49,7 +44,9 @@ fn build_ui(application: &gtk4::Application) {
     let parent_box = Box::new(Orientation::Vertical, 0);
 
     // as Picture
-    let picture = Picture::for_filename(image_path);
+    let picture = Picture::new();
+    picture.set_filename(Some(image_path));
+    picture.set_visible(true);
     let pic_paintable_dim = match picture.paintable() {
         Some(paintable) => (paintable.intrinsic_width(), paintable.intrinsic_height()),
         None => (0, 0),
@@ -94,23 +91,21 @@ fn build_ui(application: &gtk4::Application) {
         .build();
     button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
-        runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
-            sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
-        }));
+        let sender = sender_quit_signal.clone();
+        runtime().spawn(async move {
+            sender.send(true).await.expect("Signal channel is unopenend");
+        });
         println!("Signal sent to quit...");
     });
     parent_box.append(&button_quit);
-    glib::spawn_future_local(clone!(@weak button_quit => async move {
+    glib::spawn_future_local(async move {
         while let Ok(quit_signaled) = receiver_quit_signal.recv().await {
             if quit_signaled {
-                button_quit.set_label("Quitting...");
-
-                // quit applications
-                std::process::exit(0); // for now, brute-force quit, in future will elegantly signal for exit...
-                //break;
+                println!("Quitting...");
+                std::process::exit(0);
             }
         }
-    }));
+    });
 
     //// let gtk4::Box hold strong ref to the button(s)
     //let my_box: Box = Box::builder().orientation(Orientation::Vertical).build();

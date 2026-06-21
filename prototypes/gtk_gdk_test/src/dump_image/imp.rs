@@ -1,8 +1,4 @@
-use gtk4::{
-    gdk,
-    glib,
-    subclass::prelude::*,
-};
+use gtk4::{gdk, glib, subclass::prelude::*};
 
 #[derive(Default)]
 pub struct MyPaintableCanvas {}
@@ -19,7 +15,7 @@ impl ObjectImpl for MyPaintableCanvas {}
 impl PaintableImpl for MyPaintableCanvas {
     fn flags(&self) -> gdk::PaintableFlags {
         // Fixed size
-        gdk::PaintableFlags::SIZE
+        gdk::PaintableFlags::STATIC_SIZE
     }
 
     fn intrinsic_width(&self) -> i32 {

@@ -8,7 +8,7 @@ members = [
   # during glibc init. Use `cargo test -p kakasi-static-libs` to test standalone.
   # "prototypes/kakasi-static-libs",
   "prototypes/mecab-test",
-  "prototypes/x11-gtk3-lens-test",
+  "prototypes/x11-gtk-lens-test",
   "prototypes/jp_ocr_app",
   "prototypes/winit-test",
   "prototypes/dbnet-test",

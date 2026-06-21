@@ -2,7 +2,7 @@ use gtk4::{
     glib::{self, clone},
     prelude::*,
 }; // Assumes that gtk4 is in the Cargo.toml file is set to features=["v4_14"] (meaning 4.10 methods such as GtkDialog is deprecated and replaced with GtkWindow)
-use std::{borrow::Borrow, cell::RefCell, rc::Rc, sync::OnceLock, time::SystemTime};
+use std::{cell::RefCell, rc::Rc, sync::OnceLock, time::SystemTime};
 use tokio::runtime::Runtime;
 
 fn tokio_runtime() -> &'static Runtime {
@@ -52,13 +52,13 @@ fn build_ui(app: &gtk4::Application) {
         .build();
     let _signal_id = button_quit.connect_clicked(move |_| {
         println!("Signal quitting...");
-        tokio_runtime().spawn(clone!(@strong sender_quit_signal  =>async move {
-            sender_quit_signal .send(true) .await.expect("Signal channel is unopenend");
+        tokio_runtime().spawn(clone!(#[strong] sender_quit_signal, async move {
+            sender_quit_signal.send(true).await.expect("Signal channel is unopenend");
         }));
         println!("Signal sent to quit...");
     });
     parent_box.append(&button_quit);
-    glib::spawn_future_local(clone!(@weak button_quit => async move {
+    glib::spawn_future_local(clone!(#[weak] button_quit, async move {
         while let Ok(quit_signaled) = receiver_quit_signal.recv().await {
             if quit_signaled {
                 button_quit.set_label("Quitting...");
@@ -110,15 +110,15 @@ fn build_ui(app: &gtk4::Application) {
         let _signal_id = close_button.connect_clicked(move |_close_button_self| {
             println!("Signal closing dialog...");
             // signal parent to close
-            let _join_handle = tokio_runtime().spawn(clone!(@strong dialog_close_signal_sender => async move {
+            let _join_handle = tokio_runtime().spawn(clone!(#[strong] dialog_close_signal_sender, async move {
                 dialog_close_signal_sender.send(true).await.expect("Failed to send close signal");
             }));
         });
 
         // Similar to sender, it's OK to move ownership of receiver into the closure (if needed) since it's the only receiver/consumer 
         let dbox_cloned = dialogbox_rc.clone(); // increment ref-count
-        let _join_handle = glib::spawn_future_local(clone!(@weak close_button => async move {
-            while let Ok(close_signaled) = dialog_close_signal_receiver.borrow().recv().await {
+        let _join_handle = glib::spawn_future_local(clone!(#[weak] close_button, async move {
+            while let Ok(close_signaled) = dialog_close_signal_receiver.recv().await {
                 if close_signaled {
                     println!("Closing dialog...");
                     dbox_cloned.clone().borrow_mut().close();

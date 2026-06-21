@@ -4,22 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# UI and Screen Capture
-gtk = { version = "0.18", features = ["v3_24"] }
-gdk = { version = "0.18", features = ["v3_24"] }
-glib = "0.18"
-gdk-pixbuf = "0.18"
-cairo-rs = "0.18"
-pango = "0.18"
-pangocairo = "0.18"
-x11rb = "0.13"
+gtk4 = { version = "0.11", features = ["v4_14"] }
+gdk4 = "0.11"
+gdk4-x11 = "0.11"
+glib = "0.22"
+gdk-pixbuf = "0.22"
+cairo-rs = "0.22"
+pango = "0.22"
+pangocairo = "0.22"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
 
-# Networking and API
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "blocking", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Utilities
+async-channel = "2.2.1"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 arboard = "3.4"

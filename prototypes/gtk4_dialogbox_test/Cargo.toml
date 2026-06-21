@@ -3,16 +3,9 @@ name = "gtk4_dialogbox_test"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 async-channel = "2.2.1"
-gtk4 = { version = "0.8.1", features = ["v4_14"] }
+gtk4 = { version = "0.11", features = ["v4_14"] }
 tokio = { version = "1.52.3", features = [
-    #"test-util",
-    #"time",
-    #"fs",
-    #"full",
-    "rt-multi-thread", # for tokio::runtime::Runtime
-    #"macros",
+    "rt-multi-thread",
 ] }

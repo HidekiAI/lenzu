@@ -1,0 +1,18 @@
+[package]
+name = "x11-gtk-lens-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk4 = { version = "0.11", features = ["v4_14"] }
+gdk4 = "0.11"
+gdk4-x11 = "0.11"
+glib = "0.22"
+cairo-rs = "0.22"
+gdk-pixbuf = "0.22"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+
+ort = { version = "2.0.0-rc.12", features = ["ndarray", "half"] }
+ndarray = "0.17"
+half = { version = "2.4", features = ["num-traits"] }
+image = "0.24"
