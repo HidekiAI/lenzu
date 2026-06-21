@@ -7,7 +7,7 @@ edition = "2021"
 # GUI and System
 gtk = "0.18"
 gdk = "0.18"
-glib = "0.18"
+glib = "0.22"
 cairo-rs = "0.18"
 gdk-pixbuf = "0.18"
 x11rb = "0.13"
