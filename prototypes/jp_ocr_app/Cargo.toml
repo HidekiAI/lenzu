@@ -8,7 +8,7 @@ edition = "2021"
 gtk = { version = "0.18", features = ["v3_24"] }
 gdk = { version = "0.18", features = ["v3_24"] }
 glib = "0.18"
-gdk-pixbuf = "0.19"
+gdk-pixbuf = "0.18"
 cairo-rs = "0.18"
 pango = "0.18"
 pangocairo = "0.18"
