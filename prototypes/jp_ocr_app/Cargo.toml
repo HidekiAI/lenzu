@@ -11,7 +11,7 @@ glib = "0.18"
 gdk-pixbuf = "0.18"
 cairo-rs = "0.18"
 pango = "0.18"
-pangocairo = "0.18"
+pangocairo = "0.22"
 x11rb = "0.13"
 
 # Networking and API
