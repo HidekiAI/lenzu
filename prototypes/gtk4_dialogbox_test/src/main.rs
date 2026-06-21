@@ -117,14 +117,14 @@ fn build_ui(app: &gtk4::Application) {
 
         // Similar to sender, it's OK to move ownership of receiver into the closure (if needed) since it's the only receiver/consumer 
         let dbox_cloned = dialogbox_rc.clone(); // increment ref-count
-        let _join_handle = glib::spawn_future_local(clone!(#[weak] close_button, async move {
+        let _join_handle = glib::spawn_future_local(async move {
             while let Ok(close_signaled) = dialog_close_signal_receiver.recv().await {
                 if close_signaled {
                     println!("Closing dialog...");
                     dbox_cloned.clone().borrow_mut().close();
                 }
             }
-        }));
+        });
         dialogbox_rc.clone().borrow_mut().set_child(Some(&close_button));
 
         // replace glib::timeout_add_seconds() with glib::timeout_add_seconds_local().
