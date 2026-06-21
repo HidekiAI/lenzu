@@ -27,6 +27,7 @@ struct Config {
     num_key_value_heads: usize,
     head_dim: usize,
     eos_token_id: u32,
+    #[allow(dead_code)]
     bos_token_id: u32,
     vocab_size: usize,
     dtype: String, // "float16" | "float32"
@@ -118,9 +119,7 @@ fn m1_tokenize(tok: &Tokenizer, text: &str) -> Result<()> {
         println!("  {:>6}  {}", id, piece);
     }
 
-    let decoded = tok
-        .decode(ids, false)
-        .map_err(|e| anyhow!("decode: {e}"))?;
+    let decoded = tok.decode(ids, false).map_err(|e| anyhow!("decode: {e}"))?;
     println!("\ndecoded: {decoded:?}");
 
     let input_trim = text.trim();
@@ -152,9 +151,7 @@ fn m2_forward(model_dir: &Path, config: &Config, tok: &Tokenizer, text: &str) ->
         println!("  out: {:30} {:?}", out.name(), out.dtype());
     }
 
-    let enc = tok
-        .encode(text, true)
-        .map_err(|e| anyhow!("encode: {e}"))?;
+    let enc = tok.encode(text, true).map_err(|e| anyhow!("encode: {e}"))?;
     let ids: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
     let n = ids.len();
     println!("\nprompt tokens: {n}");
@@ -176,7 +173,9 @@ fn m2_forward(model_dir: &Path, config: &Config, tok: &Tokenizer, text: &str) ->
         (shape, id, val)
     };
 
-    let piece = tok.id_to_token(best_id as u32).unwrap_or_else(|| "?".into());
+    let piece = tok
+        .id_to_token(best_id as u32)
+        .unwrap_or_else(|| "?".into());
     println!("\nlogits shape: {:?}", shape);
     println!("argmax next token: id={best_id} ({piece:?}) logit={best_logit:.3}");
 
@@ -189,7 +188,8 @@ fn build_inputs<'a>(
     ids: &[i64],
 ) -> Result<Vec<(std::borrow::Cow<'a, str>, DynValue)>> {
     let n = ids.len();
-    let input_ids_val = Value::from_array(([1usize, n], ids.to_vec().into_boxed_slice()))?.into_dyn();
+    let input_ids_val =
+        Value::from_array(([1usize, n], ids.to_vec().into_boxed_slice()))?.into_dyn();
     let attn_val = Value::from_array(([1usize, n], vec![1i64; n].into_boxed_slice()))?.into_dyn();
     let pos_val = Value::from_array((
         [1usize, n],
@@ -203,7 +203,12 @@ fn build_inputs<'a>(
         ("position_ids".into(), pos_val),
     ];
 
-    let kv_shape = [1i64, config.num_key_value_heads as i64, 0, config.head_dim as i64];
+    let kv_shape = [
+        1i64,
+        config.num_key_value_heads as i64,
+        0,
+        config.head_dim as i64,
+    ];
     for i in 0..config.num_hidden_layers {
         let (k, v) = if config.is_fp16() {
             (
@@ -222,11 +227,7 @@ fn build_inputs<'a>(
     Ok(inputs)
 }
 
-fn argmax_last<T: Copy>(
-    data: &[T],
-    shape: &[i64],
-    to_f32: impl Fn(&T) -> f32,
-) -> (usize, f32) {
+fn argmax_last<T: Copy>(data: &[T], shape: &[i64], to_f32: impl Fn(&T) -> f32) -> (usize, f32) {
     let seq = shape[1] as usize;
     let vocab = shape[2] as usize;
     let start = (seq - 1) * vocab;
@@ -257,7 +258,9 @@ fn m3_generate(
     let mut session = Session::builder()?.commit_from_file(model_dir.join("model.onnx"))?;
     let load_elapsed = t_load.elapsed();
 
-    let enc = tok.encode(prompt, true).map_err(|e| anyhow!("encode: {e}"))?;
+    let enc = tok
+        .encode(prompt, true)
+        .map_err(|e| anyhow!("encode: {e}"))?;
     let prompt_ids: Vec<i64> = enc.get_ids().iter().map(|&x| x as i64).collect();
     let n_prompt = prompt_ids.len();
     println!("prompt: {n_prompt} tokens");
