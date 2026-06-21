@@ -256,6 +256,12 @@ fn build_ui(application: &gtk4::Application) {
         }
 
         if needs_redraw {
+            // TODO(proto): spinner animates but does not visually rotate during
+            // the OCR wait. Likely caused by set_visible(false/true) resetting
+            // GTK's frame-scheduling state so queue_draw() on the re-shown
+            // window does not trigger the draw function reliably. Lenzu avoids
+            // this by never hiding the window (moves off-screen instead).
+            // See prototypes-desktop-issues.md §2k.
             window_anim.queue_draw();
         }
         glib::ControlFlow::Continue
