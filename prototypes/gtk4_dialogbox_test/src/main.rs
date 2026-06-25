@@ -149,14 +149,13 @@ fn build_ui(app: &gtk4::Application) {
         let _signal_id = dialogbox_rc
             .clone()
             .borrow_mut()
-            .connect_close_request(move |dialog_borrowed| {
+            .connect_close_request(move |_dialog_borrowed| {
                 let elapsed = start_time.elapsed().unwrap().as_secs();
                 status_label_cloned_cloned
                     .clone()
                     .borrow_mut()
                     .set_label(&format!("Dialog was open for: {} seconds", elapsed));
-                dialog_borrowed.close();
-                gtk4::glib::signal::Propagation::Stop
+                gtk4::glib::signal::Propagation::Proceed
             });
 
         dialogbox_rc.borrow_mut().present();
