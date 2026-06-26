@@ -166,7 +166,7 @@ The confidence-gated pipeline is now integrated into `lenzu_client`:
 - Below the gate => falls through to Ollama -> local fallbacks -> free remote -> paid remote
 - manga-ocr-rs models are loaded once at startup and shared across threads via `Arc`
 
-See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for the full cross-engine accuracy comparison including before/after rescaling.
+See [unified benchmark](https://github.com/CodeMonkeyNinja/lenzu/wiki/scores) for the full cross-engine accuracy comparison including before/after rescaling.
 
 ### Remaining optimizations
 

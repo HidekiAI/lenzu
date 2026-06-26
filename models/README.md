@@ -53,16 +53,7 @@ To skip the Sarashina download (e.g. on a metered connection):
 ./scripts/setup.sh --skip-sarashina
 ```
 
-## Option 2: Manual Download from Hugging Face
-
-Download the pre-exported ONNX file from the HidekiAI Hugging Face repository.
-
-1. Visit https://huggingface.co/HidekiAI/sarashina2.2-mini-onnx
-2. Go to the **Files and versions** tab.
-3. Download the bundled zip.
-4. Extract into this `models/` directory so the layout matches the tree above.
-
-## Option 3: Manual Generation (DIY)
+## Option 2: Manual Generation (DIY)
 
 Forge the ONNX file from the original weights on a GPU.
 

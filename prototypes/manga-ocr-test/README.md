@@ -42,7 +42,7 @@ Rescaled test images (manga-bubble-realistic sizes).
 instead of double `『』` — the bracket style is ambiguous at this resolution.
 When cropped tighter by DBNet (142×262), manga-ocr-rs returns the correct `『』`.
 
-See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for comparison across all OCR engines.
+See [unified benchmark](https://github.com/CodeMonkeyNinja/lenzu/wiki/scores) for comparison across all OCR engines.
 
 ## Credits
 

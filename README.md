@@ -31,27 +31,26 @@ Notable prototypes (each has its own `README.md` under `prototypes/<name>/`):
 ## Design docs & learnings
 
 All technical design documents, investigation notes, and lessons learned from
-these prototypes live in the **[CodeMonkeyNinja/lenzu docs](https://github.com/CodeMonkeyNinja/lenzu/tree/trunk/docs)**
-directory. The docs there cross-reference prototype source code by GitHub link.
+these prototypes live in the **[CodeMonkeyNinja/lenzu wiki](https://github.com/CodeMonkeyNinja/lenzu/wiki)**. The docs there cross-reference prototype source code by GitHub link.
 
 Per-prototype doc coverage:
 
-| Prototype | Relevant docs in [lenzu/docs](https://github.com/CodeMonkeyNinja/lenzu/tree/trunk/docs) |
+| Prototype | Relevant pages in [lenzu wiki](https://github.com/CodeMonkeyNinja/lenzu/wiki) |
 |-----------|------------------------------------------------------------------------------------------|
-| [`jp_ocr_app`](prototypes/jp_ocr_app/) | [prototypes-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/prototypes-desktop-issues.md) — GTK4 migration, Cairo spinner fix, flash_alpha white-window fix, async capture |
-| [`x11-gtk-lens-test`](prototypes/x11-gtk-lens-test/) | [prototypes-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/prototypes-desktop-issues.md) — GTK4 migration, transparent draw fix, SCIM noise |
-| [`x11-gtk3-lens-test`](prototypes/x11-gtk3-lens-test/) | [technical-design.phase4-predetect.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/technical-design.phase4-predetect.md) — ort version notes |
-| [`gtk4_dialogbox_test`](prototypes/gtk4_dialogbox_test/) | [prototypes-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/prototypes-desktop-issues.md) — GTK4 migration decisions |
-| [`gtk_gdk_test`](prototypes/gtk_gdk_test/) | [prototypes-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/prototypes-desktop-issues.md) — GTK4 migration decisions |
-| [`manga-ocr-test`](prototypes/manga-ocr-test/) | [technical-design.manga-ocr.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/technical-design.manga-ocr.md) — full ONNX OCR tier design |
-| [`dbnet-test`](prototypes/dbnet-test/) | [technical-design.phase4-predetect.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/technical-design.phase4-predetect.md) — DBNet algorithm, defaults, Cargo deps |
-| [`dbnet-ocr-pipeline`](prototypes/dbnet-ocr-pipeline/) | [scores.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/scores.md), [technical-design.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/technical-design.md) — benchmark results, architecture |
-| [`sarashina-vision-py`](prototypes/sarashina-vision-py/) | [technical-design.sarashina.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/technical-design.sarashina.md), [model-evaluation.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/model-evaluation.md) — vision-3b CPU rejection |
-| [`sarashina-onnx-test`](prototypes/sarashina-onnx-test/) | [prototypes-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/prototypes-desktop-issues.md) — workspace dependency graph |
-| [`umi-ocr-eval`](prototypes/umi-ocr-eval/) | [model-evaluation.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/model-evaluation.md), [session-log-2026-04-14.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/session-log-2026-04-14.md) — eval results (0/3 pass) |
-| [`paddleocr-vl-manga`](prototypes/paddleocr-vl-manga/) | [session-log-2026-04-14.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/session-log-2026-04-14.md) — eval results (2/3 pass) |
-| [`winit-test`](prototypes/winit-test/) | [lenzu-desktop-issues.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/lenzu-desktop-issues.md) — GTK replacement evaluation |
-| [`text-enrichment-test`](prototypes/text-enrichment-test/) | [planning-ollama-to-llamacpp.md](https://github.com/CodeMonkeyNinja/lenzu/blob/trunk/docs/planning-ollama-to-llamacpp.md) — Ollama health-check API notes |
+| [`jp_ocr_app`](prototypes/jp_ocr_app/) | [prototypes-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/prototypes-desktop-issues) — GTK4 migration, Cairo spinner fix, flash_alpha white-window fix, async capture |
+| [`x11-gtk-lens-test`](prototypes/x11-gtk-lens-test/) | [prototypes-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/prototypes-desktop-issues) — GTK4 migration, transparent draw fix, SCIM noise |
+| [`x11-gtk3-lens-test`](prototypes/x11-gtk3-lens-test/) | [technical-design.phase4-predetect](https://github.com/CodeMonkeyNinja/lenzu/wiki/technical-design.phase4-predetect) — ort version notes |
+| [`gtk4_dialogbox_test`](prototypes/gtk4_dialogbox_test/) | [prototypes-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/prototypes-desktop-issues) — GTK4 migration decisions |
+| [`gtk_gdk_test`](prototypes/gtk_gdk_test/) | [prototypes-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/prototypes-desktop-issues) — GTK4 migration decisions |
+| [`manga-ocr-test`](prototypes/manga-ocr-test/) | [technical-design.manga-ocr](https://github.com/CodeMonkeyNinja/lenzu/wiki/technical-design.manga-ocr) — full ONNX OCR tier design |
+| [`dbnet-test`](prototypes/dbnet-test/) | [technical-design.phase4-predetect](https://github.com/CodeMonkeyNinja/lenzu/wiki/technical-design.phase4-predetect) — DBNet algorithm, defaults, Cargo deps |
+| [`dbnet-ocr-pipeline`](prototypes/dbnet-ocr-pipeline/) | [scores](https://github.com/CodeMonkeyNinja/lenzu/wiki/scores), [technical-design](https://github.com/CodeMonkeyNinja/lenzu/wiki/technical-design) — benchmark results, architecture |
+| [`sarashina-vision-py`](prototypes/sarashina-vision-py/) | [technical-design.sarashina](https://github.com/CodeMonkeyNinja/lenzu/wiki/technical-design.sarashina), [model-evaluation](https://github.com/CodeMonkeyNinja/lenzu/wiki/model-evaluation) — vision-3b CPU rejection |
+| [`sarashina-onnx-test`](prototypes/sarashina-onnx-test/) | [prototypes-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/prototypes-desktop-issues) — workspace dependency graph |
+| [`umi-ocr-eval`](prototypes/umi-ocr-eval/) | [model-evaluation](https://github.com/CodeMonkeyNinja/lenzu/wiki/model-evaluation), [session-log-2026-04-14](https://github.com/CodeMonkeyNinja/lenzu/wiki/session-log-2026-04-14) — eval results (0/3 pass) |
+| [`paddleocr-vl-manga`](prototypes/paddleocr-vl-manga/) | [session-log-2026-04-14](https://github.com/CodeMonkeyNinja/lenzu/wiki/session-log-2026-04-14) — eval results (2/3 pass) |
+| [`winit-test`](prototypes/winit-test/) | [lenzu-desktop-issues](https://github.com/CodeMonkeyNinja/lenzu/wiki/lenzu-desktop-issues) — GTK replacement evaluation |
+| [`text-enrichment-test`](prototypes/text-enrichment-test/) | [planning-ollama-to-llamacpp](https://github.com/CodeMonkeyNinja/lenzu/wiki/planning-ollama-to-llamacpp) — Ollama health-check API notes |
 
 ## Shared infrastructure
 

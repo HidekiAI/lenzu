@@ -18,7 +18,7 @@ Engine: PaddleOCR-json (via Docker, headless HTTP API on port 1224).
 | Unit-test-tategaki.png | Vertical | `『言語モデルのテスト』` | `き転でげんの テスイ` | **FAIL** | 0.554, 0.253 | 2360 |
 | Unit-test-tegaki.png | Horizontal (calligraphy) | `手書きの文字サンプル` | `チ書きの丈字サンプル` | **FAIL** | 0.903 | 2116 |
 
-**Summary: 0/3 PASS.** See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for comparison across all engines.
+**Summary: 0/3 PASS.** See [unified benchmark](https://github.com/CodeMonkeyNinja/lenzu/wiki/scores) for comparison across all engines.
 
 ### Analysis
 

@@ -68,7 +68,7 @@ PaddleOCR-VL-For-Manga is significantly better than Umi-OCR. manga-ocr-rs with t
 images achieves 3/3 exact match through the DBNet+OCR pipeline. The Umi-OCR and PaddleOCR-VL
 results above are from the pre-rescale oversized images — re-evaluation pending.
 
-See [unified benchmark](https://github.com/HidekiAI/lenzu/blob/trunk/docs/scores.md) for the full cross-engine comparison.
+See [unified benchmark](https://github.com/CodeMonkeyNinja/lenzu/wiki/scores) for the full cross-engine comparison.
 
 ### Performance note
 
